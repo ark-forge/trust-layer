@@ -13,6 +13,13 @@ Without ArkForge:   Agent → API → Result
 With ArkForge:      Agent → ArkForge → API → Verifiable Proof
 ```
 
+## Why use it?
+
+- Prove what your agent actually did
+- Attach payments to execution
+- Create audit-ready API calls
+- Add trust without modifying existing services
+
 ## Features
 
 - **Proxy** — forwards requests to upstream APIs, meters usage, creates proof
