@@ -72,6 +72,8 @@ async def proxy_endpoint(
     authorization: Optional[str] = Header(None),
     x_api_key: Optional[str] = Header(None),
     x_idempotency_key: Optional[str] = Header(None),
+    x_agent_identity: Optional[str] = Header(None),
+    x_agent_version: Optional[str] = Header(None),
 ):
     """The core endpoint — charge, forward, prove."""
     api_key = _get_api_key(authorization, x_api_key)
@@ -110,6 +112,8 @@ async def proxy_endpoint(
             api_key=api_key,
             description=description,
             idempotency_key=x_idempotency_key,
+            agent_identity=x_agent_identity,
+            agent_version=x_agent_version,
         )
     except ProxyError as e:
         return JSONResponse(status_code=e.status, content=e.to_dict())

@@ -149,7 +149,8 @@ def _cache_idempotency(key: Optional[str], response: dict):
     })
 
 
-def _update_agent_profile(api_key: str, amount: float, currency: str, target_domain: str, succeeded: bool):
+def _update_agent_profile(api_key: str, amount: float, currency: str, target_domain: str, succeeded: bool,
+                          agent_identity: Optional[str] = None, agent_version: Optional[str] = None):
     """Update shadow profile for the agent (buyer)."""
     key_prefix = api_key[:16]
     path = AGENTS_DIR / f"{key_prefix}.json"
@@ -171,6 +172,14 @@ def _update_agent_profile(api_key: str, amount: float, currency: str, target_dom
         services.append(target_domain)
     profile["services_used"] = services
     profile["last_transaction"] = datetime.now(timezone.utc).isoformat()
+    # Track declared identity — detect mismatches (same key, different identity)
+    if agent_identity:
+        existing = profile.get("declared_identity")
+        if existing and existing != agent_identity:
+            profile["identity_mismatch"] = True
+        profile["declared_identity"] = agent_identity
+    if agent_version:
+        profile["declared_version"] = agent_version
     save_json(path, profile)
 
 
@@ -210,6 +219,8 @@ async def execute_proxy(
     api_key: str,
     description: str = "",
     idempotency_key: Optional[str] = None,
+    agent_identity: Optional[str] = None,
+    agent_version: Optional[str] = None,
 ) -> dict:
     """Execute the full proxy flow: validate → charge → forward → prove."""
 
@@ -311,7 +322,21 @@ async def execute_proxy(
     buyer_fingerprint = sha256_hex(api_key)
     seller = target_domain
     proof_id = generate_proof_id()
-    proof = generate_proof(request_data, response_data, payment_data, timestamp, buyer_fingerprint, seller)
+    proof = generate_proof(request_data, response_data, payment_data, timestamp, buyer_fingerprint, seller,
+                           agent_identity=agent_identity, agent_version=agent_version)
+
+    # Compute identity_consistent flag
+    identity_consistent = None
+    if agent_identity:
+        agent_path = AGENTS_DIR / f"{api_key[:16]}.json"
+        existing_profile = load_json(agent_path, {})
+        existing_id = existing_profile.get("declared_identity")
+        if existing_id and existing_id != agent_identity:
+            identity_consistent = False
+        elif existing_profile.get("identity_mismatch"):
+            identity_consistent = False
+        else:
+            identity_consistent = True
 
     verification_url = f"{TRUST_LAYER_BASE_URL}/v1/proof/{proof_id}"
     proof_record = {
@@ -323,6 +348,7 @@ async def execute_proxy(
         "payment": payment_data,
         "timestamp": timestamp,
         "opentimestamps": {"status": "pending", "ots_url": f"{TRUST_LAYER_BASE_URL}/v1/proof/{proof_id}/ots"},
+        "identity_consistent": identity_consistent,
     }
 
     # 10. Store proof
@@ -348,7 +374,8 @@ async def execute_proxy(
             logger.warning("Proof email skipped: %s", e)
 
     # 13. Update shadow profiles
-    _update_agent_profile(api_key, amount, currency, target_domain, service_succeeded)
+    _update_agent_profile(api_key, amount, currency, target_domain, service_succeeded,
+                          agent_identity, agent_version)
     _update_service_profile(target_domain, response_time_ms, service_succeeded)
 
     # 14. Build response

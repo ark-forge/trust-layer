@@ -36,11 +36,14 @@ def generate_proof(
     timestamp: str,
     buyer_fingerprint: str = "",
     seller: str = "",
+    agent_identity: Optional[str] = None,
+    agent_version: Optional[str] = None,
 ) -> dict:
     """Generate a proof with request/response/chain hashes + party identities."""
     request_hash = sha256_hex(canonical_json(request_data))
     response_hash = sha256_hex(canonical_json(response_data))
 
+    # Chain hash does NOT include identity — identity is metadata, not integrity
     payment_intent_id = payment_data.get("transaction_id", "")
     chain_input = request_hash + response_hash + payment_intent_id + timestamp + buyer_fingerprint + seller
     chain_hash = sha256_hex(chain_input)
@@ -54,6 +57,8 @@ def generate_proof(
         "parties": {
             "buyer_fingerprint": buyer_fingerprint,
             "seller": seller,
+            "agent_identity": agent_identity,
+            "agent_version": agent_version,
         },
         "payment": payment_data,
         "timestamp": timestamp,
@@ -111,4 +116,5 @@ def get_public_proof(proof: dict) -> dict:
         "opentimestamps": proof.get("opentimestamps"),
         "timestamp": proof.get("timestamp"),
         "verification_algorithm": proof.get("verification_algorithm"),
+        "identity_consistent": proof.get("identity_consistent"),
     }
