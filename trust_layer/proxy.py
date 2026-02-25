@@ -33,6 +33,31 @@ from .email_notify import send_proof_email
 logger = logging.getLogger("trust_layer.proxy")
 
 
+def _submit_archive_org(proof_url: str, proof_id: str) -> Optional[dict]:
+    """Submit proof page to Archive.org Wayback Machine (best-effort, sync)."""
+    try:
+        resp = httpx.get(
+            f"https://web.archive.org/save/{proof_url}",
+            timeout=10.0,
+            follow_redirects=True,
+            headers={"User-Agent": "ArkForge Trust Layer (+https://arkforge.fr)"},
+        )
+        if resp.status_code < 400:
+            snapshot_url = resp.headers.get("Content-Location") or resp.headers.get("Location")
+            if snapshot_url and not snapshot_url.startswith("http"):
+                snapshot_url = f"https://web.archive.org{snapshot_url}"
+            return {
+                "status": "submitted",
+                "snapshot_url": snapshot_url or f"https://web.archive.org/web/{proof_url}",
+                "submitted_at": datetime.now(timezone.utc).isoformat(),
+            }
+        logger.warning("Archive.org returned %d for %s", resp.status_code, proof_id)
+        return None
+    except Exception as e:
+        logger.warning("Archive.org submit skipped for %s: %s", proof_id, e)
+        return None
+
+
 def _inject_digital_stamp(result: dict, proof_record: dict) -> None:
     """Level 1 — Digital Stamp: inject _arkforge_attestation into successful response body.
 
@@ -394,6 +419,12 @@ async def execute_proxy(
             (PROOFS_DIR / f"{proof_id}.ots").write_bytes(ots_bytes)
     except Exception as e:
         logger.warning("OTS submit skipped: %s", e)
+
+    # 11b. Archive.org snapshot (best-effort)
+    archive_result = _submit_archive_org(verification_url, proof_id)
+    if archive_result:
+        proof_record["archive_org"] = archive_result
+        store_proof(proof_id, proof_record)
 
     # 12. Email proof (async, best-effort)
     email = key_info.get("email", "")

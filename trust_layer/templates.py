@@ -46,6 +46,7 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
     parties = proof.get("parties", {})
     payment = proof.get("payment", {})
     ots = proof.get("opentimestamps", {})
+    archive_org = proof.get("archive_org") or {}
     identity_consistent = proof.get("identity_consistent")
     verification_url = _esc(proof.get("verification_url", ""))
 
@@ -82,6 +83,12 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
 
     ots_color = "#22c55e" if ots_status == "verified" else "#f59e0b"
     ots_label = "confirms date cannot be altered" if ots_status == "verified" else "timestamp pending confirmation"
+
+    archive_snapshot_url = archive_org.get("snapshot_url", "")
+    archive_has_snapshot = bool(archive_snapshot_url)
+    archive_color = "#22c55e" if archive_has_snapshot else "#475569"
+    archive_name = f'<a href="{_esc(archive_snapshot_url)}" style="color:#38bdf8;text-decoration:none">Archive.org</a>' if archive_has_snapshot else "Archive.org"
+    archive_desc = "public snapshot preserved" if archive_has_snapshot else "snapshot not yet available"
 
     # --- Identity row (conditional) ---
     identity_row = ""
@@ -187,6 +194,11 @@ details[open] summary::before{{content:"\u25bc "}}
             <div class="dot" style="background:{ots_color}"></div>
             <span class="name">Bitcoin</span>
             <span class="desc">\u2014 {_esc(ots_label)}</span>
+        </div>
+        <div class="witness">
+            <div class="dot" style="background:{archive_color}"></div>
+            <span class="name">{archive_name}</span>
+            <span class="desc">\u2014 {_esc(archive_desc)}</span>
         </div>
     </div>
 

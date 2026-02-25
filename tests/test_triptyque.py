@@ -3,8 +3,8 @@
 import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 
-from trust_layer.proxy import _inject_digital_stamp, execute_proxy
-from trust_layer.proofs import verify_proof_integrity, store_proof, load_proof
+from trust_layer.proxy import _inject_digital_stamp, _submit_archive_org, execute_proxy
+from trust_layer.proofs import verify_proof_integrity, store_proof, load_proof, get_public_proof
 from trust_layer.templates import _esc, render_proof_page
 from trust_layer.payments.base import ChargeResult
 
@@ -424,3 +424,109 @@ class TestEscape:
 
     def test_esc_ampersand(self):
         assert _esc("a&b") == "a&amp;b"
+
+
+# ============================================================
+# Archive.org Independent Witness
+# ============================================================
+
+class TestArchiveOrgWitness:
+
+    def test_html_shows_archive_org_green_when_snapshot_exists(self, client):
+        """Archive.org witness is green with link when snapshot exists."""
+        pid = "prf_test_archive_green"
+        proof = _make_proof_record(pid)
+        proof["archive_org"] = {
+            "status": "submitted",
+            "snapshot_url": "https://web.archive.org/web/20260225/https://test.arkforge.fr/v1/proof/prf_test_archive_green",
+            "submitted_at": "2026-02-25T12:00:00+00:00",
+        }
+        store_proof(pid, proof)
+
+        resp = client.get(f"/v1/proof/{pid}", headers={"Accept": "text/html"})
+        assert resp.status_code == 200
+        assert "Archive.org" in resp.text
+        assert "#22c55e" in resp.text  # green dot
+        assert "web.archive.org" in resp.text
+        assert "public snapshot preserved" in resp.text
+
+    def test_html_shows_archive_org_grey_when_no_snapshot(self, client):
+        """Archive.org witness is grey when no snapshot."""
+        pid = "prf_test_archive_grey"
+        proof = _make_proof_record(pid)
+        # No archive_org key at all
+        store_proof(pid, proof)
+
+        resp = client.get(f"/v1/proof/{pid}", headers={"Accept": "text/html"})
+        assert resp.status_code == 200
+        assert "Archive.org" in resp.text
+        assert "#475569" in resp.text  # grey dot
+        assert "snapshot not yet available" in resp.text
+
+    def test_json_includes_archive_org_field(self):
+        """get_public_proof() includes archive_org field."""
+        proof = _make_proof_record()
+        proof["archive_org"] = {
+            "status": "submitted",
+            "snapshot_url": "https://web.archive.org/web/20260225/https://test.arkforge.fr/v1/proof/prf_test",
+            "submitted_at": "2026-02-25T12:00:00+00:00",
+        }
+        public = get_public_proof(proof)
+        assert "archive_org" in public
+        assert public["archive_org"]["status"] == "submitted"
+
+    def test_json_archive_org_none_when_absent(self):
+        """get_public_proof() returns None for archive_org when absent."""
+        proof = _make_proof_record()
+        public = get_public_proof(proof)
+        assert public["archive_org"] is None
+
+    @pytest.mark.asyncio
+    async def test_archive_org_called_in_execute_proxy(self, test_api_key):
+        """_submit_archive_org is called during execute_proxy and result stored."""
+        mock_provider, mock_client = _mock_full_proxy()
+        archive_result = {
+            "status": "submitted",
+            "snapshot_url": "https://web.archive.org/web/20260225/https://test.arkforge.fr/v1/proof/prf_test",
+            "submitted_at": "2026-02-25T12:00:00+00:00",
+        }
+
+        with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
+             patch("httpx.AsyncClient", return_value=mock_client), \
+             patch("trust_layer.proxy.submit_hash", return_value=None), \
+             patch("trust_layer.proxy.send_proof_email"), \
+             patch("trust_layer.proxy._submit_archive_org", return_value=archive_result) as mock_archive:
+
+            result = await execute_proxy(
+                target="https://example.com/api/scan",
+                method="POST",
+                payload={"test": True},
+                amount=0.50,
+                currency="eur",
+                api_key=test_api_key,
+            )
+
+        mock_archive.assert_called_once()
+        assert result["proof"]["archive_org"] == archive_result
+
+    @pytest.mark.asyncio
+    async def test_archive_org_failure_does_not_break_flow(self, test_api_key):
+        """When _submit_archive_org returns None, flow continues without archive_org."""
+        mock_provider, mock_client = _mock_full_proxy()
+
+        with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
+             patch("httpx.AsyncClient", return_value=mock_client), \
+             patch("trust_layer.proxy.submit_hash", return_value=None), \
+             patch("trust_layer.proxy.send_proof_email"), \
+             patch("trust_layer.proxy._submit_archive_org", return_value=None):
+
+            result = await execute_proxy(
+                target="https://example.com/api/scan",
+                method="POST",
+                payload={"test": True},
+                amount=0.50,
+                currency="eur",
+                api_key=test_api_key,
+            )
+
+        assert "archive_org" not in result["proof"]

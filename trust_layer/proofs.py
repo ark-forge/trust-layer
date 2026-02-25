@@ -114,6 +114,7 @@ def get_public_proof(proof: dict) -> dict:
             if k in ("transaction_id", "amount", "currency", "status", "receipt_url", "provider")
         },
         "opentimestamps": proof.get("opentimestamps"),
+        "archive_org": proof.get("archive_org"),
         "timestamp": proof.get("timestamp"),
         "verification_algorithm": proof.get("verification_algorithm"),
         "identity_consistent": proof.get("identity_consistent"),
