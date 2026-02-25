@@ -245,7 +245,11 @@ async def stripe_webhook(request: Request):
 
     if event_type == "checkout.session.completed":
         customer_id = data.get("customer", "")
-        customer_email = data.get("customer_email", "") or data.get("customer_details", {}).get("email", "")
+        customer_email = (
+            data.get("customer_email", "")
+            or data.get("customer_details", {}).get("email", "")
+            or data.get("metadata", {}).get("email", "")
+        )
         payment_intent_id = data.get("payment_intent", "")
         subscription_id = data.get("subscription", "")
         ref_id = subscription_id or payment_intent_id or customer_id
