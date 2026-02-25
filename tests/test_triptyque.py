@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 
-from trust_layer.proxy import _inject_digital_stamp, _submit_archive_org, _archive_org_background, execute_proxy
+from trust_layer.proxy import _inject_digital_stamp, _submit_archive_org, execute_proxy
 from trust_layer.proofs import verify_proof_integrity, store_proof, load_proof, get_public_proof
 from trust_layer.templates import _esc, render_proof_page
 from trust_layer.payments.base import ChargeResult
@@ -105,8 +105,7 @@ class TestLevel1DigitalStamp:
 
         with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
              patch("httpx.AsyncClient", return_value=mock_client), \
-             patch("trust_layer.proxy.submit_hash", return_value=None), \
-             patch("trust_layer.proxy.send_proof_email"):
+             patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
 
             result = await execute_proxy(
                 target="https://example.com/api/scan",
@@ -131,8 +130,7 @@ class TestLevel1DigitalStamp:
 
         with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
              patch("httpx.AsyncClient", return_value=mock_client), \
-             patch("trust_layer.proxy.submit_hash", return_value=None), \
-             patch("trust_layer.proxy.send_proof_email"):
+             patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
 
             result = await execute_proxy(
                 target="https://example.com/api/fail",
@@ -170,8 +168,7 @@ class TestLevel1DigitalStamp:
 
         with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
              patch("httpx.AsyncClient", return_value=mock_client), \
-             patch("trust_layer.proxy.submit_hash", return_value=None), \
-             patch("trust_layer.proxy.send_proof_email"):
+             patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
 
             result = await execute_proxy(
                 target="https://example.com/api/html",
@@ -193,8 +190,7 @@ class TestLevel1DigitalStamp:
 
         with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
              patch("httpx.AsyncClient", return_value=mock_client), \
-             patch("trust_layer.proxy.submit_hash", return_value=None), \
-             patch("trust_layer.proxy.send_proof_email"):
+             patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
 
             result = await execute_proxy(
                 target="https://example.com/api/scan",
@@ -260,8 +256,7 @@ class TestLevel2GhostStamp:
 
         with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
              patch("httpx.AsyncClient", return_value=mock_client), \
-             patch("trust_layer.proxy.submit_hash", return_value=None), \
-             patch("trust_layer.proxy.send_proof_email"):
+             patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
 
             resp = client.post("/v1/proxy", json={
                 "target": "https://example.com/api",
@@ -282,8 +277,7 @@ class TestLevel2GhostStamp:
 
         with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
              patch("httpx.AsyncClient", return_value=mock_client), \
-             patch("trust_layer.proxy.submit_hash", return_value=None), \
-             patch("trust_layer.proxy.send_proof_email"):
+             patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
 
             resp = client.post("/v1/proxy", json={
                 "target": "https://example.com/api/fail",
@@ -300,8 +294,7 @@ class TestLevel2GhostStamp:
 
         with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
              patch("httpx.AsyncClient", return_value=mock_client), \
-             patch("trust_layer.proxy.submit_hash", return_value=None), \
-             patch("trust_layer.proxy.send_proof_email"):
+             patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
 
             resp = client.post("/v1/proxy", json={
                 "target": "https://example.com/api",
@@ -507,7 +500,7 @@ class TestArchiveOrgWitness:
                 api_key=test_api_key,
             )
             # Let the background task complete
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.1)
 
         # Background task updates proof on disk
         proof_id = result["proof"]["proof_id"]
@@ -534,6 +527,8 @@ class TestArchiveOrgWitness:
                 currency="eur",
                 api_key=test_api_key,
             )
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.1)
 
-        assert "archive_org" not in result["proof"]
+        proof_id = result["proof"]["proof_id"]
+        stored = load_proof(proof_id)
+        assert stored.get("archive_org") is None

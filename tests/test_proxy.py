@@ -132,8 +132,7 @@ async def test_execute_proxy_full_flow(test_api_key):
 
     with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
          patch("httpx.AsyncClient", return_value=mock_client), \
-         patch("trust_layer.proxy.submit_hash", return_value=None), \
-         patch("trust_layer.proxy.send_proof_email"):
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
 
         result = await execute_proxy(
             target="https://example.com/api/scan",
@@ -176,8 +175,7 @@ async def test_execute_proxy_service_error(test_api_key):
 
     with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
          patch("httpx.AsyncClient", return_value=mock_client), \
-         patch("trust_layer.proxy.submit_hash", return_value=None), \
-         patch("trust_layer.proxy.send_proof_email"):
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
 
         result = await execute_proxy(
             target="https://example.com/api/fail",
@@ -239,8 +237,7 @@ async def test_execute_proxy_idempotency(test_api_key):
 
     with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
          patch("httpx.AsyncClient", return_value=mock_client), \
-         patch("trust_layer.proxy.submit_hash", return_value=None), \
-         patch("trust_layer.proxy.send_proof_email"):
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
 
         result1 = await execute_proxy(
             target="https://example.com/api",

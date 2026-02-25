@@ -58,16 +58,36 @@ async def _submit_archive_org(proof_url: str, proof_id: str) -> Optional[dict]:
         return None
 
 
-async def _archive_org_background(proof_url: str, proof_id: str, proof_record: dict):
-    """Background task: submit to Archive.org and update proof record if successful."""
+async def _post_proof_background(proof_id: str, proof_record: dict, chain_hash: str,
+                                  verification_url: str, email: str):
+    """Background task: OTS + Archive.org + email — none of these block the client response."""
+    # OTS (sync but run in thread to avoid blocking event loop)
     try:
-        result = await _submit_archive_org(proof_url, proof_id)
+        loop = asyncio.get_running_loop()
+        ots_bytes = await loop.run_in_executor(None, submit_hash, chain_hash)
+        if ots_bytes:
+            from .config import PROOFS_DIR
+            (PROOFS_DIR / f"{proof_id}.ots").write_bytes(ots_bytes)
+    except Exception as e:
+        logger.warning("OTS submit skipped: %s", e)
+
+    # Archive.org
+    try:
+        result = await _submit_archive_org(verification_url, proof_id)
         if result:
             proof_record["archive_org"] = result
             store_proof(proof_id, proof_record)
             logger.info("Archive.org snapshot saved for %s", proof_id)
     except Exception as e:
         logger.warning("Archive.org background task failed for %s: %s", proof_id, e)
+
+    # Email
+    if email:
+        try:
+            await asyncio.get_running_loop().run_in_executor(
+                None, send_proof_email, email, proof_id, proof_record)
+        except Exception as e:
+            logger.warning("Proof email skipped: %s", e)
 
 
 def _inject_digital_stamp(result: dict, proof_record: dict) -> None:
@@ -421,27 +441,10 @@ async def execute_proxy(
     # 10. Store proof
     store_proof(proof_id, proof_record)
 
-    # 11. OpenTimestamps (async, best-effort)
-    try:
-        chain_hash = proof["_raw_chain_hash"]
-        ots_bytes = submit_hash(chain_hash)
-        if ots_bytes:
-            ots_path = TRUST_LAYER_BASE_URL  # store alongside proof
-            from .config import PROOFS_DIR
-            (PROOFS_DIR / f"{proof_id}.ots").write_bytes(ots_bytes)
-    except Exception as e:
-        logger.warning("OTS submit skipped: %s", e)
-
-    # 11b. Archive.org snapshot (fire-and-forget, does not block response)
-    asyncio.create_task(_archive_org_background(verification_url, proof_id, proof_record))
-
-    # 12. Email proof (async, best-effort)
+    # 11. Fire-and-forget background tasks (OTS, Archive.org, email)
+    chain_hash = proof["_raw_chain_hash"]
     email = key_info.get("email", "")
-    if email:
-        try:
-            send_proof_email(email, proof_id, proof_record)
-        except Exception as e:
-            logger.warning("Proof email skipped: %s", e)
+    asyncio.create_task(_post_proof_background(proof_id, proof_record, chain_hash, verification_url, email))
 
     # 13. Update shadow profiles
     _update_agent_profile(api_key, amount, currency, target_domain, service_succeeded,

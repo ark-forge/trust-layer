@@ -144,8 +144,7 @@ def test_proxy_full_success(client, api_key):
 
     with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
          patch("httpx.AsyncClient", return_value=mock_http), \
-         patch("trust_layer.proxy.submit_hash", return_value=None), \
-         patch("trust_layer.proxy.send_proof_email"):
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
 
         r = client.post(
             "/v1/proxy",
@@ -181,8 +180,7 @@ def test_proof_verification_after_proxy(client, api_key):
 
     with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
          patch("httpx.AsyncClient", return_value=mock_http), \
-         patch("trust_layer.proxy.submit_hash", return_value=None), \
-         patch("trust_layer.proxy.send_proof_email"):
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
 
         r = client.post(
             "/v1/proxy",
