@@ -88,7 +88,7 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
 <div class="container">
     <div class="header">
         <h1>ArkForge Trust Layer</h1>
-        <div class="subtitle">Cryptographic Proof of Transaction</div>
+        <div class="subtitle">Turning API executions into independently verifiable events.</div>
         <div class="badge">{badge_text}</div>
         <div class="badge-desc">{badge_desc}</div>
     </div>
