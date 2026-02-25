@@ -176,8 +176,10 @@ async def get_proof(proof_id: str, request: Request):
     public["integrity_verified"] = integrity_verified
 
     # Level 3 — Visual Stamp: content negotiation
+    # ?format=json forces JSON (for "Verify via API" button in HTML page)
+    fmt = request.query_params.get("format", "")
     accept = request.headers.get("accept", "")
-    if "text/html" in accept and "application/json" not in accept:
+    if fmt != "json" and "text/html" in accept and "application/json" not in accept:
         html_content = render_proof_page(public, integrity_verified)
         return HTMLResponse(content=html_content)
 

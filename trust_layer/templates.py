@@ -195,7 +195,7 @@ details[open] summary::before{{content:"\u25bc "}}
 
     <!-- 7. VERIFY BUTTON -->
     <div class="verify-link">
-        <a href="{verification_url}">Verify this proof via API \u2192</a>
+        <a href="{verification_url}?format=json">Verify this proof via API \u2192</a>
     </div>
 
     <!-- 5. COLLAPSIBLE TECHNICAL DETAILS -->
