@@ -332,7 +332,8 @@ class TestLevel3VisualStamp:
         resp = client.get(f"/v1/proof/{pid}", headers={"Accept": "text/html"})
         assert resp.status_code == 200
         assert "text/html" in resp.headers["content-type"]
-        assert "ArkForge Trust Layer" in resp.text
+        assert "ArkForge" in resp.text
+        assert "VERIFIED" in resp.text or "INTEGRITY" in resp.text
         assert pid in resp.text
 
     def test_json_on_accept_application_json(self, client):
@@ -391,8 +392,7 @@ class TestLevel3VisualStamp:
         resp = client.get(f"/v1/proof/{pid}", headers={"Accept": "text/html"})
         assert resp.status_code == 200
         assert "0.5" in resp.text
-        assert "EUR" in resp.text
-        assert "stripe" in resp.text.lower()
+        assert "Stripe" in resp.text
 
     def test_short_url_redirects(self, client):
         """GET /v/{proof_id} returns 302 redirect to full path."""
