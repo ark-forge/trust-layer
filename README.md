@@ -8,6 +8,7 @@ Certifying proxy for agent-to-agent payments. Every API call that flows through 
 - **Payments** — Stripe off-session charges, test/live modes, webhook lifecycle
 - **Proofs** — SHA-256 hash chain per call, publicly verifiable, optionally anchored on Bitcoin via OpenTimestamps
 - **API keys** — `mcp_test_*` / `mcp_pro_*` prefixes auto-select Stripe mode
+- **Agent identity** — optional `X-Agent-Identity` / `X-Agent-Version` headers, mismatch detection across calls
 - **Rate limiting** — per-key daily limits
 - **Email** — welcome + proof receipts via SMTP
 
@@ -57,9 +58,20 @@ pytest tests/ -v
 }
 ```
 
-Response includes:
+**Optional headers:**
+
+| Header | Description |
+|--------|-------------|
+| `X-Agent-Identity` | Agent's self-declared name (e.g. `my-agent-v1`) |
+| `X-Agent-Version` | Agent's version string (e.g. `2.0.3`) |
+
+These are stored in the proof and shadow profile. If the same API key sends a different identity, all subsequent proofs are flagged `identity_consistent: false`.
+
+**Response includes:**
 - `proof.payment` — Stripe transaction ID, amount, receipt URL
 - `proof.hashes` — SHA-256 of request, response, and chain
+- `proof.parties.agent_identity` / `agent_version` — declared identity (if provided)
+- `proof.identity_consistent` — `true` / `false` / `null` (consistency check)
 - `proof.verification_url` — public URL to verify the proof
 - `proof.opentimestamps` — OTS status and download URL
 - `service_response` — upstream API response
@@ -106,6 +118,8 @@ Stripe webhook fires automatically. The Trust Layer creates an API key (`mcp_pro
 ```bash
 curl -X POST https://arkforge.fr/trust/v1/proxy \
   -H "X-Api-Key: mcp_pro_..." \
+  -H "X-Agent-Identity: my-agent" \
+  -H "X-Agent-Version: 1.0.0" \
   -H "Content-Type: application/json" \
   -d '{
     "target": "https://arkforge.fr/api/v1/scan-repo",
