@@ -1,0 +1,10 @@
+# Runtime data
+data/
+proofs/
+*.pyc
+__pycache__/
+.env
+*.egg-info/
+dist/
+build/
+.pytest_cache/
