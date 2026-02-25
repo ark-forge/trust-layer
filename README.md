@@ -9,6 +9,7 @@ Certifying proxy for agent-to-agent payments. Every API call that flows through 
 - **Proofs** — SHA-256 hash chain per call, publicly verifiable, optionally anchored on Bitcoin via OpenTimestamps
 - **API keys** — `mcp_test_*` / `mcp_pro_*` prefixes auto-select Stripe mode
 - **Agent identity** — optional `X-Agent-Identity` / `X-Agent-Version` headers, mismatch detection across calls
+- **Triptyque de la Preuve** — 3-level watermarking on every transaction (see below)
 - **Rate limiting** — per-key daily limits
 - **Email** — welcome + proof receipts via SMTP
 
@@ -42,7 +43,8 @@ pytest tests/ -v
 | `POST` | `/v1/keys/setup` | Save a card via Stripe Checkout |
 | `POST` | `/v1/webhooks/stripe` | Stripe webhook receiver |
 | `GET` | `/v1/usage` | Usage stats for a key |
-| `GET` | `/v1/proof/{proof_id}` | Retrieve and verify proof |
+| `GET` | `/v1/proof/{proof_id}` | Retrieve and verify proof (JSON or HTML — see content negotiation) |
+| `GET` | `/v/{proof_id}` | Short URL — 302 redirect to `/v1/proof/{proof_id}` |
 | `GET` | `/v1/proof/{proof_id}/ots` | Download OpenTimestamps file |
 
 ## Core flow — POST /v1/proxy
@@ -75,6 +77,55 @@ These are stored in the proof and shadow profile. If the same API key sends a di
 - `proof.verification_url` — public URL to verify the proof
 - `proof.opentimestamps` — OTS status and download URL
 - `service_response` — upstream API response
+- `service_response.body._arkforge_attestation` — digital stamp (Level 1, see below)
+
+**Response headers (Level 2 — Ghost Stamp):**
+
+| Header | Value | Description |
+|--------|-------|-------------|
+| `X-ArkForge-Proof` | `https://.../v1/proof/prf_...` | Full verification URL (backward compat) |
+| `X-ArkForge-Verified` | `true` / `false` | `true` if upstream returned 2xx/3xx, `false` on error |
+| `X-ArkForge-Proof-ID` | `prf_...` | Proof ID for programmatic use |
+| `X-ArkForge-Trust-Link` | `https://.../v/prf_...` | Short shareable link |
+
+## Triptyque de la Preuve
+
+Every transaction carries the ArkForge mark at 3 levels — for machines, for infrastructure, and for humans.
+
+### Level 1 — Digital Stamp (JSON body)
+
+On successful proxy calls, an `_arkforge_attestation` field is injected into `service_response.body`:
+
+```json
+{
+  "_arkforge_attestation": {
+    "id": "prf_20260225_204347_098610",
+    "seal": "https://arkforge.fr/trust/v1/proof/prf_20260225_204347_098610",
+    "status": "VERIFIED_TRANSACTION",
+    "msg": "Payment confirmed, execution anchored."
+  }
+}
+```
+
+The attestation is injected **after** hashing — the chain hash is not affected. Skipped on error responses and non-JSON bodies.
+
+### Level 2 — Ghost Stamp (HTTP headers)
+
+Every proxy response includes 4 `X-ArkForge-*` headers (see table above). These are visible to monitoring tools, API gateways, and any middleware in the chain — without parsing the body.
+
+### Level 3 — Visual Stamp (HTML proof page)
+
+`GET /v1/proof/{proof_id}` supports content negotiation:
+
+- `Accept: text/html` → self-contained HTML page with a colored verification badge
+- `Accept: application/json` or no Accept header → JSON (backward compatible)
+
+Badge colors:
+- **Green** (`#22c55e`) — integrity verified, OTS confirmed on Bitcoin
+- **Orange** (`#f59e0b`) — integrity verified, OTS pending
+- **Red** (`#ef4444`) — integrity check failed
+
+**Short URL:** `GET /v/{proof_id}` → 302 redirect to the full proof endpoint. Cacheable (24h).
 
 ## Architecture
 
