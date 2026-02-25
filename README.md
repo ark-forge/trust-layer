@@ -145,6 +145,47 @@ Badge colors:
 
 **Short URL:** `GET /v/{proof_id}` → 302 redirect to the full proof endpoint. Cacheable (24h).
 
+## Chain hash algorithm
+
+The chain hash binds every element of a transaction into a single verifiable seal. The formula is public and deterministic — anyone can recompute it:
+
+```
+chain_hash = SHA256(request_hash + response_hash + payment_intent_id + timestamp + buyer_fingerprint + seller)
+```
+
+Where:
+- `request_hash` = SHA-256 of the canonical JSON request (sorted keys, no whitespace)
+- `response_hash` = SHA-256 of the canonical JSON response
+- `payment_intent_id` = Stripe Payment Intent ID (e.g. `pi_3T4ovu...`)
+- `timestamp` = ISO 8601 UTC (e.g. `2026-02-25T20:43:45Z`)
+- `buyer_fingerprint` = SHA-256 of the API key
+- `seller` = target domain (e.g. `example.com`)
+
+All values are concatenated as raw strings (no separator) before hashing. Canonical JSON uses `json.dumps(data, sort_keys=True, separators=(",", ":"))`.
+
+## Independent verification
+
+You can verify any proof without ArkForge's code. Given a proof JSON:
+
+```bash
+# 1. Extract the components
+REQUEST_HASH=$(echo -n "$PROOF" | jq -r '.hashes.request' | sed 's/sha256://')
+RESPONSE_HASH=$(echo -n "$PROOF" | jq -r '.hashes.response' | sed 's/sha256://')
+PAYMENT_ID=$(echo -n "$PROOF" | jq -r '.payment.transaction_id')
+TIMESTAMP=$(echo -n "$PROOF" | jq -r '.timestamp')
+BUYER=$(echo -n "$PROOF" | jq -r '.parties.buyer_fingerprint')
+SELLER=$(echo -n "$PROOF" | jq -r '.parties.seller')
+
+# 2. Recompute the chain hash
+COMPUTED=$(echo -n "${REQUEST_HASH}${RESPONSE_HASH}${PAYMENT_ID}${TIMESTAMP}${BUYER}${SELLER}" | sha256sum | cut -d' ' -f1)
+
+# 3. Compare with the proof's chain hash
+EXPECTED=$(echo -n "$PROOF" | jq -r '.hashes.chain' | sed 's/sha256://')
+[ "$COMPUTED" = "$EXPECTED" ] && echo "VERIFIED" || echo "TAMPERED"
+```
+
+If the chain hash matches, no field in the proof was altered after creation. The Stripe Payment Intent ID can be independently verified on Stripe's dashboard or API.
+
 ## Architecture
 
 ```
@@ -157,11 +198,13 @@ Trust Layer (/v1/proxy)
     |--- 3. Forward request to upstream API
     |--- 4. Hash request + response (SHA-256 chain)
     |--- 5. Submit to OpenTimestamps (async)
-    |--- 6. Store proof, return everything
+    |--- 6. Store proof as immutable flat-file JSON, return everything
     |
     v
 Upstream API (any HTTPS endpoint)
 ```
+
+**No database.** Proofs are stored as immutable JSON files on disk — one file per transaction (`proofs/{proof_id}.json`). No SQL, no edits, no deletions. Once written, a proof can only be read. This guarantees that proofs cannot be retroactively altered.
 
 ## New client onboarding
 
