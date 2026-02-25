@@ -4,24 +4,25 @@ Certifying proxy for agent-to-agent payments. Every API call that flows through 
 
 ## Features
 
-- **Proxy** — forwards requests to upstream APIs (Claude, GPT, MCP servers…), meters token usage
-- **Payments** — Stripe Checkout sessions, usage-based billing, webhook lifecycle
-- **Proofs** — SHA-256 hash chain per call, verifiable, optionally anchored on Bitcoin via OpenTimestamps
-- **API keys** — test/live modes, rate limiting, key rotation
+- **Proxy** — forwards requests to upstream APIs, meters usage, creates proof
+- **Payments** — Stripe off-session charges, test/live modes, webhook lifecycle
+- **Proofs** — SHA-256 hash chain per call, publicly verifiable, optionally anchored on Bitcoin via OpenTimestamps
+- **API keys** — `mcp_test_*` / `mcp_pro_*` prefixes auto-select Stripe mode
+- **Rate limiting** — per-key daily limits
 - **Email** — welcome + proof receipts via SMTP
 
 ## Quick start
 
 ```bash
 # Clone & install
-git clone https://github.com/ArkForge/trust-layer.git
+git clone https://github.com/ark-forge/trust-layer.git
 cd trust-layer
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[test]"
 
 # Configure
 cp .env.example .env
-# Edit .env with your Stripe keys, SMTP, upstream URL…
+# Edit .env with your Stripe keys, SMTP config…
 
 # Run
 uvicorn trust_layer.app:app --host 0.0.0.0 --port 8100
@@ -34,29 +35,60 @@ pytest tests/ -v
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/health` | Health check |
-| `POST` | `/v1/proxy` | Proxied API call (metered + proof) |
-| `POST` | `/v1/keys` | Create API key |
-| `DELETE` | `/v1/keys/{ref}` | Deactivate key |
+| `GET` | `/v1/health` | Health check |
+| `GET` | `/v1/pricing` | Pricing and limits |
+| `POST` | `/v1/proxy` | Proxied API call (charge + forward + proof) |
+| `POST` | `/v1/keys/setup` | Save a card via Stripe Checkout |
+| `POST` | `/v1/webhooks/stripe` | Stripe webhook receiver |
 | `GET` | `/v1/usage` | Usage stats for a key |
-| `POST` | `/v1/checkout` | Create Stripe Checkout session |
-| `POST` | `/v1/webhook/stripe` | Stripe webhook receiver |
-| `GET` | `/v1/proofs/{proof_id}` | Retrieve proof |
-| `GET` | `/v1/proofs/{proof_id}/verify` | Verify proof integrity |
+| `GET` | `/v1/proof/{proof_id}` | Retrieve and verify proof |
+| `GET` | `/v1/proof/{proof_id}/ots` | Download OpenTimestamps file |
+
+## Core flow — POST /v1/proxy
+
+```json
+{
+  "target": "https://example.com/api/scan",
+  "amount": 0.50,
+  "currency": "eur",
+  "method": "POST",
+  "payload": {"repo_url": "https://github.com/owner/repo"},
+  "description": "EU AI Act compliance scan"
+}
+```
+
+Response includes:
+- `proof.payment` — Stripe transaction ID, amount, receipt URL
+- `proof.hashes` — SHA-256 of request, response, and chain
+- `proof.verification_url` — public URL to verify the proof
+- `proof.opentimestamps` — OTS status and download URL
+- `service_response` — upstream API response
 
 ## Architecture
 
 ```
-Client → Trust Layer (proxy + meter + proof) → Upstream API
-                ↓
-         Stripe (billing)
-                ↓
-         Proof store (JSON + SHA-256 chain)
+Agent Client
+    |
+    v
+Trust Layer (/v1/proxy)
+    |--- 1. Validate API key + rate limit
+    |--- 2. Charge via Stripe (off-session)
+    |--- 3. Forward request to upstream API
+    |--- 4. Hash request + response (SHA-256 chain)
+    |--- 5. Submit to OpenTimestamps (async)
+    |--- 6. Store proof, return everything
+    |
+    v
+Upstream API (any HTTPS endpoint)
 ```
 
 ## Test / Live modes
 
-API keys starting with `tk_test_` use Stripe test mode. Keys starting with `tk_live_` use Stripe live mode. The proxy auto-selects the right Stripe keys based on the API key prefix.
+API keys starting with `mcp_test_` use Stripe test mode. Keys starting with `mcp_pro_` use Stripe live mode. The proxy auto-selects the right Stripe keys based on the API key prefix.
+
+## Live deployment
+
+Running at **https://arkforge.fr/trust/v1/health**
 
 ## License
 
