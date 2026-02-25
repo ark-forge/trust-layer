@@ -4,7 +4,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="arkforge-trust-layer",
-    version="0.1.0",
+    version="0.3.0",
     packages=find_packages(),
     install_requires=[
         "fastapi>=0.104.0",
