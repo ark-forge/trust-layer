@@ -1,6 +1,10 @@
 # ArkForge Trust Layer
 
-Certifying proxy for agent-to-agent payments. Every API call that flows through the Trust Layer is metered, billed via Stripe, and gets a tamper-proof cryptographic proof (SHA-256 chain + optional OpenTimestamps).
+Add verifiable execution to any API call.
+
+ArkForge is a certifying proxy that forwards requests to any HTTPS API, charges programmatically via Stripe, and returns a tamper-proof cryptographic proof (SHA-256 hash chain + optional Bitcoin timestamp).
+
+Every call becomes: **metered** → **paid** → **provable**.
 
 ## Features
 
