@@ -45,6 +45,9 @@ def _isolate_data(tmp_path, monkeypatch):
     monkeypatch.setattr(proxy_mod, "SERVICES_DIR", tmp_path / "data" / "services")
     monkeypatch.setattr(proxy_mod, "TRUST_LAYER_BASE_URL", "https://test.arkforge.fr")
 
+    import trust_layer.app as app_mod
+    monkeypatch.setattr(app_mod, "TRUST_LAYER_BASE_URL", "https://test.arkforge.fr")
+
 
 @pytest.fixture
 def test_api_key(tmp_path):

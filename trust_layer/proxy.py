@@ -32,6 +32,36 @@ from .email_notify import send_proof_email
 
 logger = logging.getLogger("trust_layer.proxy")
 
+
+def _inject_digital_stamp(result: dict, proof_record: dict) -> None:
+    """Level 1 — Digital Stamp: inject _arkforge_attestation into successful response body.
+
+    Skips injection if:
+    - No service_response in result
+    - Body is not a dict (non-JSON response)
+    - Body contains _raw_text (non-parseable response)
+    - Result contains an error path
+    """
+    sr = result.get("service_response")
+    if not sr or not isinstance(sr, dict):
+        return
+    body = sr.get("body")
+    if not isinstance(body, dict):
+        return
+    if "_raw_text" in body:
+        return
+    if "error" in result:
+        return
+
+    proof_id = proof_record.get("proof_id", "")
+    verification_url = proof_record.get("verification_url", "")
+    body["_arkforge_attestation"] = {
+        "id": proof_id,
+        "seal": verification_url,
+        "status": "VERIFIED_TRANSACTION",
+        "msg": "Payment confirmed, execution anchored.",
+    }
+
 # Private IP ranges to block
 _PRIVATE_NETWORKS = [
     ipaddress.ip_network("127.0.0.0/8"),
@@ -399,6 +429,9 @@ async def execute_proxy(
                 "body": service_response,
             },
         }
+
+    # 14b. Level 1 — Digital Stamp (AFTER hashing, does NOT affect chain hash)
+    _inject_digital_stamp(result, proof_record)
 
     # 15. Cache idempotency
     _cache_idempotency(idempotency_key, result)
