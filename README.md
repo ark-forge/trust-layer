@@ -6,6 +6,13 @@ ArkForge is a certifying proxy that forwards requests to any HTTPS API, charges 
 
 Every call becomes: **metered** → **paid** → **provable**.
 
+## One-line example
+
+```
+Without ArkForge:   Agent → API → Result
+With ArkForge:      Agent → ArkForge → API → Verifiable Proof
+```
+
 ## Features
 
 - **Proxy** — forwards requests to upstream APIs, meters usage, creates proof
