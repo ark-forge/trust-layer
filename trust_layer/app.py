@@ -7,7 +7,7 @@ from typing import Optional
 
 import stripe
 from fastapi import FastAPI, Request, HTTPException, Header
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, HTMLResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import __version__
@@ -27,6 +27,7 @@ from .keys import validate_api_key, create_api_key, deactivate_key_by_ref, is_te
 from .proofs import load_proof, store_proof, get_public_proof, verify_proof_integrity
 from .timestamps import upgrade_pending
 from .proxy import execute_proxy, ProxyError
+from .templates import render_proof_page
 from .rate_limit import get_usage
 from .email_notify import send_welcome_email
 
@@ -124,11 +125,19 @@ async def proxy_endpoint(
     else:
         status_code = 200
 
-    # Add proof header
+    # Level 2 — Ghost Stamp: inject proof headers
     proof = result.get("proof") or result.get("error", {}).get("proof_data")
     headers = {}
-    if proof and proof.get("verification_url"):
-        headers["X-ArkForge-Proof"] = proof["verification_url"]
+    if proof:
+        verification_url = proof.get("verification_url", "")
+        proof_id = proof.get("proof_id", "")
+        service_ok = "error" not in result
+        if verification_url:
+            headers["X-ArkForge-Proof"] = verification_url
+        headers["X-ArkForge-Verified"] = "true" if service_ok else "false"
+        if proof_id:
+            headers["X-ArkForge-Proof-ID"] = proof_id
+            headers["X-ArkForge-Trust-Link"] = f"{TRUST_LAYER_BASE_URL}/v/{proof_id}"
 
     return JSONResponse(status_code=status_code, content=result, headers=headers)
 
@@ -136,8 +145,13 @@ async def proxy_endpoint(
 # --- GET /v1/proof/{proof_id} ---
 
 @app.get("/v1/proof/{proof_id}")
-async def get_proof(proof_id: str):
-    """Public proof verification — no auth required. Lazy-upgrades OTS on access."""
+async def get_proof(proof_id: str, request: Request):
+    """Public proof verification — no auth required. Lazy-upgrades OTS on access.
+
+    Content negotiation (Level 3 — Visual Stamp):
+    - Accept: text/html (without application/json) → HTML proof page
+    - Otherwise → JSON (backward compat)
+    """
     proof = load_proof(proof_id)
     if not proof:
         return _error_response("not_found", f"Proof '{proof_id}' not found", 404)
@@ -158,8 +172,31 @@ async def get_proof(proof_id: str):
                 logger.debug("OTS upgrade attempt for %s: %s", proof_id, e)
 
     public = get_public_proof(proof)
-    public["integrity_verified"] = verify_proof_integrity(proof)
+    integrity_verified = verify_proof_integrity(proof)
+    public["integrity_verified"] = integrity_verified
+
+    # Level 3 — Visual Stamp: content negotiation
+    accept = request.headers.get("accept", "")
+    if "text/html" in accept and "application/json" not in accept:
+        html_content = render_proof_page(public, integrity_verified)
+        return HTMLResponse(content=html_content)
+
     return public
+
+
+# --- GET /v/{proof_id} — Short URL redirect ---
+
+@app.get("/v/{proof_id}")
+async def short_proof_url(proof_id: str):
+    """Short URL redirect to full proof endpoint. 302 with cache."""
+    proof = load_proof(proof_id)
+    if not proof:
+        return _error_response("not_found", f"Proof '{proof_id}' not found", 404)
+    return RedirectResponse(
+        url=f"/v1/proof/{proof_id}",
+        status_code=302,
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 # --- GET /v1/proof/{proof_id}/ots ---
