@@ -24,7 +24,8 @@ from .config import (
     RATE_LIMIT_PER_KEY_PER_DAY,
 )
 from .keys import validate_api_key, create_api_key, deactivate_key_by_ref, is_test_key
-from .proofs import load_proof, get_public_proof, verify_proof_integrity
+from .proofs import load_proof, store_proof, get_public_proof, verify_proof_integrity
+from .timestamps import upgrade_pending
 from .proxy import execute_proxy, ProxyError
 from .rate_limit import get_usage
 from .email_notify import send_welcome_email
@@ -132,10 +133,25 @@ async def proxy_endpoint(
 
 @app.get("/v1/proof/{proof_id}")
 async def get_proof(proof_id: str):
-    """Public proof verification — no auth required."""
+    """Public proof verification — no auth required. Lazy-upgrades OTS on access."""
     proof = load_proof(proof_id)
     if not proof:
         return _error_response("not_found", f"Proof '{proof_id}' not found", 404)
+
+    # Lazy OTS upgrade: try to confirm pending timestamps on each read
+    ots_status = proof.get("opentimestamps", {}).get("status", "")
+    if ots_status == "pending":
+        ots_path = PROOFS_DIR / f"{proof_id}.ots"
+        if ots_path.exists():
+            try:
+                upgraded = upgrade_pending(ots_path.read_bytes())
+                if upgraded:
+                    ots_path.write_bytes(upgraded)
+                    proof["opentimestamps"]["status"] = "verified"
+                    store_proof(proof_id, proof)
+                    logger.info("OTS upgraded to verified: %s", proof_id)
+            except Exception as e:
+                logger.debug("OTS upgrade attempt for %s: %s", proof_id, e)
 
     public = get_public_proof(proof)
     public["integrity_verified"] = verify_proof_integrity(proof)
