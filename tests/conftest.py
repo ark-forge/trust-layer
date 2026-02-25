@@ -35,10 +35,15 @@ def _isolate_data(tmp_path, monkeypatch):
     import trust_layer.keys as keys_mod
     import trust_layer.rate_limit as rl_mod
     import trust_layer.proofs as proofs_mod
+    import trust_layer.proxy as proxy_mod
 
     monkeypatch.setattr(keys_mod, "API_KEYS_FILE", tmp_path / "data" / "api_keys.json")
     monkeypatch.setattr(rl_mod, "RATE_LIMITS_FILE", tmp_path / "data" / "rate_limits.json")
     monkeypatch.setattr(proofs_mod, "PROOFS_DIR", tmp_path / "proofs")
+    monkeypatch.setattr(proxy_mod, "IDEMPOTENCY_DIR", tmp_path / "data" / "idempotency")
+    monkeypatch.setattr(proxy_mod, "AGENTS_DIR", tmp_path / "data" / "agents")
+    monkeypatch.setattr(proxy_mod, "SERVICES_DIR", tmp_path / "data" / "services")
+    monkeypatch.setattr(proxy_mod, "TRUST_LAYER_BASE_URL", "https://test.arkforge.fr")
 
 
 @pytest.fixture

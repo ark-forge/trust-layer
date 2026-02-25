@@ -82,9 +82,42 @@ Trust Layer (/v1/proxy)
 Upstream API (any HTTPS endpoint)
 ```
 
+## New client onboarding
+
+### 1. Save a card
+
+```bash
+curl -X POST https://arkforge.fr/trust/v1/keys/setup \
+  -H "Content-Type: application/json" \
+  -d '{"email": "client@example.com"}'
+# Returns: {"checkout_url": "https://checkout.stripe.com/...", ...}
+```
+
+Open `checkout_url` in a browser — enter a card. No charge yet.
+
+For test mode, add `"mode": "test"` and use Stripe test card `4242 4242 4242 4242`.
+
+### 2. Receive API key
+
+Stripe webhook fires automatically. The Trust Layer creates an API key (`mcp_pro_...` or `mcp_test_...`) and emails it to the client.
+
+### 3. Use the proxy
+
+```bash
+curl -X POST https://arkforge.fr/trust/v1/proxy \
+  -H "X-Api-Key: mcp_pro_..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "target": "https://arkforge.fr/api/v1/scan-repo",
+    "amount": 0.50,
+    "currency": "eur",
+    "payload": {"repo_url": "https://github.com/owner/repo"}
+  }'
+```
+
 ## Test / Live modes
 
-API keys starting with `mcp_test_` use Stripe test mode. Keys starting with `mcp_pro_` use Stripe live mode. The proxy auto-selects the right Stripe keys based on the API key prefix.
+API keys starting with `mcp_test_` use Stripe test mode. Keys starting with `mcp_pro_` use Stripe live mode. The proxy auto-selects the right Stripe keys based on the API key prefix. Both modes work simultaneously — same endpoints, same proofs.
 
 ## Live deployment
 
