@@ -33,15 +33,14 @@ from .email_notify import send_proof_email
 logger = logging.getLogger("trust_layer.proxy")
 
 
-def _submit_archive_org(proof_url: str, proof_id: str) -> Optional[dict]:
-    """Submit proof page to Archive.org Wayback Machine (best-effort, sync)."""
+async def _submit_archive_org(proof_url: str, proof_id: str) -> Optional[dict]:
+    """Submit proof page to Archive.org Wayback Machine (best-effort, async)."""
     try:
-        resp = httpx.get(
-            f"https://web.archive.org/save/{proof_url}",
-            timeout=10.0,
-            follow_redirects=True,
-            headers={"User-Agent": "ArkForge Trust Layer (+https://arkforge.fr)"},
-        )
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            resp = await client.get(
+                f"https://web.archive.org/save/{proof_url}",
+                headers={"User-Agent": "ArkForge Trust Layer (+https://arkforge.fr)"},
+            )
         if resp.status_code < 400:
             snapshot_url = resp.headers.get("Content-Location") or resp.headers.get("Location")
             if snapshot_url and not snapshot_url.startswith("http"):
@@ -421,7 +420,7 @@ async def execute_proxy(
         logger.warning("OTS submit skipped: %s", e)
 
     # 11b. Archive.org snapshot (best-effort)
-    archive_result = _submit_archive_org(verification_url, proof_id)
+    archive_result = await _submit_archive_org(verification_url, proof_id)
     if archive_result:
         proof_record["archive_org"] = archive_result
         store_proof(proof_id, proof_record)
