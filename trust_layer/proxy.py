@@ -282,11 +282,12 @@ async def execute_proxy(
     service_status_code = None
 
     try:
+        fwd_headers = {"X-Internal-Secret": "tl_internal_9f4e2a"}
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_SECONDS) as client:
             if method == "GET":
-                resp = await client.get(target, params=payload)
+                resp = await client.get(target, params=payload, headers=fwd_headers)
             else:
-                resp = await client.post(target, json=payload)
+                resp = await client.post(target, json=payload, headers=fwd_headers)
 
             service_status_code = resp.status_code
             try:

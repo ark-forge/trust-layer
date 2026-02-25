@@ -21,7 +21,7 @@ for _d in (IDEMPOTENCY_DIR, AGENTS_DIR, SERVICES_DIR):
 # --- Load settings.env ---
 SETTINGS_ENV = Path(os.environ.get(
     "SETTINGS_ENV_PATH",
-    str(Path(__file__).resolve().parent.parent.parent / "mcp-servers" / "eu-ai-act" / "config" / "settings.env"),
+    "/opt/claude-ceo/config/settings.env",
 ))
 if SETTINGS_ENV.exists():
     for _line in SETTINGS_ENV.read_text().splitlines():
@@ -52,4 +52,4 @@ RATE_LIMIT_PER_KEY_PER_DAY = 100
 IDEMPOTENCY_TTL_HOURS = 24
 
 # --- Trust Layer URL ---
-TRUST_LAYER_BASE_URL = os.environ.get("TRUST_LAYER_BASE_URL", "https://trust.arkforge.fr")
+TRUST_LAYER_BASE_URL = os.environ.get("TRUST_LAYER_BASE_URL", "https://arkforge.fr/trust")
