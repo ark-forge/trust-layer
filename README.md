@@ -24,7 +24,7 @@ With ArkForge:      Agent → ArkForge → API → Verifiable Proof
 
 - **Proxy** — forwards requests to upstream APIs, meters usage, creates proof
 - **Payments** — Stripe off-session charges, test/live modes, webhook lifecycle
-- **Proofs** — SHA-256 hash chain per call, publicly verifiable, optionally anchored on Bitcoin via OpenTimestamps
+- **Proofs** — SHA-256 hash chain per call, publicly verifiable, optionally anchored on Bitcoin via OpenTimestamps and archived on Archive.org
 - **API keys** — `mcp_test_*` / `mcp_pro_*` prefixes auto-select Stripe mode
 - **Agent identity** — optional `X-Agent-Identity` / `X-Agent-Version` headers, mismatch detection across calls
 - **Triptyque de la Preuve** — 3-level watermarking on every transaction (see below)
@@ -94,6 +94,7 @@ These are stored in the proof and shadow profile. If the same API key sends a di
 - `proof.identity_consistent` — `true` / `false` / `null` (consistency check)
 - `proof.verification_url` — public URL to verify the proof
 - `proof.opentimestamps` — OTS status and download URL
+- `proof.archive_org` — Archive.org snapshot URL (if available)
 - `service_response` — upstream API response
 - `service_response.body._arkforge_attestation` — digital stamp (Level 1, see below)
 
@@ -142,6 +143,11 @@ Badge colors:
 - **Green** (`#22c55e`) — integrity verified, OTS confirmed on Bitcoin
 - **Orange** (`#f59e0b`) — integrity verified, OTS pending
 - **Red** (`#ef4444`) — integrity check failed
+
+The proof page shows 3 independent witnesses:
+- **Stripe** — confirms payment occurred (green if receipt URL exists)
+- **Bitcoin** — confirms timestamp via OpenTimestamps (green when confirmed, orange when pending)
+- **Archive.org** — public snapshot of the proof page on the Wayback Machine (green if snapshot exists, grey if not yet available)
 
 **Short URL:** `GET /v/{proof_id}` → 302 redirect to the full proof endpoint. Cacheable (24h).
 
@@ -197,8 +203,8 @@ Trust Layer (/v1/proxy)
     |--- 2. Charge via Stripe (off-session)
     |--- 3. Forward request to upstream API
     |--- 4. Hash request + response (SHA-256 chain)
-    |--- 5. Submit to OpenTimestamps (async)
-    |--- 6. Store proof as immutable flat-file JSON, return everything
+    |--- 5. Store proof, return response immediately
+    |--- 6. Background: OpenTimestamps + Archive.org snapshot + email receipt
     |
     v
 Upstream API (any HTTPS endpoint)
