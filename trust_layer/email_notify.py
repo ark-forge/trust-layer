@@ -75,12 +75,20 @@ def send_proof_email(email: str, proof_id: str, proof_data: dict):
     ts = proof_data.get("timestamp", "")
     verification_url = proof_data.get("verification_url", "")
 
+    parties = proof_data.get("parties", {})
+    buyer_fp = parties.get("buyer_fingerprint", "N/A")
+    seller_domain = parties.get("seller", "N/A")
+
     subject = f"[PROOF] ArkForge Transaction — {proof_id}"
     body = f"""ARKFORGE TRUST LAYER — PROOF OF TRANSACTION
 {'=' * 50}
 
 Timestamp:  {ts}
 Proof ID:   {proof_id}
+
+PARTIES
+  Buyer:          {buyer_fp[:16]}...
+  Seller:         {seller_domain}
 
 PAYMENT
   Provider:       {payment.get('provider', 'stripe')}

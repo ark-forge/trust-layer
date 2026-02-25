@@ -34,13 +34,15 @@ def generate_proof(
     response_data: dict,
     payment_data: dict,
     timestamp: str,
+    buyer_fingerprint: str = "",
+    seller: str = "",
 ) -> dict:
-    """Generate a proof with request/response/chain hashes."""
+    """Generate a proof with request/response/chain hashes + party identities."""
     request_hash = sha256_hex(canonical_json(request_data))
     response_hash = sha256_hex(canonical_json(response_data))
 
     payment_intent_id = payment_data.get("transaction_id", "")
-    chain_input = request_hash + response_hash + payment_intent_id + timestamp
+    chain_input = request_hash + response_hash + payment_intent_id + timestamp + buyer_fingerprint + seller
     chain_hash = sha256_hex(chain_input)
 
     return {
@@ -48,6 +50,10 @@ def generate_proof(
             "request": f"sha256:{request_hash}",
             "response": f"sha256:{response_hash}",
             "chain": f"sha256:{chain_hash}",
+        },
+        "parties": {
+            "buyer_fingerprint": buyer_fingerprint,
+            "seller": seller,
         },
         "payment": payment_data,
         "timestamp": timestamp,
@@ -76,6 +82,7 @@ def verify_proof_integrity(proof: dict) -> bool:
     """Recalculate chain hash and compare — public verification."""
     hashes = proof.get("hashes", {})
     payment = proof.get("payment", {})
+    parties = proof.get("parties", {})
     timestamp = proof.get("timestamp", "")
 
     request_hash = hashes.get("request", "").replace("sha256:", "")
@@ -83,7 +90,9 @@ def verify_proof_integrity(proof: dict) -> bool:
     expected_chain = hashes.get("chain", "").replace("sha256:", "")
 
     payment_intent_id = payment.get("transaction_id", "")
-    chain_input = request_hash + response_hash + payment_intent_id + timestamp
+    buyer_fingerprint = parties.get("buyer_fingerprint", "")
+    seller = parties.get("seller", "")
+    chain_input = request_hash + response_hash + payment_intent_id + timestamp + buyer_fingerprint + seller
     computed_chain = sha256_hex(chain_input)
 
     return computed_chain == expected_chain
@@ -94,6 +103,7 @@ def get_public_proof(proof: dict) -> dict:
     return {
         "proof_id": proof.get("proof_id"),
         "hashes": proof.get("hashes"),
+        "parties": proof.get("parties"),
         "payment": {
             k: v for k, v in proof.get("payment", {}).items()
             if k in ("transaction_id", "amount", "currency", "status", "receipt_url", "provider")

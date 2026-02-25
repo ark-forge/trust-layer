@@ -24,7 +24,7 @@ from .config import (
 from .keys import validate_api_key
 from .payments import get_provider
 from .payments.base import ChargeResult
-from .proofs import canonical_json, sha256_hex, generate_proof_id, generate_proof, store_proof
+from .proofs import sha256_hex, generate_proof_id, generate_proof, store_proof
 from .persistence import load_json, save_json
 from .rate_limit import check_rate_limit
 from .timestamps import submit_hash
@@ -307,9 +307,11 @@ async def execute_proxy(
     # 8. Build response data for hashing
     response_data = service_response or {"error": service_error}
 
-    # 9. Generate proof
+    # 9. Generate proof (with party identities)
+    buyer_fingerprint = sha256_hex(api_key)
+    seller = target_domain
     proof_id = generate_proof_id()
-    proof = generate_proof(request_data, response_data, payment_data, timestamp)
+    proof = generate_proof(request_data, response_data, payment_data, timestamp, buyer_fingerprint, seller)
 
     verification_url = f"{TRUST_LAYER_BASE_URL}/v1/proof/{proof_id}"
     proof_record = {
@@ -317,6 +319,7 @@ async def execute_proxy(
         "verification_url": verification_url,
         "verification_algorithm": f"{TRUST_LAYER_BASE_URL}/docs/verification",
         "hashes": proof["hashes"],
+        "parties": proof["parties"],
         "payment": payment_data,
         "timestamp": timestamp,
         "opentimestamps": {"status": "pending", "ots_url": f"{TRUST_LAYER_BASE_URL}/v1/proof/{proof_id}/ots"},
