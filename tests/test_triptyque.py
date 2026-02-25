@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 
-from trust_layer.proxy import _inject_digital_stamp, _submit_archive_org, execute_proxy
+from trust_layer.proxy import _inject_digital_stamp, _submit_archive_org, _archive_org_background, execute_proxy
 from trust_layer.proofs import verify_proof_integrity, store_proof, load_proof, get_public_proof
 from trust_layer.templates import _esc, render_proof_page
 from trust_layer.payments.base import ChargeResult
@@ -483,7 +483,8 @@ class TestArchiveOrgWitness:
 
     @pytest.mark.asyncio
     async def test_archive_org_called_in_execute_proxy(self, test_api_key):
-        """_submit_archive_org is called during execute_proxy and result stored."""
+        """_archive_org_background is fired during execute_proxy."""
+        import asyncio
         mock_provider, mock_client = _mock_full_proxy()
         archive_result = {
             "status": "submitted",
@@ -495,7 +496,7 @@ class TestArchiveOrgWitness:
              patch("httpx.AsyncClient", return_value=mock_client), \
              patch("trust_layer.proxy.submit_hash", return_value=None), \
              patch("trust_layer.proxy.send_proof_email"), \
-             patch("trust_layer.proxy._submit_archive_org", return_value=archive_result) as mock_archive:
+             patch("trust_layer.proxy._submit_archive_org", return_value=archive_result):
 
             result = await execute_proxy(
                 target="https://example.com/api/scan",
@@ -505,13 +506,18 @@ class TestArchiveOrgWitness:
                 currency="eur",
                 api_key=test_api_key,
             )
+            # Let the background task complete
+            await asyncio.sleep(0.05)
 
-        mock_archive.assert_called_once()
-        assert result["proof"]["archive_org"] == archive_result
+        # Background task updates proof on disk
+        proof_id = result["proof"]["proof_id"]
+        stored = load_proof(proof_id)
+        assert stored["archive_org"] == archive_result
 
     @pytest.mark.asyncio
     async def test_archive_org_failure_does_not_break_flow(self, test_api_key):
         """When _submit_archive_org returns None, flow continues without archive_org."""
+        import asyncio
         mock_provider, mock_client = _mock_full_proxy()
 
         with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
@@ -528,5 +534,6 @@ class TestArchiveOrgWitness:
                 currency="eur",
                 api_key=test_api_key,
             )
+            await asyncio.sleep(0.05)
 
         assert "archive_org" not in result["proof"]

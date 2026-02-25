@@ -1,5 +1,6 @@
 """Core proxy logic — charge, forward, prove."""
 
+import asyncio
 import hashlib
 import ipaddress
 import logging
@@ -55,6 +56,18 @@ async def _submit_archive_org(proof_url: str, proof_id: str) -> Optional[dict]:
     except Exception as e:
         logger.warning("Archive.org submit skipped for %s: %s", proof_id, e)
         return None
+
+
+async def _archive_org_background(proof_url: str, proof_id: str, proof_record: dict):
+    """Background task: submit to Archive.org and update proof record if successful."""
+    try:
+        result = await _submit_archive_org(proof_url, proof_id)
+        if result:
+            proof_record["archive_org"] = result
+            store_proof(proof_id, proof_record)
+            logger.info("Archive.org snapshot saved for %s", proof_id)
+    except Exception as e:
+        logger.warning("Archive.org background task failed for %s: %s", proof_id, e)
 
 
 def _inject_digital_stamp(result: dict, proof_record: dict) -> None:
@@ -419,11 +432,8 @@ async def execute_proxy(
     except Exception as e:
         logger.warning("OTS submit skipped: %s", e)
 
-    # 11b. Archive.org snapshot (best-effort)
-    archive_result = await _submit_archive_org(verification_url, proof_id)
-    if archive_result:
-        proof_record["archive_org"] = archive_result
-        store_proof(proof_id, proof_record)
+    # 11b. Archive.org snapshot (fire-and-forget, does not block response)
+    asyncio.create_task(_archive_org_background(verification_url, proof_id, proof_record))
 
     # 12. Email proof (async, best-effort)
     email = key_info.get("email", "")
