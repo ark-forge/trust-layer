@@ -25,6 +25,7 @@ With ArkForge:      Agent → ArkForge → API → Verifiable Proof
 - **Proxy** — forwards requests to upstream APIs, meters usage, creates proof
 - **Payments** — Stripe off-session charges, test/live modes, webhook lifecycle
 - **Proofs** — SHA-256 hash chain per call, publicly verifiable, anchored via RFC 3161 Timestamp Authority and archived on Archive.org
+- **Ed25519 signature** — every proof is signed by ArkForge's Ed25519 key, proving origin. Public key served at `GET /v1/pubkey`
 - **API keys** — `mcp_free_*` / `mcp_pro_*` / `mcp_test_*` prefixes auto-select plan and Stripe mode
 - **Free tier** — 100 proofs/month, no credit card required
 - **Agent identity** — optional `X-Agent-Identity` / `X-Agent-Version` headers, mismatch detection across calls
@@ -66,6 +67,7 @@ pytest tests/ -v
 | `GET` | `/v1/proof/{proof_id}` | Retrieve and verify proof (JSON or HTML — see content negotiation) |
 | `GET` | `/v/{proof_id}` | Short URL — 302 redirect to `/v1/proof/{proof_id}` |
 | `GET` | `/v1/proof/{proof_id}/tsr` | Download RFC 3161 timestamp response file |
+| `GET` | `/v1/pubkey` | ArkForge's Ed25519 public key for signature verification |
 
 ## Core flow — POST /v1/proxy
 
@@ -90,12 +92,16 @@ pytest tests/ -v
 These are stored in the proof and shadow profile. If the same API key sends a different identity, all subsequent proofs are flagged `identity_consistent: false`.
 
 **Response includes:**
+- `proof.spec_version` — proof format version (`"1.0"`)
 - `proof.payment` — Stripe transaction ID, amount, receipt URL
 - `proof.hashes` — SHA-256 of request, response, and chain
+- `proof.arkforge_signature` — Ed25519 signature of the chain hash (format: `ed25519:<base64url>`)
+- `proof.arkforge_pubkey` — ArkForge's Ed25519 public key used for signing
+- `proof.upstream_timestamp` — upstream service's `Date` header (if present)
 - `proof.parties.agent_identity` / `agent_version` — declared identity (if provided)
 - `proof.identity_consistent` — `true` / `false` / `null` (consistency check)
 - `proof.verification_url` — public URL to verify the proof
-- `proof.timestamp_authority` — TSA status, provider, and download URL
+- `proof.timestamp_authority` — TSA status, provider, download URL, and `tsr_base64` (after background processing)
 - `proof.archive_org` — Archive.org snapshot URL (if available)
 - `service_response` — upstream API response
 - `service_response.body._arkforge_attestation` — digital stamp (Level 1, see below)
@@ -158,7 +164,7 @@ The proof page shows 3 independent witnesses:
 The chain hash binds every element of a transaction into a single verifiable seal. The formula is public and deterministic — anyone can recompute it:
 
 ```
-chain_hash = SHA256(request_hash + response_hash + payment_intent_id + timestamp + buyer_fingerprint + seller)
+chain_hash = SHA256(request_hash + response_hash + payment_intent_id + timestamp + buyer_fingerprint + seller [+ upstream_timestamp])
 ```
 
 Where:
@@ -168,8 +174,30 @@ Where:
 - `timestamp` = ISO 8601 UTC (e.g. `2026-02-25T20:43:45Z`)
 - `buyer_fingerprint` = SHA-256 of the API key
 - `seller` = target domain (e.g. `example.com`)
+- `upstream_timestamp` = upstream service's `Date` header (included **only** when present in the proof JSON)
 
 All values are concatenated as raw strings (no separator) before hashing. Canonical JSON uses `json.dumps(data, sort_keys=True, separators=(",", ":"))`.
+
+**Backward compatibility:** if `upstream_timestamp` is absent or null in the proof JSON, it is not included in the chain input. This preserves verification of proofs created before this field was introduced.
+
+## Digital signature
+
+Every proof's chain hash is signed with ArkForge's Ed25519 private key. This proves the proof was issued by ArkForge (origin authentication), not just that it is internally consistent (integrity).
+
+- **Algorithm:** Ed25519
+- **Format:** `ed25519:<base64url_without_padding>`
+- **What is signed:** the chain hash hex string (UTF-8 encoded)
+- **Public key:** available at `GET /v1/pubkey` and below
+
+**Current public key:**
+
+```
+ed25519:ZLlGE0eN0eTNUE9vaK1tStf6AuoFUWqJBvqx7QgxfEY
+```
+
+**What the signature guarantees:** integrity of all fields covered by the chain hash (request, response, payment, timestamp, buyer, seller, upstream_timestamp if present).
+
+**What the signature does NOT cover:** `views_count`, `identity_consistent`, `archive_org`, and other informational/mutable metadata.
 
 ## Independent verification
 
@@ -183,9 +211,10 @@ PAYMENT_ID=$(echo -n "$PROOF" | jq -r '.payment.transaction_id')
 TIMESTAMP=$(echo -n "$PROOF" | jq -r '.timestamp')
 BUYER=$(echo -n "$PROOF" | jq -r '.parties.buyer_fingerprint')
 SELLER=$(echo -n "$PROOF" | jq -r '.parties.seller')
+UPSTREAM=$(echo -n "$PROOF" | jq -r '.upstream_timestamp // empty')
 
 # 2. Recompute the chain hash
-COMPUTED=$(echo -n "${REQUEST_HASH}${RESPONSE_HASH}${PAYMENT_ID}${TIMESTAMP}${BUYER}${SELLER}" | sha256sum | cut -d' ' -f1)
+COMPUTED=$(echo -n "${REQUEST_HASH}${RESPONSE_HASH}${PAYMENT_ID}${TIMESTAMP}${BUYER}${SELLER}${UPSTREAM}" | sha256sum | cut -d' ' -f1)
 
 # 3. Compare with the proof's chain hash
 EXPECTED=$(echo -n "$PROOF" | jq -r '.hashes.chain' | sed 's/sha256://')
@@ -193,6 +222,8 @@ EXPECTED=$(echo -n "$PROOF" | jq -r '.hashes.chain' | sed 's/sha256://')
 ```
 
 If the chain hash matches, no field in the proof was altered after creation. The Stripe Payment Intent ID can be independently verified on Stripe's dashboard or API.
+
+To also verify the Ed25519 signature, use the public key from `GET /v1/pubkey` (or the value above) with any Ed25519 library. The signed message is the chain hash hex string.
 
 ## Architecture
 
