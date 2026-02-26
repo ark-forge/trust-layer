@@ -49,6 +49,10 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
     archive_org = proof.get("archive_org") or {}
     identity_consistent = proof.get("identity_consistent")
     verification_url = _esc(proof.get("verification_url", ""))
+    spec_version = proof.get("spec_version")
+    upstream_timestamp = proof.get("upstream_timestamp")
+    arkforge_signature = proof.get("arkforge_signature")
+    arkforge_pubkey = proof.get("arkforge_pubkey")
 
     ots_status = ots.get("status", "unknown")
     seller = _esc(parties.get("seller", ""))
@@ -92,6 +96,11 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
     archive_color = "#22c55e" if archive_has_snapshot else "#475569"
     archive_name = f'<a href="{_esc(archive_snapshot_url)}" style="color:#38bdf8;text-decoration:none">Archive.org</a>' if archive_has_snapshot else "Archive.org"
     archive_desc = "public snapshot preserved" if archive_has_snapshot else "snapshot not yet available"
+
+    # --- Signature ---
+    has_signature = bool(arkforge_signature)
+    sig_color = "#22c55e" if has_signature else "#475569"
+    sig_label = "origin authenticated by Ed25519 digital signature" if has_signature else "signature not available"
 
     # --- Identity row (conditional) ---
     identity_row = ""
@@ -184,6 +193,10 @@ details[open] summary::before{{content:"\u25bc "}}
             <div class="dot" style="background:{ots_color}"></div>
             <p>Timestamp anchored outside ArkForge infrastructure via RFC 3161 Timestamp Authority</p>
         </div>
+        <div class="trust-point">
+            <div class="dot" style="background:{sig_color}"></div>
+            <p>Origin authenticated by ArkForge\u2019s Ed25519 digital signature</p>
+        </div>
     </div>
 
     <!-- 4. INDEPENDENT WITNESSES -->
@@ -198,6 +211,11 @@ details[open] summary::before{{content:"\u25bc "}}
             <div class="dot" style="background:{ots_color}"></div>
             <span class="name">RFC 3161 Timestamp</span>
             <span class="desc">\u2014 {_esc(ots_label)}</span>
+        </div>
+        <div class="witness">
+            <div class="dot" style="background:{sig_color}"></div>
+            <span class="name">Ed25519 Signature</span>
+            <span class="desc">\u2014 {_esc(sig_label)}</span>
         </div>
         <div class="witness">
             <div class="dot" style="background:{archive_color}"></div>
@@ -225,8 +243,12 @@ details[open] summary::before{{content:"\u25bc "}}
             <div class="tech-row"><span class="tech-label">Buyer</span><span class="tech-val">{_esc(parties.get("buyer_fingerprint", ""))}</span></div>
             <div class="tech-row"><span class="tech-label">Seller</span><span class="tech-val">{seller}</span></div>
             <div class="tech-row"><span class="tech-label">Timestamp</span><span class="tech-val">{_esc(timestamp)}</span></div>
+            {"" if not upstream_timestamp else f'<div class="tech-row"><span class="tech-label">Upstream time</span><span class="tech-val">{_esc(upstream_timestamp)}</span></div>'}
             <div class="tech-row"><span class="tech-label">TSA status</span><span class="tech-val">{_esc(ots_status)}</span></div>
-            <div class="tech-row"><span class="tech-label">Algorithm</span><span class="tech-val">SHA-256(request + response + payment_id + timestamp + buyer + seller)</span></div>
+            {"" if not arkforge_signature else f'<div class="tech-row"><span class="tech-label">Signature</span><span class="tech-val">{_esc(arkforge_signature)}</span></div>'}
+            {"" if not arkforge_pubkey else f'<div class="tech-row"><span class="tech-label">Public key</span><span class="tech-val">{_esc(arkforge_pubkey)}</span></div>'}
+            {"" if not spec_version else f'<div class="tech-row"><span class="tech-label">Spec version</span><span class="tech-val">{_esc(spec_version)}</span></div>'}
+            <div class="tech-row"><span class="tech-label">Algorithm</span><span class="tech-val">SHA-256(request + response + payment_id + timestamp + buyer + seller{" + upstream_timestamp" if upstream_timestamp else ""})</span></div>
         </div>
     </details>
 

@@ -38,6 +38,29 @@ from .crypto import sign_proof
 
 logger = logging.getLogger("trust_layer.proxy")
 
+# Track active background tasks for graceful shutdown
+_active_tasks: set[asyncio.Task] = set()
+
+
+def _track_task(task: asyncio.Task) -> None:
+    """Register a background task and auto-remove it when done."""
+    _active_tasks.add(task)
+    task.add_done_callback(_active_tasks.discard)
+
+
+async def drain_background_tasks(timeout: float = 10.0) -> int:
+    """Wait for all pending background tasks (up to timeout). Returns count drained."""
+    if not _active_tasks:
+        return 0
+    pending = len(_active_tasks)
+    logger.info("Draining %d background tasks (timeout=%.0fs)...", pending, timeout)
+    done, still_pending = await asyncio.wait(_active_tasks, timeout=timeout)
+    if still_pending:
+        logger.warning("%d background tasks did not finish in time, cancelling", len(still_pending))
+        for t in still_pending:
+            t.cancel()
+    return len(done)
+
 
 def _log_background_task(proof_id: str, task: str, status: str, detail: str = ""):
     """Append one line to background_tasks_log.jsonl for monitoring."""
@@ -60,7 +83,7 @@ def _log_background_task(proof_id: str, task: str, status: str, detail: str = ""
 async def _submit_archive_org(proof_url: str, proof_id: str) -> Optional[dict]:
     """Submit proof page to Archive.org Wayback Machine (best-effort, async)."""
     try:
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
             resp = await client.get(
                 f"https://web.archive.org/save/{proof_url}",
                 headers={"User-Agent": "ArkForge Trust Layer (+https://arkforge.fr)"},
@@ -77,7 +100,7 @@ async def _submit_archive_org(proof_url: str, proof_id: str) -> Optional[dict]:
         logger.warning("Archive.org returned %d for %s", resp.status_code, proof_id)
         return None
     except Exception as e:
-        logger.warning("Archive.org submit skipped for %s: %s", proof_id, e)
+        logger.warning("Archive.org submit skipped for %s: %s: %s", proof_id, type(e).__name__, e)
         return None
 
 
@@ -494,7 +517,8 @@ async def execute_proxy(
 
     # 11. Fire-and-forget background tasks (OTS, Archive.org, email)
     email = key_info.get("email", "")
-    asyncio.create_task(_post_proof_background(proof_id, proof_record, chain_hash, verification_url, email))
+    task = asyncio.create_task(_post_proof_background(proof_id, proof_record, chain_hash, verification_url, email))
+    _track_task(task)
 
     # 13. Update shadow profiles
     _update_agent_profile(api_key, amount, currency, target_domain, service_succeeded,
