@@ -124,6 +124,7 @@ async def test_execute_proxy_full_flow(test_api_key):
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.json.return_value = {"result": "scan_complete", "score": 85}
+    mock_response.headers = {}
 
     mock_client = AsyncMock()
     mock_client.post.return_value = mock_response
@@ -167,6 +168,7 @@ async def test_execute_proxy_service_error(test_api_key):
     mock_response = MagicMock()
     mock_response.status_code = 500
     mock_response.json.return_value = {"error": "internal server error"}
+    mock_response.headers = {}
 
     mock_client = AsyncMock()
     mock_client.post.return_value = mock_response
@@ -217,6 +219,114 @@ async def test_execute_proxy_payment_failed(test_api_key):
 
 
 @pytest.mark.asyncio
+async def test_execute_proxy_captures_upstream_date(test_api_key):
+    """Upstream Date header should be captured as upstream_timestamp in proof."""
+    mock_charge = ChargeResult(
+        provider="stripe", transaction_id="pi_test_date",
+        amount=0.50, currency="eur", status="succeeded", receipt_url=None,
+    )
+    mock_provider = AsyncMock()
+    mock_provider.charge.return_value = mock_charge
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"result": "ok"}
+    mock_response.headers = {"Date": "Thu, 26 Feb 2026 17:08:14 GMT"}
+
+    mock_client = AsyncMock()
+    mock_client.post.return_value = mock_response
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
+         patch("httpx.AsyncClient", return_value=mock_client), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+
+        result = await execute_proxy(
+            target="https://example.com/api",
+            method="POST", payload={}, amount=0.50, currency="eur",
+            api_key=test_api_key,
+        )
+
+    assert result["proof"].get("upstream_timestamp") == "Thu, 26 Feb 2026 17:08:14 GMT"
+
+
+@pytest.mark.asyncio
+async def test_execute_proxy_has_arkforge_signature(test_api_key):
+    """Proof should contain arkforge_signature and arkforge_pubkey."""
+    mock_charge = ChargeResult(
+        provider="stripe", transaction_id="pi_test_sig",
+        amount=0.50, currency="eur", status="succeeded", receipt_url=None,
+    )
+    mock_provider = AsyncMock()
+    mock_provider.charge.return_value = mock_charge
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"result": "ok"}
+    mock_response.headers = {}
+
+    mock_client = AsyncMock()
+    mock_client.post.return_value = mock_response
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
+         patch("httpx.AsyncClient", return_value=mock_client), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+
+        result = await execute_proxy(
+            target="https://example.com/api",
+            method="POST", payload={}, amount=0.50, currency="eur",
+            api_key=test_api_key,
+        )
+
+    proof = result["proof"]
+    assert "arkforge_signature" in proof
+    assert proof["arkforge_signature"].startswith("ed25519:")
+    assert "arkforge_pubkey" in proof
+    assert proof["arkforge_pubkey"].startswith("ed25519:")
+
+    # Verify the signature
+    from trust_layer.crypto import verify_proof_signature
+    chain_hash = proof["hashes"]["chain"].replace("sha256:", "")
+    assert verify_proof_signature(proof["arkforge_pubkey"], chain_hash, proof["arkforge_signature"]) is True
+
+
+@pytest.mark.asyncio
+async def test_execute_proxy_has_spec_version(test_api_key):
+    """Proof record should contain spec_version: '1.0'."""
+    mock_charge = ChargeResult(
+        provider="stripe", transaction_id="pi_test_spec",
+        amount=0.50, currency="eur", status="succeeded", receipt_url=None,
+    )
+    mock_provider = AsyncMock()
+    mock_provider.charge.return_value = mock_charge
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"result": "ok"}
+    mock_response.headers = {}
+
+    mock_client = AsyncMock()
+    mock_client.post.return_value = mock_response
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
+         patch("httpx.AsyncClient", return_value=mock_client), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+
+        result = await execute_proxy(
+            target="https://example.com/api",
+            method="POST", payload={}, amount=0.50, currency="eur",
+            api_key=test_api_key,
+        )
+
+    assert result["proof"]["spec_version"] == "1.0"
+
+
+@pytest.mark.asyncio
 async def test_execute_proxy_idempotency(test_api_key):
     """Same idempotency key returns cached response."""
     mock_charge = ChargeResult(
@@ -229,6 +339,7 @@ async def test_execute_proxy_idempotency(test_api_key):
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.json.return_value = {"result": "ok"}
+    mock_response.headers = {}
 
     mock_client = AsyncMock()
     mock_client.post.return_value = mock_response

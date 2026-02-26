@@ -23,6 +23,8 @@ from .config import (
     AGENTS_DIR,
     SERVICES_DIR,
     BACKGROUND_TASKS_LOG,
+    ARKFORGE_PUBLIC_KEY,
+    get_signing_key,
 )
 from .keys import validate_api_key
 from .payments import get_provider
@@ -32,6 +34,7 @@ from .persistence import load_json, save_json
 from .rate_limit import check_rate_limit
 from .timestamps import submit_hash
 from .email_notify import send_proof_email
+from .crypto import sign_proof
 
 logger = logging.getLogger("trust_layer.proxy")
 
@@ -83,12 +86,14 @@ async def _post_proof_background(proof_id: str, proof_record: dict, chain_hash: 
     """Background task: TSA + Archive.org + email — none of these block the client response."""
     # RFC 3161 Timestamp (sync but run in thread to avoid blocking event loop)
     try:
+        import base64 as _b64
         loop = asyncio.get_running_loop()
         tsr_bytes = await loop.run_in_executor(None, submit_hash, chain_hash)
         if tsr_bytes:
             from .config import PROOFS_DIR
             (PROOFS_DIR / f"{proof_id}.tsr").write_bytes(tsr_bytes)
             proof_record["timestamp_authority"]["status"] = "verified"
+            proof_record["timestamp_authority"]["tsr_base64"] = _b64.b64encode(tsr_bytes).decode("ascii")
             store_proof(proof_id, proof_record)
             logger.info("TSA timestamp verified for %s", proof_id)
             _log_background_task(proof_id, "tsa", "success")
@@ -411,6 +416,7 @@ async def execute_proxy(
     service_response = None
     service_error = None
     service_status_code = None
+    upstream_timestamp = None
 
     try:
         fwd_headers = {"X-Internal-Secret": os.environ.get("TRUST_LAYER_INTERNAL_SECRET", "")}
@@ -421,6 +427,7 @@ async def execute_proxy(
                 resp = await client.post(target, json=payload, headers=fwd_headers)
 
             service_status_code = resp.status_code
+            upstream_timestamp = resp.headers.get("Date")
             try:
                 service_response = resp.json()
             except Exception:
@@ -443,7 +450,8 @@ async def execute_proxy(
     seller = target_domain
     proof_id = generate_proof_id()
     proof = generate_proof(request_data, response_data, payment_data, timestamp, buyer_fingerprint, seller,
-                           agent_identity=agent_identity, agent_version=agent_version)
+                           agent_identity=agent_identity, agent_version=agent_version,
+                           upstream_timestamp=upstream_timestamp)
 
     # Compute identity_consistent flag
     identity_consistent = None
@@ -461,6 +469,7 @@ async def execute_proxy(
     verification_url = f"{TRUST_LAYER_BASE_URL}/v1/proof/{proof_id}"
     proof_record = {
         "proof_id": proof_id,
+        "spec_version": "1.0",
         "verification_url": verification_url,
         "verification_algorithm": "https://github.com/ark-forge/proof-spec/blob/main/SPEC.md#2-chain-hash-algorithm",
         "hashes": proof["hashes"],
@@ -470,12 +479,20 @@ async def execute_proxy(
         "timestamp_authority": {"status": "submitted", "provider": "freetsa.org", "tsr_url": f"{TRUST_LAYER_BASE_URL}/v1/proof/{proof_id}/tsr"},
         "identity_consistent": identity_consistent,
     }
+    if upstream_timestamp:
+        proof_record["upstream_timestamp"] = upstream_timestamp
+
+    # Ed25519 signature: sign the chain hash to prove ArkForge origin
+    chain_hash = proof["_raw_chain_hash"]
+    signing_key = get_signing_key()
+    if signing_key:
+        proof_record["arkforge_signature"] = sign_proof(signing_key, chain_hash)
+        proof_record["arkforge_pubkey"] = ARKFORGE_PUBLIC_KEY
 
     # 10. Store proof
     store_proof(proof_id, proof_record)
 
     # 11. Fire-and-forget background tasks (OTS, Archive.org, email)
-    chain_hash = proof["_raw_chain_hash"]
     email = key_info.get("email", "")
     asyncio.create_task(_post_proof_background(proof_id, proof_record, chain_hash, verification_url, email))
 

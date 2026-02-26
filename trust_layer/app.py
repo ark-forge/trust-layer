@@ -25,6 +25,7 @@ from .config import (
     RATE_LIMIT_PER_KEY_PER_DAY,
     FREE_TIER_MONTHLY_LIMIT,
     PROOF_ACCESS_LOG,
+    ARKFORGE_PUBLIC_KEY,
 )
 from .keys import validate_api_key, create_api_key, deactivate_key_by_ref, is_test_key
 from .proofs import load_proof, store_proof, get_public_proof, verify_proof_integrity
@@ -376,6 +377,7 @@ async def root():
         "endpoints": {
             "proxy": "POST /v1/proxy",
             "proof": "GET /v1/proof/{proof_id}",
+            "pubkey": "GET /v1/pubkey",
             "health": "GET /v1/health",
             "pricing": "GET /v1/pricing",
         },
@@ -436,6 +438,16 @@ async def pricing():
         },
         "contact": "contact@arkforge.fr",
     }
+
+
+# --- GET /v1/pubkey ---
+
+@app.get("/v1/pubkey")
+async def get_pubkey():
+    """Return ArkForge's Ed25519 public key for proof signature verification."""
+    if not ARKFORGE_PUBLIC_KEY:
+        return _error_response("not_configured", "Signing key not configured", 503)
+    return {"pubkey": ARKFORGE_PUBLIC_KEY, "algorithm": "Ed25519"}
 
 
 # --- Main ---

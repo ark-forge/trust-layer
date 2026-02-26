@@ -56,3 +56,28 @@ IDEMPOTENCY_TTL_HOURS = 24
 
 # --- Trust Layer URL ---
 TRUST_LAYER_BASE_URL = os.environ.get("TRUST_LAYER_BASE_URL", "https://arkforge.fr/trust")
+
+# --- Ed25519 Signing ---
+SIGNING_KEY_PATH = Path(os.environ.get(
+    "SIGNING_KEY_PATH",
+    str(BASE_DIR / "trust_layer" / ".signing_key.pem"),
+))
+
+# Fail-fast: load signing key at import time.
+# If absent, server refuses to start (no unsigned proofs allowed).
+try:
+    from .crypto import load_signing_key, get_public_key_b64url
+    _SIGNING_KEY = load_signing_key(SIGNING_KEY_PATH)
+    ARKFORGE_PUBLIC_KEY = get_public_key_b64url(_SIGNING_KEY)
+except Exception as _e:
+    import logging as _logging
+    _logging.getLogger("trust_layer.config").warning(
+        "Signing key not loaded: %s. Signature features disabled.", _e
+    )
+    _SIGNING_KEY = None
+    ARKFORGE_PUBLIC_KEY = None
+
+
+def get_signing_key():
+    """Return the Ed25519 private key, or None if not configured."""
+    return _SIGNING_KEY

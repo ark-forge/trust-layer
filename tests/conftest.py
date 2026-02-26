@@ -31,6 +31,14 @@ def _isolate_data(tmp_path, monkeypatch):
     for d in ["data", "proofs", "data/idempotency", "data/agents", "data/services"]:
         (tmp_path / d).mkdir(parents=True, exist_ok=True)
 
+    # Generate a test signing key for Ed25519 signature tests
+    from trust_layer.crypto import generate_keypair, load_signing_key, get_public_key_b64url
+    test_key_path = tmp_path / ".signing_key.pem"
+    test_pubkey = generate_keypair(test_key_path)
+    test_privkey = load_signing_key(test_key_path)
+    monkeypatch.setattr(cfg, "_SIGNING_KEY", test_privkey)
+    monkeypatch.setattr(cfg, "ARKFORGE_PUBLIC_KEY", test_pubkey)
+
     # Also patch the module-level imports in keys, rate_limit, proofs, proxy
     import trust_layer.keys as keys_mod
     import trust_layer.rate_limit as rl_mod
@@ -44,9 +52,11 @@ def _isolate_data(tmp_path, monkeypatch):
     monkeypatch.setattr(proxy_mod, "AGENTS_DIR", tmp_path / "data" / "agents")
     monkeypatch.setattr(proxy_mod, "SERVICES_DIR", tmp_path / "data" / "services")
     monkeypatch.setattr(proxy_mod, "TRUST_LAYER_BASE_URL", "https://test.arkforge.fr")
+    monkeypatch.setattr(proxy_mod, "ARKFORGE_PUBLIC_KEY", test_pubkey)
 
     import trust_layer.app as app_mod
     monkeypatch.setattr(app_mod, "TRUST_LAYER_BASE_URL", "https://test.arkforge.fr")
+    monkeypatch.setattr(app_mod, "ARKFORGE_PUBLIC_KEY", test_pubkey)
 
 
 @pytest.fixture

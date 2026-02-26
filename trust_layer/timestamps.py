@@ -3,6 +3,7 @@
 import logging
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -15,9 +16,13 @@ _TSA_URL = "https://freetsa.org/tsr"
 _TSA_CERT = _CERTS_DIR / "tsa.crt"
 _CA_CERT = _CERTS_DIR / "cacert.pem"
 
+_MAX_RETRIES = 3
+_BACKOFF_BASE = 1.0  # seconds: 1s, 2s, 4s
 
-def submit_hash(hash_hex: str) -> Optional[bytes]:
-    """Submit a hash to FreeTSA via RFC 3161. Returns .tsr bytes or None."""
+
+def _submit_hash_once(hash_hex: str) -> Optional[bytes]:
+    """Single attempt to submit a hash to FreeTSA. Returns .tsr bytes or None."""
+    data_path = None
     try:
         hash_bytes = bytes.fromhex(hash_hex)
 
@@ -51,7 +56,7 @@ def submit_hash(hash_hex: str) -> Optional[bytes]:
 
     except FileNotFoundError:
         logger.warning("openssl not found, skipping TSA submit")
-        return None
+        raise  # non-retryable
     except subprocess.CalledProcessError as e:
         logger.warning("openssl ts -query failed: %s", e.stderr[:200] if e.stderr else e)
         return None
@@ -62,13 +67,36 @@ def submit_hash(hash_hex: str) -> Optional[bytes]:
         logger.warning("TSA submit failed: %s", e)
         return None
     finally:
-        # Cleanup temp files
-        for suffix in ("", ".tsq"):
-            try:
-                p = Path(data_path + suffix) if suffix else Path(data_path)
-                p.unlink(missing_ok=True)
-            except Exception:
-                pass
+        if data_path:
+            for suffix in ("", ".tsq"):
+                try:
+                    p = Path(data_path + suffix) if suffix else Path(data_path)
+                    p.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+
+def submit_hash(hash_hex: str) -> Optional[bytes]:
+    """Submit a hash to FreeTSA via RFC 3161 with retry + exponential backoff.
+
+    Retries up to 3 times (1s, 2s, 4s delays) on transient failures.
+    Returns .tsr bytes or None.
+    """
+    for attempt in range(_MAX_RETRIES):
+        try:
+            result = _submit_hash_once(hash_hex)
+            if result is not None:
+                return result
+        except FileNotFoundError:
+            return None  # openssl missing — no point retrying
+
+        if attempt < _MAX_RETRIES - 1:
+            delay = _BACKOFF_BASE * (2 ** attempt)
+            logger.info("TSA attempt %d/%d failed, retrying in %.0fs...", attempt + 1, _MAX_RETRIES, delay)
+            time.sleep(delay)
+
+    logger.warning("TSA submit failed after %d attempts for hash %s...", _MAX_RETRIES, hash_hex[:16])
+    return None
 
 
 def verify_tsr(tsr_bytes: bytes, hash_hex: str) -> dict:

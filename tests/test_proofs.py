@@ -92,6 +92,7 @@ def test_verify_proof_integrity():
 def test_get_public_proof_strips_sensitive():
     proof = {
         "proof_id": "prf_test",
+        "spec_version": "1.0",
         "hashes": {"request": "sha256:aaa", "response": "sha256:bbb", "chain": "sha256:ccc"},
         "payment": {
             "transaction_id": "pi_test",
@@ -108,3 +109,99 @@ def test_get_public_proof_strips_sensitive():
     public = get_public_proof(proof)
     assert "raw" not in public.get("payment", {})
     assert public["payment"]["transaction_id"] == "pi_test"
+
+
+# --- New tests for spec_version, upstream_timestamp, signature fields ---
+
+def test_generate_proof_includes_spec_version():
+    """spec_version: '1.0' must be present in every proof."""
+    proof = generate_proof(
+        {"target": "https://example.com"}, {"result": "ok"},
+        {"transaction_id": "pi_spec"}, "2026-02-26T10:00:00Z",
+    )
+    assert proof.get("spec_version") == "1.0"
+
+
+def test_chain_hash_without_upstream_timestamp():
+    """Proof without upstream_timestamp uses original formula — backward compat."""
+    request_data = {"target": "https://example.com"}
+    response_data = {"result": "ok"}
+    payment_data = {"transaction_id": "pi_compat"}
+    timestamp = "2026-02-26T10:00:00Z"
+
+    proof = generate_proof(request_data, response_data, payment_data, timestamp,
+                           buyer_fingerprint="bf_test", seller="example.com")
+    assert verify_proof_integrity(proof) is True
+    # upstream_timestamp should not be in proof dict
+    assert "upstream_timestamp" not in proof
+
+
+def test_chain_hash_with_upstream_timestamp():
+    """Proof with upstream_timestamp includes it in chain hash."""
+    request_data = {"target": "https://example.com"}
+    response_data = {"result": "ok"}
+    payment_data = {"transaction_id": "pi_upstream"}
+    timestamp = "2026-02-26T10:00:00Z"
+    upstream_ts = "Thu, 26 Feb 2026 10:00:01 GMT"
+
+    proof_with = generate_proof(request_data, response_data, payment_data, timestamp,
+                                buyer_fingerprint="bf_test", seller="example.com",
+                                upstream_timestamp=upstream_ts)
+    proof_without = generate_proof(request_data, response_data, payment_data, timestamp,
+                                   buyer_fingerprint="bf_test", seller="example.com")
+
+    # Chain hashes must differ
+    assert proof_with["hashes"]["chain"] != proof_without["hashes"]["chain"]
+    # upstream_timestamp in proof dict
+    assert proof_with.get("upstream_timestamp") == upstream_ts
+    # Both must verify
+    assert verify_proof_integrity(proof_with) is True
+    assert verify_proof_integrity(proof_without) is True
+
+
+def test_verify_proof_integrity_old_format_still_works():
+    """Legacy proofs (no upstream_timestamp, no spec_version) still verify."""
+    from trust_layer.proofs import sha256_hex, canonical_json
+    # Build a legacy proof manually (as stored before this change)
+    request_data = {"target": "https://legacy.com"}
+    response_data = {"data": 42}
+    payment_data = {"transaction_id": "pi_legacy"}
+    timestamp = "2025-12-01T00:00:00Z"
+
+    req_hash = sha256_hex(canonical_json(request_data))
+    resp_hash = sha256_hex(canonical_json(response_data))
+    chain_input = req_hash + resp_hash + "pi_legacy" + timestamp + "" + ""
+    chain_hash = sha256_hex(chain_input)
+
+    legacy_proof = {
+        "hashes": {
+            "request": f"sha256:{req_hash}",
+            "response": f"sha256:{resp_hash}",
+            "chain": f"sha256:{chain_hash}",
+        },
+        "payment": {"transaction_id": "pi_legacy"},
+        "parties": {"buyer_fingerprint": "", "seller": ""},
+        "timestamp": timestamp,
+        # No spec_version, no upstream_timestamp
+    }
+    assert verify_proof_integrity(legacy_proof) is True
+
+
+def test_get_public_proof_includes_new_fields():
+    """Public proof includes spec_version, upstream_timestamp, signature, pubkey."""
+    proof = {
+        "proof_id": "prf_new",
+        "spec_version": "1.0",
+        "hashes": {"request": "sha256:a", "response": "sha256:b", "chain": "sha256:c"},
+        "payment": {"transaction_id": "pi_x", "amount": 1, "currency": "eur", "status": "succeeded",
+                     "receipt_url": "url", "provider": "stripe"},
+        "timestamp": "2026-02-26T10:00:00Z",
+        "upstream_timestamp": "Thu, 26 Feb 2026 10:00:01 GMT",
+        "arkforge_signature": "ed25519:fakesig",
+        "arkforge_pubkey": "ed25519:fakepub",
+    }
+    public = get_public_proof(proof)
+    assert public["spec_version"] == "1.0"
+    assert public["upstream_timestamp"] == "Thu, 26 Feb 2026 10:00:01 GMT"
+    assert public["arkforge_signature"] == "ed25519:fakesig"
+    assert public["arkforge_pubkey"] == "ed25519:fakepub"

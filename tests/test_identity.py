@@ -36,6 +36,7 @@ def _mock_proxy_deps():
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.json.return_value = {"result": "ok"}
+    mock_response.headers = {}
 
     mock_http = AsyncMock()
     mock_http.post.return_value = mock_response

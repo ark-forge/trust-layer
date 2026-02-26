@@ -58,6 +58,7 @@ def _mock_full_proxy():
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.json.return_value = {"result": "scan_complete", "score": 85}
+    mock_response.headers = {}
 
     mock_client = AsyncMock()
     mock_client.post.return_value = mock_response
@@ -83,6 +84,7 @@ def _mock_error_proxy():
     mock_response = MagicMock()
     mock_response.status_code = 500
     mock_response.json.return_value = {"error": "internal server error"}
+    mock_response.headers = {}
 
     mock_client = AsyncMock()
     mock_client.post.return_value = mock_response
@@ -160,6 +162,7 @@ class TestLevel1DigitalStamp:
         mock_response.status_code = 200
         mock_response.json.side_effect = Exception("not JSON")
         mock_response.text = "<html>Hello</html>"
+        mock_response.headers = {}
 
         mock_client = AsyncMock()
         mock_client.post.return_value = mock_response

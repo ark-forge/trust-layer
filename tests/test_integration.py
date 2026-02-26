@@ -34,6 +34,7 @@ def _mock_proxy_deps():
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.json.return_value = {"scanned": True, "frameworks": ["pytorch"]}
+    mock_response.headers = {}
 
     mock_http = AsyncMock()
     mock_http.post.return_value = mock_response
@@ -220,6 +221,59 @@ def test_usage_with_key(client, api_key):
     assert "daily" in data
     assert "used" in data["daily"]
     assert "remaining" in data["daily"]
+
+
+# --- Pubkey ---
+
+def test_pubkey_returns_valid_key(client):
+    r = client.get("/v1/pubkey")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["algorithm"] == "Ed25519"
+    assert data["pubkey"].startswith("ed25519:")
+    # 32 bytes -> 43 chars base64url
+    b64_part = data["pubkey"][len("ed25519:"):]
+    assert len(b64_part) == 43
+
+
+# --- Full flow with signature ---
+
+def test_proxy_full_flow_has_signature_and_spec(client, api_key):
+    """Full flow: proxy call produces proof with signature, spec_version, pubkey."""
+    mock_provider, mock_http = _mock_proxy_deps()
+    # Add Date header to mock upstream response
+    mock_http.post.return_value.headers = {"Date": "Thu, 26 Feb 2026 17:00:00 GMT"}
+
+    with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
+         patch("httpx.AsyncClient", return_value=mock_http), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+
+        r = client.post(
+            "/v1/proxy",
+            json={"target": "https://example.com/api", "amount": 0.50, "payload": {}},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+
+    assert r.status_code == 200
+    proof = r.json()["proof"]
+    assert proof["spec_version"] == "1.0"
+    assert proof["arkforge_signature"].startswith("ed25519:")
+    assert proof["arkforge_pubkey"].startswith("ed25519:")
+    assert proof["upstream_timestamp"] == "Thu, 26 Feb 2026 17:00:00 GMT"
+
+    # Verify signature externally
+    from trust_layer.crypto import verify_proof_signature
+    chain_hash = proof["hashes"]["chain"].replace("sha256:", "")
+    assert verify_proof_signature(proof["arkforge_pubkey"], chain_hash, proof["arkforge_signature"])
+
+    # Verify proof via GET endpoint includes new fields
+    proof_id = proof["proof_id"]
+    r2 = client.get(f"/v1/proof/{proof_id}")
+    assert r2.status_code == 200
+    public = r2.json()
+    assert public["spec_version"] == "1.0"
+    assert public["arkforge_signature"].startswith("ed25519:")
+    assert public["upstream_timestamp"] == "Thu, 26 Feb 2026 17:00:00 GMT"
 
 
 # --- Webhook ---

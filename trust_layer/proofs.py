@@ -38,6 +38,7 @@ def generate_proof(
     seller: str = "",
     agent_identity: Optional[str] = None,
     agent_version: Optional[str] = None,
+    upstream_timestamp: Optional[str] = None,
 ) -> dict:
     """Generate a proof with request/response/chain hashes + party identities."""
     request_hash = sha256_hex(canonical_json(request_data))
@@ -46,9 +47,12 @@ def generate_proof(
     # Chain hash does NOT include identity — identity is metadata, not integrity
     payment_intent_id = payment_data.get("transaction_id", "")
     chain_input = request_hash + response_hash + payment_intent_id + timestamp + buyer_fingerprint + seller
+    if upstream_timestamp:
+        chain_input += upstream_timestamp
     chain_hash = sha256_hex(chain_input)
 
-    return {
+    result = {
+        "spec_version": "1.0",
         "hashes": {
             "request": f"sha256:{request_hash}",
             "response": f"sha256:{response_hash}",
@@ -66,6 +70,9 @@ def generate_proof(
         "_raw_response_hash": response_hash,
         "_raw_chain_hash": chain_hash,
     }
+    if upstream_timestamp:
+        result["upstream_timestamp"] = upstream_timestamp
+    return result
 
 
 def store_proof(proof_id: str, proof_data: dict) -> Path:
@@ -84,7 +91,11 @@ def load_proof(proof_id: str) -> Optional[dict]:
 
 
 def verify_proof_integrity(proof: dict) -> bool:
-    """Recalculate chain hash and compare — public verification."""
+    """Recalculate chain hash and compare — public verification.
+
+    Backward compatible: if upstream_timestamp is present and non-null,
+    include it in the chain hash. Otherwise use the original formula.
+    """
     hashes = proof.get("hashes", {})
     payment = proof.get("payment", {})
     parties = proof.get("parties", {})
@@ -98,6 +109,11 @@ def verify_proof_integrity(proof: dict) -> bool:
     buyer_fingerprint = parties.get("buyer_fingerprint", "")
     seller = parties.get("seller", "")
     chain_input = request_hash + response_hash + payment_intent_id + timestamp + buyer_fingerprint + seller
+
+    upstream_timestamp = proof.get("upstream_timestamp")
+    if upstream_timestamp:
+        chain_input += upstream_timestamp
+
     computed_chain = sha256_hex(chain_input)
 
     return computed_chain == expected_chain
@@ -105,8 +121,9 @@ def verify_proof_integrity(proof: dict) -> bool:
 
 def get_public_proof(proof: dict) -> dict:
     """Return proof data safe for public access (no raw request/response content)."""
-    return {
+    result = {
         "proof_id": proof.get("proof_id"),
+        "spec_version": proof.get("spec_version"),
         "hashes": proof.get("hashes"),
         "parties": proof.get("parties"),
         "payment": {
@@ -116,7 +133,11 @@ def get_public_proof(proof: dict) -> dict:
         "timestamp_authority": proof.get("timestamp_authority"),
         "archive_org": proof.get("archive_org"),
         "timestamp": proof.get("timestamp"),
+        "upstream_timestamp": proof.get("upstream_timestamp"),
         "verification_algorithm": proof.get("verification_algorithm"),
+        "arkforge_signature": proof.get("arkforge_signature"),
+        "arkforge_pubkey": proof.get("arkforge_pubkey"),
         "identity_consistent": proof.get("identity_consistent"),
         "views_count": proof.get("views_count", 0),
     }
+    return result

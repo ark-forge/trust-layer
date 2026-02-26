@@ -8,3 +8,6 @@ __pycache__/
 dist/
 build/
 .pytest_cache/
+
+# Signing keys
+.signing_key.pem
