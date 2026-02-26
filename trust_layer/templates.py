@@ -119,11 +119,12 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
 .trust-point{{display:flex;align-items:flex-start;gap:0.75rem;padding:0.6rem 0}}
 .trust-point .dot{{flex-shrink:0;width:8px;height:8px;border-radius:50%;margin-top:6px}}
 .trust-point p{{color:#cbd5e1;font-size:0.875rem;line-height:1.4}}
-.witness{{display:flex;align-items:center;gap:0.6rem;padding:0.5rem 0;border-bottom:1px solid #334155}}
+.witness{{display:flex;align-items:center;gap:0.6rem;padding:0.5rem 0;border-bottom:1px solid #334155;flex-wrap:wrap}}
 .witness:last-child{{border-bottom:none}}
 .witness .dot{{flex-shrink:0;width:8px;height:8px;border-radius:50%}}
-.witness .name{{color:#f1f5f9;font-size:0.875rem;font-weight:500;min-width:100px}}
+.witness .name{{color:#f1f5f9;font-size:0.875rem;font-weight:500}}
 .witness .desc{{color:#94a3b8;font-size:0.85rem}}
+@media(max-width:480px){{.witness .desc{{width:100%;padding-left:20px}}.tech-val{{font-size:0.65rem}}}}
 details{{background:#1e293b;border-radius:0.75rem;margin-bottom:1rem}}
 summary{{padding:1rem 1.5rem;cursor:pointer;color:#64748b;font-size:0.85rem;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;list-style:none}}
 summary::-webkit-details-marker{{display:none}}

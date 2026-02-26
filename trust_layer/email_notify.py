@@ -45,7 +45,7 @@ Your API key: {api_key}
 
 Quick start — pay any API with one curl:
 
-  curl -X POST https://trust.arkforge.fr/v1/proxy \\
+  curl -X POST https://arkforge.fr/trust/v1/proxy \\
     -H "Authorization: Bearer {api_key}" \\
     -H "Content-Type: application/json" \\
     -d '{{"target": "https://any-api.com/endpoint",
@@ -57,9 +57,9 @@ How it works:
   2. ArkForge charges your card, forwards the payload to the target
   3. You get back the response + a cryptographic proof
 
-Verify any proof: https://trust.arkforge.fr/v1/proof/<proof_id>
+Verify any proof: https://arkforge.fr/trust/v1/proof/<proof_id>
 
-Docs: https://trust.arkforge.fr
+Docs: https://arkforge.fr/trust
 Support: contact@arkforge.fr
 """
     try:
@@ -108,7 +108,7 @@ VERIFY
 {'=' * 50}
 This is an automated proof of an agent-to-agent transaction.
 Anyone can verify this proof independently at the URL above.
-Service: ArkForge Trust Layer (https://trust.arkforge.fr)
+Service: ArkForge Trust Layer (https://arkforge.fr/trust)
 """
     try:
         _send_email(email, subject, body)
