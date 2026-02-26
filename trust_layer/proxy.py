@@ -433,7 +433,7 @@ async def execute_proxy(
     proof_record = {
         "proof_id": proof_id,
         "verification_url": verification_url,
-        "verification_algorithm": f"{TRUST_LAYER_BASE_URL}/docs/verification",
+        "verification_algorithm": "https://github.com/ark-forge/proof-spec/blob/main/SPEC.md#2-chain-hash-algorithm",
         "hashes": proof["hashes"],
         "parties": proof["parties"],
         "payment": payment_data,
