@@ -1,5 +1,6 @@
 """FastAPI app — all routes for the Trust Layer."""
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -156,20 +157,23 @@ async def get_proof(proof_id: str, request: Request):
     if not proof:
         return _error_response("not_found", f"Proof '{proof_id}' not found", 404)
 
-    # Lazy OTS upgrade: try to confirm pending timestamps on each read
+    # Lazy OTS upgrade: fire-and-forget background attempt (non-blocking)
     ots_status = proof.get("opentimestamps", {}).get("status", "")
     if ots_status == "pending":
         ots_path = PROOFS_DIR / f"{proof_id}.ots"
         if ots_path.exists():
-            try:
-                upgraded = upgrade_pending(ots_path.read_bytes())
-                if upgraded:
-                    ots_path.write_bytes(upgraded)
-                    proof["opentimestamps"]["status"] = "verified"
-                    store_proof(proof_id, proof)
-                    logger.info("OTS upgraded to verified: %s", proof_id)
-            except Exception as e:
-                logger.debug("OTS upgrade attempt for %s: %s", proof_id, e)
+            async def _try_upgrade(pid, p, opath):
+                try:
+                    loop = asyncio.get_running_loop()
+                    upgraded = await loop.run_in_executor(None, upgrade_pending, opath.read_bytes())
+                    if upgraded:
+                        opath.write_bytes(upgraded)
+                        p["opentimestamps"]["status"] = "verified"
+                        store_proof(pid, p)
+                        logger.info("OTS upgraded to verified: %s", pid)
+                except Exception as e:
+                    logger.debug("OTS upgrade attempt for %s: %s", pid, e)
+            asyncio.create_task(_try_upgrade(proof_id, proof, ots_path))
 
     public = get_public_proof(proof)
     integrity_verified = verify_proof_integrity(proof)
