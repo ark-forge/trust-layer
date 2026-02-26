@@ -1,7 +1,7 @@
 """Per-API-key rate limiting — daily counter + monthly free tier."""
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from .config import RATE_LIMITS_FILE, RATE_LIMIT_PER_KEY_PER_DAY, FREE_TIER_MONTHLY_LIMIT
 from .keys import is_free_key, get_key_plan
@@ -92,3 +92,36 @@ def get_usage(api_key: str, limit: int = RATE_LIMIT_PER_KEY_PER_DAY) -> dict:
         }
 
     return result
+
+
+def check_quota_alerts(limit: int = RATE_LIMIT_PER_KEY_PER_DAY) -> list[dict]:
+    """Check all keys for >80% daily quota usage. Returns list of alerts."""
+    limits = load_json(RATE_LIMITS_FILE, {})
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    alerts = []
+    for key_id, entry in limits.items():
+        if entry.get("date") != today:
+            continue
+        used = entry.get("count", 0)
+        if used >= limit * 0.8:
+            alerts.append({
+                "key_prefix": key_id,
+                "used": used,
+                "limit": limit,
+                "pct": round(used / limit * 100, 1),
+            })
+            logger.info("API key %s at %d%% of daily quota (%d/%d)", key_id, round(used / limit * 100), used, limit)
+    return alerts
+
+
+def rotate_stale_entries(max_age_days: int = 30):
+    """Purge rate limit entries older than max_age_days."""
+    limits = load_json(RATE_LIMITS_FILE, {})
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).strftime("%Y-%m-%d")
+    before = len(limits)
+    limits = {k: v for k, v in limits.items() if v.get("date", "9999") >= cutoff}
+    after = len(limits)
+    if before != after:
+        save_json(RATE_LIMITS_FILE, limits)
+        logger.info("Rate limits rotation: removed %d stale entries (>%d days)", before - after, max_age_days)
+    return before - after

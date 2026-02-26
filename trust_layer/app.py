@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse, Response, HTMLResponse, RedirectResp
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import __version__
+from collections import defaultdict
 from .config import (
     STRIPE_WEBHOOK_SECRET_LIVE,
     STRIPE_WEBHOOK_SECRET_TEST,
@@ -23,6 +24,7 @@ from .config import (
     MAX_AMOUNT,
     RATE_LIMIT_PER_KEY_PER_DAY,
     FREE_TIER_MONTHLY_LIMIT,
+    PROOF_ACCESS_LOG,
 )
 from .keys import validate_api_key, create_api_key, deactivate_key_by_ref, is_test_key
 from .proofs import load_proof, store_proof, get_public_proof, verify_proof_integrity
@@ -33,6 +35,37 @@ from .email_notify import send_welcome_email
 
 logger = logging.getLogger("trust_layer.app")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
+
+# --- Proof access tracking (in-memory for abuse detection, JSONL for persistence) ---
+_proof_access_counts: dict[str, list[float]] = defaultdict(list)  # IP -> list of timestamps
+_ABUSE_THRESHOLD = 100  # max requests per hour per IP
+
+
+def _log_proof_access(proof_id: str, ip: str, user_agent: str):
+    """Log proof access to JSONL and check for abuse."""
+    import time
+    now = time.time()
+    entry = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "proof_id": proof_id,
+        "ip": ip,
+        "ua": (user_agent or "")[:200],
+    }
+    try:
+        with open(PROOF_ACCESS_LOG, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:
+        pass
+
+    # Abuse detection: track per-IP access rate (sliding 1h window)
+    timestamps = _proof_access_counts[ip]
+    timestamps.append(now)
+    # Prune entries older than 1 hour
+    cutoff = now - 3600
+    _proof_access_counts[ip] = [t for t in timestamps if t > cutoff]
+    if len(_proof_access_counts[ip]) > _ABUSE_THRESHOLD:
+        logger.warning("ABUSE DETECTED: IP %s made %d proof requests in 1h", ip, len(_proof_access_counts[ip]))
+
 
 app = FastAPI(
     title="ArkForge Trust Layer",
@@ -152,9 +185,21 @@ async def get_proof(proof_id: str, request: Request):
     - Accept: text/html (without application/json) → HTML proof page
     - Otherwise → JSON (backward compat)
     """
+    # Log access for security monitoring
+    client_ip = request.client.host if request.client else "unknown"
+    user_agent = request.headers.get("user-agent", "")
+    _log_proof_access(proof_id, client_ip, user_agent)
+
     proof = load_proof(proof_id)
     if not proof:
         return _error_response("not_found", f"Proof '{proof_id}' not found", 404)
+
+    # Increment views_count in proof metadata
+    proof["views_count"] = proof.get("views_count", 0) + 1
+    try:
+        store_proof(proof_id, proof)
+    except Exception:
+        pass  # Don't fail the request if view tracking fails
 
     public = get_public_proof(proof)
     integrity_verified = verify_proof_integrity(proof)
@@ -317,6 +362,24 @@ async def stripe_webhook(request: Request):
             deactivate_key_by_ref(subscription_id)
 
     return {"received": True}
+
+
+# --- GET / (root) ---
+
+@app.get("/")
+async def root():
+    """Root endpoint — service info."""
+    return {
+        "service": "arkforge-trust-layer",
+        "version": __version__,
+        "docs": "https://github.com/ark-forge/trust-layer",
+        "endpoints": {
+            "proxy": "POST /v1/proxy",
+            "proof": "GET /v1/proof/{proof_id}",
+            "health": "GET /v1/health",
+            "pricing": "GET /v1/pricing",
+        },
+    }
 
 
 # --- GET /v1/health ---

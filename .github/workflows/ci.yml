@@ -23,3 +23,7 @@ jobs:
 
       - name: Run tests
         run: pytest tests/ -v
+
+      - name: Audit dependencies
+        run: pip audit
+        continue-on-error: true

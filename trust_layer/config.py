@@ -12,6 +12,8 @@ PROOFS_DIR.mkdir(exist_ok=True)
 
 API_KEYS_FILE = DATA_DIR / "api_keys.json"
 RATE_LIMITS_FILE = DATA_DIR / "rate_limits.json"
+BACKGROUND_TASKS_LOG = DATA_DIR / "background_tasks_log.jsonl"
+PROOF_ACCESS_LOG = DATA_DIR / "proof_access_log.jsonl"
 IDEMPOTENCY_DIR = DATA_DIR / "idempotency"
 AGENTS_DIR = DATA_DIR / "agents"
 SERVICES_DIR = DATA_DIR / "services"

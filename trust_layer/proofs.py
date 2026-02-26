@@ -118,4 +118,5 @@ def get_public_proof(proof: dict) -> dict:
         "timestamp": proof.get("timestamp"),
         "verification_algorithm": proof.get("verification_algorithm"),
         "identity_consistent": proof.get("identity_consistent"),
+        "views_count": proof.get("views_count", 0),
     }

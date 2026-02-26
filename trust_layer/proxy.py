@@ -22,6 +22,7 @@ from .config import (
     TRUST_LAYER_BASE_URL,
     AGENTS_DIR,
     SERVICES_DIR,
+    BACKGROUND_TASKS_LOG,
 )
 from .keys import validate_api_key
 from .payments import get_provider
@@ -33,6 +34,24 @@ from .timestamps import submit_hash
 from .email_notify import send_proof_email
 
 logger = logging.getLogger("trust_layer.proxy")
+
+
+def _log_background_task(proof_id: str, task: str, status: str, detail: str = ""):
+    """Append one line to background_tasks_log.jsonl for monitoring."""
+    import json
+    entry = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "proof_id": proof_id,
+        "task": task,
+        "status": status,
+    }
+    if detail:
+        entry["detail"] = detail[:200]
+    try:
+        with open(BACKGROUND_TASKS_LOG, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:
+        pass  # Never break proof flow for logging
 
 
 async def _submit_archive_org(proof_url: str, proof_id: str) -> Optional[dict]:
@@ -72,8 +91,12 @@ async def _post_proof_background(proof_id: str, proof_record: dict, chain_hash: 
             proof_record["timestamp_authority"]["status"] = "verified"
             store_proof(proof_id, proof_record)
             logger.info("TSA timestamp verified for %s", proof_id)
+            _log_background_task(proof_id, "tsa", "success")
+        else:
+            _log_background_task(proof_id, "tsa", "failure", "submit_hash returned None")
     except Exception as e:
         logger.warning("TSA submit skipped: %s", e)
+        _log_background_task(proof_id, "tsa", "failure", str(e))
 
     # Archive.org
     try:
@@ -82,16 +105,22 @@ async def _post_proof_background(proof_id: str, proof_record: dict, chain_hash: 
             proof_record["archive_org"] = result
             store_proof(proof_id, proof_record)
             logger.info("Archive.org snapshot saved for %s", proof_id)
+            _log_background_task(proof_id, "archive_org", "success")
+        else:
+            _log_background_task(proof_id, "archive_org", "failure", "no result returned")
     except Exception as e:
         logger.warning("Archive.org background task failed for %s: %s", proof_id, e)
+        _log_background_task(proof_id, "archive_org", "failure", str(e))
 
     # Email
     if email:
         try:
             await asyncio.get_running_loop().run_in_executor(
                 None, send_proof_email, email, proof_id, proof_record)
+            _log_background_task(proof_id, "email", "success")
         except Exception as e:
             logger.warning("Proof email skipped: %s", e)
+            _log_background_task(proof_id, "email", "failure", str(e))
 
 
 def _inject_digital_stamp(result: dict, proof_record: dict) -> None:
