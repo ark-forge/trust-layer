@@ -251,6 +251,23 @@ curl -X POST https://arkforge.fr/trust/v1/proxy \
 
 API keys starting with `mcp_test_` use Stripe test mode. Keys starting with `mcp_pro_` use Stripe live mode. The proxy auto-selects the right Stripe keys based on the API key prefix. Both modes work simultaneously — same endpoints, same proofs.
 
+## ArkForge ecosystem
+
+The Trust Layer is one piece of a complete agent-to-agent transaction cycle:
+
+```
+Agent Client  →  Trust Layer  →  Service (e.g. EU AI Act Scanner)
+   pays            certifies         delivers
+```
+
+| Component | Description | Repo |
+|-----------|-------------|------|
+| **Trust Layer** | Certifying proxy — billing, proof chain, verification | [ark-forge/trust-layer](https://github.com/ark-forge/trust-layer) |
+| **MCP EU AI Act** | Compliance scanner — the first service sold through ArkForge | [ark-forge/mcp-eu-ai-act](https://github.com/ark-forge/mcp-eu-ai-act) |
+| **Agent Client** | Autonomous buyer — proof-of-concept of a non-human customer | [ark-forge/arkforge-agent-client](https://github.com/ark-forge/arkforge-agent-client) |
+
+See a live proof: [example transaction](https://arkforge.fr/trust/v/prf_20260225_222329_d17acd)
+
 ## Live deployment
 
 Running at **https://arkforge.fr/trust/v1/health**
