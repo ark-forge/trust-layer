@@ -200,7 +200,7 @@ async def short_proof_url(proof_id: str):
     if not proof:
         return _error_response("not_found", f"Proof '{proof_id}' not found", 404)
     return RedirectResponse(
-        url=f"/v1/proof/{proof_id}",
+        url=f"{TRUST_LAYER_BASE_URL}/v1/proof/{proof_id}",
         status_code=302,
         headers={"Cache-Control": "public, max-age=86400"},
     )

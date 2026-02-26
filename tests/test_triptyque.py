@@ -392,7 +392,7 @@ class TestLevel3VisualStamp:
         pid = self._store_test_proof("prf_test_redirect")
         resp = client.get(f"/v/{pid}", follow_redirects=False)
         assert resp.status_code == 302
-        assert resp.headers["location"] == f"/v1/proof/{pid}"
+        assert f"/v1/proof/{pid}" in resp.headers["location"]
 
     def test_short_url_404(self, client):
         """GET /v/prf_nonexistent returns 404."""
