@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import ipaddress
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse
@@ -380,7 +381,7 @@ async def execute_proxy(
     service_status_code = None
 
     try:
-        fwd_headers = {"X-Internal-Secret": "tl_internal_9f4e2a"}
+        fwd_headers = {"X-Internal-Secret": os.environ.get("TRUST_LAYER_INTERNAL_SECRET", "")}
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_SECONDS) as client:
             if method == "GET":
                 resp = await client.get(target, params=payload, headers=fwd_headers)
