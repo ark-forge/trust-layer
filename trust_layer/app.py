@@ -202,22 +202,6 @@ async def get_proof_tsr(proof_id: str):
     )
 
 
-# --- GET /v1/proof/{proof_id}/ots --- (backward compat for old proofs)
-
-@app.get("/v1/proof/{proof_id}/ots")
-async def get_proof_ots(proof_id: str):
-    """Return raw .ots file for old proofs (backward compatibility)."""
-    ots_path = PROOFS_DIR / f"{proof_id}.ots"
-    if not ots_path.exists():
-        return _error_response("not_found", f"OTS file for '{proof_id}' not found", 404)
-
-    return Response(
-        content=ots_path.read_bytes(),
-        media_type="application/octet-stream",
-        headers={"Content-Disposition": f"attachment; filename={proof_id}.ots"},
-    )
-
-
 # --- POST /v1/keys/setup ---
 
 @app.post("/v1/keys/setup")

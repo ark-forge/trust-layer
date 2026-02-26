@@ -45,7 +45,7 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
     hashes = proof.get("hashes") or {}
     parties = proof.get("parties") or {}
     payment = proof.get("payment") or {}
-    ots = proof.get("timestamp_authority") or proof.get("opentimestamps") or {}
+    ots = proof.get("timestamp_authority") or {}
     archive_org = proof.get("archive_org") or {}
     identity_consistent = proof.get("identity_consistent")
     verification_url = _esc(proof.get("verification_url", ""))

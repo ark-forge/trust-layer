@@ -113,7 +113,7 @@ def get_public_proof(proof: dict) -> dict:
             k: v for k, v in proof.get("payment", {}).items()
             if k in ("transaction_id", "amount", "currency", "status", "receipt_url", "provider")
         },
-        "timestamp_authority": proof.get("timestamp_authority") or proof.get("opentimestamps"),
+        "timestamp_authority": proof.get("timestamp_authority"),
         "archive_org": proof.get("archive_org"),
         "timestamp": proof.get("timestamp"),
         "verification_algorithm": proof.get("verification_algorithm"),
