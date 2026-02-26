@@ -42,10 +42,10 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
     proof_id = _esc(proof.get("proof_id", ""))
     timestamp = proof.get("timestamp", "")
     human_date = _esc(_format_date(timestamp))
-    hashes = proof.get("hashes", {})
-    parties = proof.get("parties", {})
-    payment = proof.get("payment", {})
-    ots = proof.get("opentimestamps", {})
+    hashes = proof.get("hashes") or {}
+    parties = proof.get("parties") or {}
+    payment = proof.get("payment") or {}
+    ots = proof.get("timestamp_authority") or proof.get("opentimestamps") or {}
     archive_org = proof.get("archive_org") or {}
     identity_consistent = proof.get("identity_consistent")
     verification_url = _esc(proof.get("verification_url", ""))
@@ -76,13 +76,16 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
         verdict_border = "#22c55e"
         verdict_icon = "\u2705"
         verdict_text = "VERIFIED AUTONOMOUS TRANSACTION"
-        verdict_sub = "This action was executed and paid by a software agent. Cryptographically certified by ArkForge. Timestamp pending Bitcoin confirmation."
+        verdict_sub = "This action was executed and paid by a software agent. Cryptographically certified by ArkForge."
 
     # --- Witnesses ---
     stripe_witness = f'<a href="{receipt_url}" style="color:#38bdf8;text-decoration:none">Stripe</a>' if receipt_url else "Stripe"
 
     ots_color = "#22c55e" if ots_status == "verified" else "#f59e0b"
-    ots_label = "confirms date cannot be altered" if ots_status == "verified" else "timestamp pending confirmation"
+    if ots_status == "verified":
+        ots_label = "certified timestamp confirms date cannot be altered"
+    else:
+        ots_label = "timestamp not yet available"
 
     archive_snapshot_url = archive_org.get("snapshot_url", "")
     archive_has_snapshot = bool(archive_snapshot_url)
@@ -179,7 +182,7 @@ details[open] summary::before{{content:"\u25bc "}}
         </div>
         <div class="trust-point">
             <div class="dot" style="background:{ots_color}"></div>
-            <p>Timestamp anchored outside ArkForge infrastructure via OpenTimestamps</p>
+            <p>Timestamp anchored outside ArkForge infrastructure via RFC 3161 Timestamp Authority</p>
         </div>
     </div>
 
@@ -193,7 +196,7 @@ details[open] summary::before{{content:"\u25bc "}}
         </div>
         <div class="witness">
             <div class="dot" style="background:{ots_color}"></div>
-            <span class="name">Bitcoin</span>
+            <span class="name">RFC 3161 Timestamp</span>
             <span class="desc">\u2014 {_esc(ots_label)}</span>
         </div>
         <div class="witness">
@@ -222,7 +225,7 @@ details[open] summary::before{{content:"\u25bc "}}
             <div class="tech-row"><span class="tech-label">Buyer</span><span class="tech-val">{_esc(parties.get("buyer_fingerprint", ""))}</span></div>
             <div class="tech-row"><span class="tech-label">Seller</span><span class="tech-val">{seller}</span></div>
             <div class="tech-row"><span class="tech-label">Timestamp</span><span class="tech-val">{_esc(timestamp)}</span></div>
-            <div class="tech-row"><span class="tech-label">OTS status</span><span class="tech-val">{_esc(ots_status)}</span></div>
+            <div class="tech-row"><span class="tech-label">TSA status</span><span class="tech-val">{_esc(ots_status)}</span></div>
             <div class="tech-row"><span class="tech-label">Algorithm</span><span class="tech-val">SHA-256(request + response + payment_id + timestamp + buyer + seller)</span></div>
         </div>
     </details>

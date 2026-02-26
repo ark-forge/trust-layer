@@ -103,7 +103,7 @@ def test_get_public_proof_strips_sensitive():
             "raw": {"should_not_appear": True},
         },
         "timestamp": "2026-02-25T15:00:00Z",
-        "opentimestamps": {"status": "pending"},
+        "timestamp_authority": {"status": "verified", "provider": "freetsa.org"},
     }
     public = get_public_proof(proof)
     assert "raw" not in public.get("payment", {})

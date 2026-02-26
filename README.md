@@ -2,7 +2,7 @@
 
 Add verifiable execution to any API call.
 
-ArkForge is a certifying proxy that forwards requests to any HTTPS API, charges programmatically via Stripe, and returns a tamper-proof cryptographic proof (SHA-256 hash chain + optional Bitcoin timestamp).
+ArkForge is a certifying proxy that forwards requests to any HTTPS API, charges programmatically via Stripe, and returns a tamper-proof cryptographic proof (SHA-256 hash chain + RFC 3161 certified timestamp).
 
 Every call becomes: **metered** → **paid** → **provable**.
 
@@ -24,7 +24,7 @@ With ArkForge:      Agent → ArkForge → API → Verifiable Proof
 
 - **Proxy** — forwards requests to upstream APIs, meters usage, creates proof
 - **Payments** — Stripe off-session charges, test/live modes, webhook lifecycle
-- **Proofs** — SHA-256 hash chain per call, publicly verifiable, optionally anchored on Bitcoin via OpenTimestamps and archived on Archive.org
+- **Proofs** — SHA-256 hash chain per call, publicly verifiable, anchored via RFC 3161 Timestamp Authority and archived on Archive.org
 - **API keys** — `mcp_free_*` / `mcp_pro_*` / `mcp_test_*` prefixes auto-select plan and Stripe mode
 - **Free tier** — 100 proofs/month, no credit card required
 - **Agent identity** — optional `X-Agent-Identity` / `X-Agent-Version` headers, mismatch detection across calls
@@ -65,7 +65,7 @@ pytest tests/ -v
 | `GET` | `/v1/usage` | Usage stats for a key |
 | `GET` | `/v1/proof/{proof_id}` | Retrieve and verify proof (JSON or HTML — see content negotiation) |
 | `GET` | `/v/{proof_id}` | Short URL — 302 redirect to `/v1/proof/{proof_id}` |
-| `GET` | `/v1/proof/{proof_id}/ots` | Download OpenTimestamps file |
+| `GET` | `/v1/proof/{proof_id}/tsr` | Download RFC 3161 timestamp response file |
 
 ## Core flow — POST /v1/proxy
 
@@ -95,7 +95,7 @@ These are stored in the proof and shadow profile. If the same API key sends a di
 - `proof.parties.agent_identity` / `agent_version` — declared identity (if provided)
 - `proof.identity_consistent` — `true` / `false` / `null` (consistency check)
 - `proof.verification_url` — public URL to verify the proof
-- `proof.opentimestamps` — OTS status and download URL
+- `proof.timestamp_authority` — TSA status, provider, and download URL
 - `proof.archive_org` — Archive.org snapshot URL (if available)
 - `service_response` — upstream API response
 - `service_response.body._arkforge_attestation` — digital stamp (Level 1, see below)
@@ -142,13 +142,13 @@ Every proxy response includes 4 `X-ArkForge-*` headers (see table above). These 
 - `Accept: application/json` or no Accept header → JSON (backward compatible)
 
 Badge colors:
-- **Green** (`#22c55e`) — integrity verified, OTS confirmed on Bitcoin
-- **Orange** (`#f59e0b`) — integrity verified, OTS pending
+- **Green** (`#22c55e`) — integrity verified, certified timestamp via FreeTSA
+- **Orange** (`#f59e0b`) — integrity verified, timestamp pending
 - **Red** (`#ef4444`) — integrity check failed
 
 The proof page shows 3 independent witnesses:
 - **Stripe** — confirms payment occurred (green if receipt URL exists)
-- **Bitcoin** — confirms timestamp via OpenTimestamps (green when confirmed, orange when pending)
+- **RFC 3161 Timestamp** — certified by FreeTSA.org (green when verified, orange when pending)
 - **Archive.org** — public snapshot of the proof page on the Wayback Machine (green if snapshot exists, grey if not yet available)
 
 **Short URL:** `GET /v/{proof_id}` → 302 redirect to the full proof endpoint. Cacheable (24h).
@@ -206,7 +206,7 @@ Trust Layer (/v1/proxy)
     |--- 3. Forward request to upstream API
     |--- 4. Hash request + response (SHA-256 chain)
     |--- 5. Store proof, return response immediately
-    |--- 6. Background: OpenTimestamps + Archive.org snapshot + email receipt
+    |--- 6. Background: RFC 3161 timestamp + Archive.org snapshot + email receipt
     |
     v
 Upstream API (any HTTPS endpoint)

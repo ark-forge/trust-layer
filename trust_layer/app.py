@@ -1,6 +1,5 @@
 """FastAPI app — all routes for the Trust Layer."""
 
-import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -27,7 +26,6 @@ from .config import (
 )
 from .keys import validate_api_key, create_api_key, deactivate_key_by_ref, is_test_key
 from .proofs import load_proof, store_proof, get_public_proof, verify_proof_integrity
-from .timestamps import upgrade_pending
 from .proxy import execute_proxy, ProxyError
 from .templates import render_proof_page
 from .rate_limit import get_usage
@@ -158,24 +156,6 @@ async def get_proof(proof_id: str, request: Request):
     if not proof:
         return _error_response("not_found", f"Proof '{proof_id}' not found", 404)
 
-    # Lazy OTS upgrade: fire-and-forget background attempt (non-blocking)
-    ots_status = proof.get("opentimestamps", {}).get("status", "")
-    if ots_status == "pending":
-        ots_path = PROOFS_DIR / f"{proof_id}.ots"
-        if ots_path.exists():
-            async def _try_upgrade(pid, p, opath):
-                try:
-                    loop = asyncio.get_running_loop()
-                    upgraded = await loop.run_in_executor(None, upgrade_pending, opath.read_bytes())
-                    if upgraded:
-                        opath.write_bytes(upgraded)
-                        p["opentimestamps"]["status"] = "verified"
-                        store_proof(pid, p)
-                        logger.info("OTS upgraded to verified: %s", pid)
-                except Exception as e:
-                    logger.debug("OTS upgrade attempt for %s: %s", pid, e)
-            asyncio.create_task(_try_upgrade(proof_id, proof, ots_path))
-
     public = get_public_proof(proof)
     integrity_verified = verify_proof_integrity(proof)
     public["integrity_verified"] = integrity_verified
@@ -206,11 +186,27 @@ async def short_proof_url(proof_id: str):
     )
 
 
-# --- GET /v1/proof/{proof_id}/ots ---
+# --- GET /v1/proof/{proof_id}/tsr ---
+
+@app.get("/v1/proof/{proof_id}/tsr")
+async def get_proof_tsr(proof_id: str):
+    """Return raw .tsr file (RFC 3161 timestamp response) for independent verification."""
+    tsr_path = PROOFS_DIR / f"{proof_id}.tsr"
+    if not tsr_path.exists():
+        return _error_response("not_found", f"TSR file for '{proof_id}' not found", 404)
+
+    return Response(
+        content=tsr_path.read_bytes(),
+        media_type="application/timestamp-reply",
+        headers={"Content-Disposition": f"attachment; filename={proof_id}.tsr"},
+    )
+
+
+# --- GET /v1/proof/{proof_id}/ots --- (backward compat for old proofs)
 
 @app.get("/v1/proof/{proof_id}/ots")
 async def get_proof_ots(proof_id: str):
-    """Return raw .ots file for independent verification."""
+    """Return raw .ots file for old proofs (backward compatibility)."""
     ots_path = PROOFS_DIR / f"{proof_id}.ots"
     if not ots_path.exists():
         return _error_response("not_found", f"OTS file for '{proof_id}' not found", 404)

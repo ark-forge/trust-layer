@@ -17,8 +17,5 @@ setup(
             "pytest>=7.0.0",
             "pytest-asyncio>=0.23.0",
         ],
-        "ots": [
-            "opentimestamps-client",
-        ],
     },
 )

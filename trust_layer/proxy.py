@@ -61,16 +61,19 @@ async def _submit_archive_org(proof_url: str, proof_id: str) -> Optional[dict]:
 
 async def _post_proof_background(proof_id: str, proof_record: dict, chain_hash: str,
                                   verification_url: str, email: str):
-    """Background task: OTS + Archive.org + email — none of these block the client response."""
-    # OTS (sync but run in thread to avoid blocking event loop)
+    """Background task: TSA + Archive.org + email — none of these block the client response."""
+    # RFC 3161 Timestamp (sync but run in thread to avoid blocking event loop)
     try:
         loop = asyncio.get_running_loop()
-        ots_bytes = await loop.run_in_executor(None, submit_hash, chain_hash)
-        if ots_bytes:
+        tsr_bytes = await loop.run_in_executor(None, submit_hash, chain_hash)
+        if tsr_bytes:
             from .config import PROOFS_DIR
-            (PROOFS_DIR / f"{proof_id}.ots").write_bytes(ots_bytes)
+            (PROOFS_DIR / f"{proof_id}.tsr").write_bytes(tsr_bytes)
+            proof_record["timestamp_authority"]["status"] = "verified"
+            store_proof(proof_id, proof_record)
+            logger.info("TSA timestamp verified for %s", proof_id)
     except Exception as e:
-        logger.warning("OTS submit skipped: %s", e)
+        logger.warning("TSA submit skipped: %s", e)
 
     # Archive.org
     try:
@@ -435,7 +438,7 @@ async def execute_proxy(
         "parties": proof["parties"],
         "payment": payment_data,
         "timestamp": timestamp,
-        "opentimestamps": {"status": "pending", "ots_url": f"{TRUST_LAYER_BASE_URL}/v1/proof/{proof_id}/ots"},
+        "timestamp_authority": {"status": "submitted", "provider": "freetsa.org", "tsr_url": f"{TRUST_LAYER_BASE_URL}/v1/proof/{proof_id}/tsr"},
         "identity_consistent": identity_consistent,
     }
 

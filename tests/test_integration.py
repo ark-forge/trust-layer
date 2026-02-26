@@ -201,8 +201,8 @@ def test_proof_verification_after_proxy(client, api_key):
 
 # --- OTS ---
 
-def test_ots_not_found(client):
-    r = client.get("/v1/proof/prf_nonexistent/ots")
+def test_tsr_not_found(client):
+    r = client.get("/v1/proof/prf_nonexistent/tsr")
     assert r.status_code == 404
 
 

@@ -37,7 +37,7 @@ def _make_proof_record(proof_id="prf_20260225_120000_abc123"):
             "receipt_url": "https://pay.stripe.com/receipts/test",
         },
         "timestamp": "2026-02-25T12:00:00Z",
-        "opentimestamps": {"status": "pending", "ots_url": f"https://test.arkforge.fr/v1/proof/{proof_id}/ots"},
+        "timestamp_authority": {"status": "submitted", "provider": "freetsa.org", "tsr_url": f"https://test.arkforge.fr/v1/proof/{proof_id}/tsr"},
         "identity_consistent": None,
     }
 
@@ -357,8 +357,8 @@ class TestLevel3VisualStamp:
         """Badge is green (#22c55e) on verified proof with OTS verified."""
         pid = "prf_test_green"
         proof = _make_proof_record(pid)
-        # Make OTS verified and set real hashes for integrity to pass
-        proof["opentimestamps"]["status"] = "verified"
+        # Make TSA verified and set real hashes for integrity to pass
+        proof["timestamp_authority"]["status"] = "verified"
         # We need integrity to pass — store raw data so verify_proof_integrity works
         from trust_layer.proofs import sha256_hex, canonical_json
         req_data = {"target": "https://example.com", "method": "POST", "payload": {}, "amount": 0.5, "currency": "eur"}
