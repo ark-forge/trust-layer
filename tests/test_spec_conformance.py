@@ -109,6 +109,8 @@ def test_chain_hash(vector):
         + buyer_fingerprint
         + inp["seller"]
     )
+    if inp.get("upstream_timestamp"):
+        chain_input += inp["upstream_timestamp"]
     chain_hash = sha256_hex(chain_input)
 
     assert chain_hash == expected["chain_hash"], f"Chain hash mismatch for {vector['name']}"

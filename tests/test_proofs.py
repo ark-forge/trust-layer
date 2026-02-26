@@ -114,12 +114,12 @@ def test_get_public_proof_strips_sensitive():
 # --- New tests for spec_version, upstream_timestamp, signature fields ---
 
 def test_generate_proof_includes_spec_version():
-    """spec_version: '1.0' must be present in every proof."""
+    """spec_version must be present in every proof."""
     proof = generate_proof(
         {"target": "https://example.com"}, {"result": "ok"},
         {"transaction_id": "pi_spec"}, "2026-02-26T10:00:00Z",
     )
-    assert proof.get("spec_version") == "1.0"
+    assert proof.get("spec_version") == "1.1"
 
 
 def test_chain_hash_without_upstream_timestamp():

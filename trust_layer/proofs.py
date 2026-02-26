@@ -52,7 +52,7 @@ def generate_proof(
     chain_hash = sha256_hex(chain_input)
 
     result = {
-        "spec_version": "1.0",
+        "spec_version": "1.1",
         "hashes": {
             "request": f"sha256:{request_hash}",
             "response": f"sha256:{response_hash}",
