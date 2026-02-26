@@ -25,11 +25,13 @@ With ArkForge:      Agent → ArkForge → API → Verifiable Proof
 - **Proxy** — forwards requests to upstream APIs, meters usage, creates proof
 - **Payments** — Stripe off-session charges, test/live modes, webhook lifecycle
 - **Proofs** — SHA-256 hash chain per call, publicly verifiable, optionally anchored on Bitcoin via OpenTimestamps and archived on Archive.org
-- **API keys** — `mcp_test_*` / `mcp_pro_*` prefixes auto-select Stripe mode
+- **API keys** — `mcp_free_*` / `mcp_pro_*` / `mcp_test_*` prefixes auto-select plan and Stripe mode
+- **Free tier** — 100 proofs/month, no credit card required
 - **Agent identity** — optional `X-Agent-Identity` / `X-Agent-Version` headers, mismatch detection across calls
 - **Triptyque de la Preuve** — 3-level watermarking on every transaction (see below)
-- **Rate limiting** — per-key daily limits
+- **Rate limiting** — daily cap (all keys) + monthly cap (free keys)
 - **Email** — welcome + proof receipts via SMTP
+- **Proof Specification** — open spec with test vectors for independent verification ([ark-forge/proof-spec](https://github.com/ark-forge/proof-spec))
 
 ## Quick start
 
@@ -229,7 +231,7 @@ For test mode, add `"mode": "test"` and use Stripe test card `4242 4242 4242 424
 
 ### 2. Receive API key
 
-Stripe webhook fires automatically. The Trust Layer creates an API key (`mcp_pro_...` or `mcp_test_...`) and emails it to the client.
+Stripe webhook fires automatically. The Trust Layer creates an API key (`mcp_pro_...`) and emails it to the client. Free keys (`mcp_free_...`) are created without payment.
 
 ### 3. Use the proxy
 
@@ -247,9 +249,25 @@ curl -X POST https://arkforge.fr/trust/v1/proxy \
   }'
 ```
 
-## Test / Live modes
+## Plans and API key prefixes
 
-API keys starting with `mcp_test_` use Stripe test mode. Keys starting with `mcp_pro_` use Stripe live mode. The proxy auto-selects the right Stripe keys based on the API key prefix. Both modes work simultaneously — same endpoints, same proofs.
+| Prefix | Plan | Stripe mode | Limits |
+|--------|------|-------------|--------|
+| `mcp_free_*` | Free | Live | 100 proofs/month |
+| `mcp_pro_*` | Pro | Live | 100 proofs/day |
+| `mcp_test_*` | Test | Test | 100 proofs/day |
+
+The proxy auto-selects the right Stripe keys and rate limits based on the API key prefix. All modes work simultaneously — same endpoints, same proofs. Test mode uses Stripe test keys (card `4242 4242 4242 4242`).
+
+## Conformance testing
+
+The chain hash algorithm and proof structure are defined in the [ArkForge Proof Specification](https://github.com/ark-forge/proof-spec). The Trust Layer includes conformance tests that validate against the spec's test vectors:
+
+```bash
+pytest tests/test_spec_conformance.py -v
+```
+
+If a test fails, either the spec or the implementation has drifted. This ensures any third-party verifier produces identical results.
 
 ## ArkForge ecosystem
 
@@ -264,6 +282,7 @@ Agent Client  →  Trust Layer  →  Service (e.g. EU AI Act Scanner)
 |-----------|-------------|------|
 | **Trust Layer** | Certifying proxy — billing, proof chain, verification | [ark-forge/trust-layer](https://github.com/ark-forge/trust-layer) |
 | **MCP EU AI Act** | Compliance scanner — the first service sold through ArkForge | [ark-forge/mcp-eu-ai-act](https://github.com/ark-forge/mcp-eu-ai-act) |
+| **Proof Spec** | Open specification + test vectors for the proof format | [ark-forge/proof-spec](https://github.com/ark-forge/proof-spec) |
 | **Agent Client** | Autonomous buyer — proof-of-concept of a non-human customer | [ark-forge/arkforge-agent-client](https://github.com/ark-forge/arkforge-agent-client) |
 
 See a live proof: [example transaction](https://arkforge.fr/trust/v/prf_20260225_222329_d17acd)

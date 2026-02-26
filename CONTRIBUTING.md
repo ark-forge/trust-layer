@@ -28,19 +28,28 @@ pip install -e ".[test]"
 pytest tests/ -v
 ```
 
+Conformance tests against the [Proof Specification](https://github.com/ark-forge/proof-spec) run as part of the suite. If you modify the chain hash algorithm or proof structure, update the spec and test vectors first.
+
+### Code Style
+
+- Python 3.10+, type hints where helpful
+- No linter enforced yet — match existing style
+- Keep functions short, no deep nesting
+- No comments unless the logic is non-obvious
+
+### Security
+
+If you discover a security vulnerability, **do not open a public issue**. Email [contact@arkforge.fr](mailto:contact@arkforge.fr) with details.
+
 ### Releases
 
 Releases follow [semver](https://semver.org/). To create a release:
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.3.0
+git push origin v0.3.0
 ```
 
 This triggers the release workflow which:
 1. Runs the full test suite (gate)
 2. Creates a GitHub Release with auto-generated changelog
-
-### Branch Protection
-
-Branch protection rules on `main` will be enforced once the repository is public (GitHub Free limitation). Until then, these conventions apply by agreement.
