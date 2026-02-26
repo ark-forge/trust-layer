@@ -23,6 +23,7 @@ from .config import (
     MIN_AMOUNT,
     MAX_AMOUNT,
     RATE_LIMIT_PER_KEY_PER_DAY,
+    FREE_TIER_MONTHLY_LIMIT,
 )
 from .keys import validate_api_key, create_api_key, deactivate_key_by_ref, is_test_key
 from .proofs import load_proof, store_proof, get_public_proof, verify_proof_integrity
@@ -369,18 +370,26 @@ async def usage(
 @app.get("/v1/pricing")
 async def pricing():
     return {
+        "plans": {
+            "free": {
+                "price": "0 EUR/month",
+                "limit": f"{FREE_TIER_MONTHLY_LIMIT} proofs/month",
+                "proofs": "public",
+                "setup": f"{TRUST_LAYER_BASE_URL}/v1/keys/setup",
+            },
+            "pro": {
+                "price": "pay-per-proof",
+                "limit": f"{RATE_LIMIT_PER_KEY_PER_DAY} proofs/day",
+                "proofs": "public",
+                "setup": f"{TRUST_LAYER_BASE_URL}/v1/keys/setup",
+            },
+        },
         "proxy": {
-            "description": "Pay any HTTPS API via proxy",
+            "description": "Pay any HTTPS API via proxy — charge, forward, prove",
             "min_amount": MIN_AMOUNT,
             "max_amount": MAX_AMOUNT,
             "currencies": SUPPORTED_CURRENCIES,
-            "rate_limit": f"{RATE_LIMIT_PER_KEY_PER_DAY} calls/day per API key",
             "fee": "0% — you pay only the amount you specify",
-        },
-        "setup": {
-            "description": "Save a card to get an API key",
-            "url": f"{TRUST_LAYER_BASE_URL}/v1/keys/setup",
-            "cost": "Free — no charge until you use the proxy",
         },
         "contact": "contact@arkforge.fr",
     }

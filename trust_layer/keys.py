@@ -19,9 +19,17 @@ def save_api_keys(keys: dict):
     save_json(API_KEYS_FILE, keys)
 
 
-def generate_api_key(test_mode: bool = False) -> str:
-    """Generate a new API key with appropriate prefix."""
-    prefix = "mcp_test_" if test_mode else "mcp_pro_"
+def generate_api_key(test_mode: bool = False, plan: str = "pro") -> str:
+    """Generate a new API key with appropriate prefix.
+
+    Plans: 'free' (100 proofs/month, public), 'pro' (unlimited).
+    """
+    if plan == "free":
+        prefix = "mcp_free_"
+    elif test_mode:
+        prefix = "mcp_test_"
+    else:
+        prefix = "mcp_pro_"
     return f"{prefix}{secrets.token_hex(24)}"
 
 
@@ -34,12 +42,14 @@ def validate_api_key(key: str) -> Optional[dict]:
     return None
 
 
-def create_api_key(stripe_customer_id: str, ref_id: str, email: str = "", test_mode: bool = False) -> str:
+def create_api_key(stripe_customer_id: str, ref_id: str, email: str = "",
+                   test_mode: bool = False, plan: str = "pro") -> str:
     """Create and persist a new API key."""
     keys = load_api_keys()
-    key = generate_api_key(test_mode=test_mode)
+    key = generate_api_key(test_mode=test_mode, plan=plan)
     keys[key] = {
         "active": True,
+        "plan": plan,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "stripe_customer_id": stripe_customer_id,
         "stripe_ref_id": ref_id,
@@ -47,7 +57,7 @@ def create_api_key(stripe_customer_id: str, ref_id: str, email: str = "", test_m
         "transactions_total": 0,
     }
     save_api_keys(keys)
-    logger.info("API key created for customer %s", stripe_customer_id)
+    logger.info("API key created for customer %s (plan=%s)", stripe_customer_id, plan)
     return key
 
 
@@ -74,3 +84,17 @@ def find_key_by_ref(ref_id: str) -> Optional[str]:
 def is_test_key(api_key: str) -> bool:
     """Check if an API key is a test mode key."""
     return api_key.startswith("mcp_test_")
+
+
+def is_free_key(api_key: str) -> bool:
+    """Check if an API key is a free tier key."""
+    return api_key.startswith("mcp_free_")
+
+
+def get_key_plan(api_key: str) -> str:
+    """Return the plan for an API key ('free', 'pro', or 'test')."""
+    if api_key.startswith("mcp_free_"):
+        return "free"
+    if api_key.startswith("mcp_test_"):
+        return "test"
+    return "pro"

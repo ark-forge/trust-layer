@@ -217,8 +217,9 @@ def test_usage_with_key(client, api_key):
     r = client.get("/v1/usage", headers={"Authorization": f"Bearer {api_key}"})
     assert r.status_code == 200
     data = r.json()
-    assert "used" in data
-    assert "remaining" in data
+    assert "daily" in data
+    assert "used" in data["daily"]
+    assert "remaining" in data["daily"]
 
 
 # --- Webhook ---
