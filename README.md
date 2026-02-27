@@ -2,9 +2,9 @@
 
 Add verifiable execution to any API call.
 
-ArkForge is a certifying proxy that forwards requests to any HTTPS API, charges programmatically via Stripe, and returns a tamper-proof cryptographic proof (SHA-256 hash chain + RFC 3161 certified timestamp).
+ArkForge is a certifying proxy that forwards requests to any HTTPS API and returns a tamper-proof cryptographic proof (SHA-256 hash chain + Ed25519 signature + RFC 3161 certified timestamp). The Pro plan adds Stripe payment as a 4th independent witness.
 
-Every call becomes: **metered** → **paid** → **provable**.
+Every call becomes: **forwarded** → **proven** → **verifiable**.
 
 ## One-line example
 
@@ -152,10 +152,13 @@ Badge colors:
 - **Orange** (`#f59e0b`) — integrity verified, timestamp pending
 - **Red** (`#ef4444`) — integrity check failed
 
-The proof page shows 3 independent witnesses:
-- **Stripe** — confirms payment occurred (green if receipt URL exists)
+The proof page shows up to 4 independent witnesses:
+- **Stripe** — confirms payment occurred (Pro plan only; greyed out on Free tier)
+- **Ed25519 Signature** — proves ArkForge origin (green if signed, grey if not)
 - **RFC 3161 Timestamp** — certified by FreeTSA.org (green when verified, orange when pending)
 - **Archive.org** — public snapshot of the proof page on the Wayback Machine (green if snapshot exists, grey if not yet available)
+
+Free tier proofs have 3 witnesses (Ed25519, RFC 3161, Archive.org). Pro proofs add Stripe as a 4th witness.
 
 **Short URL:** `GET /v/{proof_id}` → 302 redirect to the full proof endpoint. Cacheable (24h).
 
@@ -170,7 +173,7 @@ chain_hash = SHA256(request_hash + response_hash + payment_intent_id + timestamp
 Where:
 - `request_hash` = SHA-256 of the canonical JSON request (sorted keys, no whitespace)
 - `response_hash` = SHA-256 of the canonical JSON response
-- `payment_intent_id` = Stripe Payment Intent ID (e.g. `pi_3T4ovu...`)
+- `payment_intent_id` = Stripe Payment Intent ID (e.g. `pi_3T4ovu...`) or `free_tier` for free plan proofs
 - `timestamp` = ISO 8601 UTC (e.g. `2026-02-25T20:43:45Z`)
 - `buyer_fingerprint` = SHA-256 of the API key
 - `seller` = target domain (e.g. `example.com`)
@@ -221,7 +224,7 @@ EXPECTED=$(echo -n "$PROOF" | jq -r '.hashes.chain' | sed 's/sha256://')
 [ "$COMPUTED" = "$EXPECTED" ] && echo "VERIFIED" || echo "TAMPERED"
 ```
 
-If the chain hash matches, no field in the proof was altered after creation. The Stripe Payment Intent ID can be independently verified on Stripe's dashboard or API.
+If the chain hash matches, no field in the proof was altered after creation. For Pro proofs, the Stripe Payment Intent ID can be independently verified on Stripe's dashboard or API. For Free proofs, the payment_intent_id is `free_tier`.
 
 To also verify the Ed25519 signature, use the public key from `GET /v1/pubkey` (or the value above) with any Ed25519 library. The signed message is the chain hash hex string.
 
@@ -282,13 +285,13 @@ curl -X POST https://arkforge.fr/trust/v1/proxy \
 
 ## Plans and API key prefixes
 
-| Prefix | Plan | Stripe mode | Limits |
-|--------|------|-------------|--------|
-| `mcp_free_*` | Free | Live | 100 proofs/month |
-| `mcp_pro_*` | Pro | Live | 100 proofs/day |
-| `mcp_test_*` | Test | Test | 100 proofs/day |
+| Prefix | Plan | Stripe | Witnesses | Limits |
+|--------|------|--------|-----------|--------|
+| `mcp_free_*` | Free | No charge | 3 (Ed25519, RFC 3161, Archive.org) | 100 proofs/month |
+| `mcp_pro_*` | Pro | Pay-per-proof | 4 (+ Stripe receipt) | 100 proofs/day |
+| `mcp_test_*` | Test | Test mode | 4 (+ Stripe test) | 100 proofs/day |
 
-The proxy auto-selects the right Stripe keys and rate limits based on the API key prefix. All modes work simultaneously — same endpoints, same proofs. Test mode uses Stripe test keys (card `4242 4242 4242 4242`).
+The proxy auto-selects the right Stripe keys, witnesses, and rate limits based on the API key prefix. Free tier skips Stripe entirely (no credit card required). Test mode uses Stripe test keys (card `4242 4242 4242 4242`).
 
 ## Conformance testing
 

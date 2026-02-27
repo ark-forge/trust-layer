@@ -83,7 +83,15 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
         verdict_sub = "This action was executed and paid by a software agent. Cryptographically certified by ArkForge."
 
     # --- Witnesses ---
-    stripe_witness = f'<a href="{receipt_url}" style="color:#38bdf8;text-decoration:none">Stripe</a>' if receipt_url else "Stripe"
+    is_free_tier = payment.get("provider") == "none" or payment.get("status") == "free_tier"
+    if is_free_tier:
+        stripe_color = "#475569"
+        stripe_witness = "Stripe"
+        stripe_desc = "not applicable (free tier)"
+    else:
+        stripe_color = "#22c55e"
+        stripe_witness = f'<a href="{receipt_url}" style="color:#38bdf8;text-decoration:none">Stripe</a>' if receipt_url else "Stripe"
+        stripe_desc = "confirms payment occurred"
 
     ots_color = "#22c55e" if ots_status == "verified" else "#f59e0b"
     if ots_status == "verified":
@@ -182,8 +190,8 @@ details[open] summary::before{{content:"\u25bc "}}
     <div class="card">
         <h2>Why this proof can be trusted</h2>
         <div class="trust-point">
-            <div class="dot" style="background:#22c55e"></div>
-            <p>Payment verified independently by Stripe</p>
+            <div class="dot" style="background:{stripe_color}"></div>
+            <p>{"Payment not required (free tier)" if is_free_tier else "Payment verified independently by Stripe"}</p>
         </div>
         <div class="trust-point">
             <div class="dot" style="background:#22c55e"></div>
@@ -203,9 +211,9 @@ details[open] summary::before{{content:"\u25bc "}}
     <div class="card">
         <h2>Independent verification sources</h2>
         <div class="witness">
-            <div class="dot" style="background:#22c55e"></div>
+            <div class="dot" style="background:{stripe_color}"></div>
             <span class="name">{stripe_witness}</span>
-            <span class="desc">\u2014 confirms payment occurred</span>
+            <span class="desc">\u2014 {stripe_desc}</span>
         </div>
         <div class="witness">
             <div class="dot" style="background:{ots_color}"></div>

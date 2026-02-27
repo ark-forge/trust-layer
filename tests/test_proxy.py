@@ -295,7 +295,7 @@ async def test_execute_proxy_has_arkforge_signature(test_api_key):
 
 @pytest.mark.asyncio
 async def test_execute_proxy_has_spec_version(test_api_key):
-    """Proof record should contain spec_version: '1.0'."""
+    """Proof record should contain spec_version: '1.1'."""
     mock_charge = ChargeResult(
         provider="stripe", transaction_id="pi_test_spec",
         amount=0.50, currency="eur", status="succeeded", receipt_url=None,
@@ -323,7 +323,7 @@ async def test_execute_proxy_has_spec_version(test_api_key):
             api_key=test_api_key,
         )
 
-    assert result["proof"]["spec_version"] == "1.0"
+    assert result["proof"]["spec_version"] == "1.1"
 
 
 @pytest.mark.asyncio

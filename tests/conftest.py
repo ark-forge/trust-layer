@@ -26,6 +26,8 @@ def _isolate_data(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "IDEMPOTENCY_DIR", tmp_path / "data" / "idempotency")
     monkeypatch.setattr(cfg, "AGENTS_DIR", tmp_path / "data" / "agents")
     monkeypatch.setattr(cfg, "SERVICES_DIR", tmp_path / "data" / "services")
+    monkeypatch.setattr(cfg, "BACKGROUND_TASKS_LOG", tmp_path / "data" / "background_tasks_log.jsonl")
+    monkeypatch.setattr(cfg, "PROOF_ACCESS_LOG", tmp_path / "data" / "proof_access_log.jsonl")
     monkeypatch.setattr(cfg, "TRUST_LAYER_BASE_URL", "https://test.arkforge.fr")
 
     for d in ["data", "proofs", "data/idempotency", "data/agents", "data/services"]:
@@ -53,10 +55,12 @@ def _isolate_data(tmp_path, monkeypatch):
     monkeypatch.setattr(proxy_mod, "SERVICES_DIR", tmp_path / "data" / "services")
     monkeypatch.setattr(proxy_mod, "TRUST_LAYER_BASE_URL", "https://test.arkforge.fr")
     monkeypatch.setattr(proxy_mod, "ARKFORGE_PUBLIC_KEY", test_pubkey)
+    monkeypatch.setattr(proxy_mod, "BACKGROUND_TASKS_LOG", tmp_path / "data" / "background_tasks_log.jsonl")
 
     import trust_layer.app as app_mod
     monkeypatch.setattr(app_mod, "TRUST_LAYER_BASE_URL", "https://test.arkforge.fr")
     monkeypatch.setattr(app_mod, "ARKFORGE_PUBLIC_KEY", test_pubkey)
+    monkeypatch.setattr(app_mod, "PROOF_ACCESS_LOG", tmp_path / "data" / "proof_access_log.jsonl")
 
 
 @pytest.fixture

@@ -1,7 +1,9 @@
 """FastAPI app — all routes for the Trust Layer."""
 
+import asyncio
 import json
 import logging
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -29,10 +31,11 @@ from .config import (
 )
 from .keys import validate_api_key, create_api_key, deactivate_key_by_ref, is_test_key
 from .proofs import load_proof, store_proof, get_public_proof, verify_proof_integrity
-from .proxy import execute_proxy, ProxyError
+from .proxy import execute_proxy, ProxyError, drain_background_tasks, _track_task, _log_background_task
 from .templates import render_proof_page
 from .rate_limit import get_usage
 from .email_notify import send_welcome_email
+from .timestamps import submit_hash
 
 logger = logging.getLogger("trust_layer.app")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
@@ -40,6 +43,41 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message
 # --- Proof access tracking (in-memory for abuse detection, JSONL for persistence) ---
 _proof_access_counts: dict[str, list[float]] = defaultdict(list)  # IP -> list of timestamps
 _ABUSE_THRESHOLD = 100  # max requests per hour per IP
+
+
+def _restore_abuse_counters():
+    """Restore sliding window abuse counters from JSONL log (last 1h entries)."""
+    import time
+    now = time.time()
+    cutoff = now - 3600
+    restored = 0
+    try:
+        with open(PROOF_ACCESS_LOG, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                ts_str = entry.get("ts", "")
+                ip = entry.get("ip", "")
+                if not ts_str or not ip:
+                    continue
+                try:
+                    entry_ts = datetime.fromisoformat(ts_str).timestamp()
+                except (ValueError, OSError):
+                    continue
+                if entry_ts > cutoff:
+                    _proof_access_counts[ip].append(entry_ts)
+                    restored += 1
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        logger.warning("Failed to restore abuse counters: %s", e)
+    if restored:
+        logger.info("Restored %d abuse counter entries for %d IPs from JSONL", restored, len(_proof_access_counts))
 
 
 def _log_proof_access(proof_id: str, ip: str, user_agent: str):
@@ -68,10 +106,66 @@ def _log_proof_access(proof_id: str, ip: str, user_agent: str):
         logger.warning("ABUSE DETECTED: IP %s made %d proof requests in 1h", ip, len(_proof_access_counts[ip]))
 
 
+async def _recover_pending_tsa():
+    """Startup task: retry TSA for recent proofs stuck in 'submitted' status."""
+    import base64 as _b64
+    from .proofs import load_proof, store_proof as _store_proof
+    recovered = 0
+    failed = 0
+    try:
+        cutoff = datetime.now(timezone.utc).timestamp() - 86400  # last 24h
+        for proof_file in PROOFS_DIR.glob("prf_*.json"):
+            if proof_file.stat().st_mtime < cutoff:
+                continue
+            proof = load_proof(proof_file.stem)
+            if not proof:
+                continue
+            tsa = proof.get("timestamp_authority", {})
+            if tsa.get("status") != "submitted":
+                continue
+            # This proof never got its TSA — retry
+            chain_hash = proof.get("hashes", {}).get("chain", "").replace("sha256:", "")
+            if not chain_hash:
+                continue
+            proof_id = proof.get("proof_id", proof_file.stem)
+            logger.info("TSA recovery: retrying %s", proof_id)
+            loop = asyncio.get_running_loop()
+            tsr_bytes = await loop.run_in_executor(None, submit_hash, chain_hash)
+            if tsr_bytes:
+                (PROOFS_DIR / f"{proof_id}.tsr").write_bytes(tsr_bytes)
+                proof["timestamp_authority"]["status"] = "verified"
+                proof["timestamp_authority"]["tsr_base64"] = _b64.b64encode(tsr_bytes).decode("ascii")
+                _store_proof(proof_id, proof)
+                _log_background_task(proof_id, "tsa_recovery", "success")
+                recovered += 1
+            else:
+                _log_background_task(proof_id, "tsa_recovery", "failure", "submit_hash returned None")
+                failed += 1
+    except Exception as e:
+        logger.warning("TSA recovery error: %s", e)
+    if recovered or failed:
+        logger.info("TSA recovery complete: %d recovered, %d still failed", recovered, failed)
+
+
+@asynccontextmanager
+async def lifespan(app):
+    """Startup: recover pending TSA, restore abuse counters. Shutdown: drain background tasks."""
+    # Startup — restore abuse detection sliding window from JSONL
+    _restore_abuse_counters()
+    # Startup — fire TSA recovery in background (non-blocking)
+    recovery_task = asyncio.create_task(_recover_pending_tsa())
+    _track_task(recovery_task)
+    yield
+    # Shutdown — wait for active tasks to finish (10s grace)
+    drained = await drain_background_tasks(timeout=10.0)
+    logger.info("Shutdown: %d background tasks drained", drained)
+
+
 app = FastAPI(
     title="ArkForge Trust Layer",
     description="Certifying proxy for agent-to-agent payments. Pay any API, get cryptographic proof.",
     version=__version__,
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -129,8 +223,14 @@ async def proxy_endpoint(
 
     if not target:
         return _error_response("invalid_target", "Missing 'target' field", 400)
+
+    # Free tier keys don't require amount
     if amount is None:
-        return _error_response("invalid_amount", "Missing 'amount' field", 400)
+        key_info = validate_api_key(api_key)
+        if key_info and key_info.get("plan") == "free":
+            amount = 0.0
+        else:
+            return _error_response("invalid_amount", "Missing 'amount' field", 400)
 
     try:
         amount = float(amount)
@@ -282,8 +382,8 @@ async def setup_key(request: Request):
             mode="setup",
             payment_method_types=["card"],
             customer=customer.id,
-            success_url=f"{TRUST_LAYER_BASE_URL}/setup-success?session_id={{CHECKOUT_SESSION_ID}}",
-            cancel_url=f"{TRUST_LAYER_BASE_URL}/setup-canceled",
+            success_url="https://arkforge.fr/fr/tl-pro-success.html?session_id={CHECKOUT_SESSION_ID}",
+            cancel_url="https://arkforge.fr/fr/pricing.html",
             metadata={"product": "trust_layer_setup", "email": email, "stripe_mode": req_mode},
             api_key=sk,
         )
@@ -298,6 +398,67 @@ async def setup_key(request: Request):
     except stripe.StripeError as e:
         logger.error("Stripe setup error: %s", e)
         return _error_response("internal_error", f"Stripe error: {str(e)}", 500)
+
+
+# --- POST /v1/keys/free-signup ---
+
+import re as _re
+_FREE_SIGNUP_RATE: dict[str, list[float]] = {}  # IP -> timestamps (sliding 1h)
+_FREE_SIGNUP_MAX_PER_HOUR = 5
+
+@app.post("/v1/keys/free-signup")
+async def free_signup(request: Request):
+    """Create a free-tier API key with email only — no credit card required."""
+    import time
+
+    try:
+        body = await request.json()
+    except Exception:
+        return _error_response("invalid_request", "Invalid JSON body", 400)
+
+    email = (body.get("email") or "").strip().lower()
+    if not email or not _re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        return _error_response("invalid_request", "A valid email is required", 400)
+
+    # Rate limit: max 5 signups per IP per hour
+    client_ip = request.headers.get("x-forwarded-for", request.client.host or "unknown").split(",")[0].strip()
+    now = time.time()
+    timestamps = _FREE_SIGNUP_RATE.get(client_ip, [])
+    timestamps = [t for t in timestamps if t > now - 3600]
+    if len(timestamps) >= _FREE_SIGNUP_MAX_PER_HOUR:
+        return _error_response("rate_limited", "Too many signups. Try again later.", 429)
+    timestamps.append(now)
+    _FREE_SIGNUP_RATE[client_ip] = timestamps
+
+    # Check if email already has a free key
+    from .keys import load_api_keys
+    existing_keys = load_api_keys()
+    for key, info in existing_keys.items():
+        if info.get("email", "").lower() == email and info.get("plan") == "free" and info.get("active"):
+            return _error_response("already_exists", "A free API key already exists for this email. Check your inbox or contact support.", 409)
+
+    # Create free-tier key (no Stripe customer needed)
+    api_key = create_api_key(
+        stripe_customer_id="",
+        ref_id=f"free_signup_{email}",
+        email=email,
+        test_mode=False,
+        plan="free",
+    )
+    logger.info("Free API key created for %s", email)
+
+    try:
+        send_welcome_email(email, api_key)
+    except Exception as e:
+        logger.warning("Welcome email failed for free signup %s: %s", email, e)
+
+    return {
+        "api_key": api_key,
+        "plan": "free",
+        "limit": f"{FREE_TIER_MONTHLY_LIMIT} proofs/month",
+        "email": email,
+        "message": "Your free API key is ready. It has also been sent to your email.",
+    }
 
 
 # --- POST /v1/webhooks/stripe ---
@@ -420,7 +581,8 @@ async def pricing():
                 "price": "0 EUR/month",
                 "limit": f"{FREE_TIER_MONTHLY_LIMIT} proofs/month",
                 "proofs": "public",
-                "setup": f"{TRUST_LAYER_BASE_URL}/v1/keys/setup",
+                "setup": f"{TRUST_LAYER_BASE_URL}/v1/keys/free-signup",
+                "credit_card_required": False,
             },
             "pro": {
                 "price": "pay-per-proof",

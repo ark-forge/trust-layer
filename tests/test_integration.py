@@ -256,7 +256,7 @@ def test_proxy_full_flow_has_signature_and_spec(client, api_key):
 
     assert r.status_code == 200
     proof = r.json()["proof"]
-    assert proof["spec_version"] == "1.0"
+    assert proof["spec_version"] == "1.1"
     assert proof["arkforge_signature"].startswith("ed25519:")
     assert proof["arkforge_pubkey"].startswith("ed25519:")
     assert proof["upstream_timestamp"] == "Thu, 26 Feb 2026 17:00:00 GMT"
@@ -271,7 +271,7 @@ def test_proxy_full_flow_has_signature_and_spec(client, api_key):
     r2 = client.get(f"/v1/proof/{proof_id}")
     assert r2.status_code == 200
     public = r2.json()
-    assert public["spec_version"] == "1.0"
+    assert public["spec_version"] == "1.1"
     assert public["arkforge_signature"].startswith("ed25519:")
     assert public["upstream_timestamp"] == "Thu, 26 Feb 2026 17:00:00 GMT"
 

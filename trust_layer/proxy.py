@@ -379,9 +379,16 @@ async def execute_proxy(
 
     # 2. Validate inputs
     currency = validate_currency(currency)
-    amount = validate_amount(amount)
     target = validate_target_url(target)
     method = method.upper()
+
+    # Detect free tier
+    is_free = key_info.get("plan") == "free"
+
+    if is_free:
+        amount = 0.0
+    else:
+        amount = validate_amount(amount)
 
     # 3. Check rate limit
     allowed, remaining = check_rate_limit(api_key)
@@ -397,31 +404,42 @@ async def execute_proxy(
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     request_data = {"target": target, "method": method, "payload": payload, "amount": amount, "currency": currency}
 
-    # 6. Charge via payment provider
+    # 6. Charge via payment provider (skip for free tier)
     target_domain = urlparse(target).hostname or "unknown"
-    provider = get_provider(api_key)
-    customer_id = key_info.get("stripe_customer_id", "")
-    if not customer_id:
-        raise ProxyError("invalid_api_key", "No payment method linked to this API key", 400)
 
-    try:
-        charge_result: ChargeResult = await provider.charge(
-            amount=amount,
+    if is_free:
+        charge_result = ChargeResult(
+            provider="none",
+            transaction_id="free_tier",
+            amount=0.0,
             currency=currency,
-            customer_id=customer_id,
-            description=description or f"ArkForge proxy: {target_domain}",
-            metadata={
-                "product": "trust_layer_proxy",
-                "target_domain": target_domain,
-                "api_key_prefix": api_key[:12],
-            },
+            status="free_tier",
+            receipt_url=None,
         )
-    except Exception as e:
-        logger.error("Payment failed: %s", e)
-        raise ProxyError("payment_failed", f"Payment failed: {str(e)}", 402)
+    else:
+        provider = get_provider(api_key)
+        customer_id = key_info.get("stripe_customer_id", "")
+        if not customer_id:
+            raise ProxyError("invalid_api_key", "No payment method linked to this API key", 400)
 
-    if charge_result.status != "succeeded":
-        raise ProxyError("payment_failed", f"Payment status: {charge_result.status}", 402)
+        try:
+            charge_result: ChargeResult = await provider.charge(
+                amount=amount,
+                currency=currency,
+                customer_id=customer_id,
+                description=description or f"ArkForge proxy: {target_domain}",
+                metadata={
+                    "product": "trust_layer_proxy",
+                    "target_domain": target_domain,
+                    "api_key_prefix": api_key[:12],
+                },
+            )
+        except Exception as e:
+            logger.error("Payment failed: %s", e)
+            raise ProxyError("payment_failed", f"Payment failed: {str(e)}", 402)
+
+        if charge_result.status != "succeeded":
+            raise ProxyError("payment_failed", f"Payment status: {charge_result.status}", 402)
 
     # Payment OK — from here, always return proof even on service error
     payment_data = {
@@ -492,7 +510,7 @@ async def execute_proxy(
     verification_url = f"{TRUST_LAYER_BASE_URL}/v1/proof/{proof_id}"
     proof_record = {
         "proof_id": proof_id,
-        "spec_version": "1.0",
+        "spec_version": proof.get("spec_version", "1.1"),
         "verification_url": verification_url,
         "verification_algorithm": "https://github.com/ark-forge/proof-spec/blob/main/SPEC.md#2-chain-hash-algorithm",
         "hashes": proof["hashes"],
