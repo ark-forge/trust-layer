@@ -321,7 +321,7 @@ Agent Client  →  Trust Layer  →  Service (e.g. EU AI Act Scanner)
 
 See a live proof: [example transaction](https://arkforge.fr/trust/v/prf_20260225_222329_d17acd)
 
-Currently running with ArkForge-operated services. Third-party provider onboarding coming soon.
+Currently running with ArkForge-operated services. Third-party provider onboarding coming soon — see **[ROADMAP.md](ROADMAP.md)** for the multi-witness notarization architecture.
 
 Building a service you want to make verifiable? [Get in touch](mailto:contact@arkforge.fr).
 
