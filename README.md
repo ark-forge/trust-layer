@@ -1,17 +1,40 @@
 # ArkForge Trust Layer
 
-Add verifiable execution to any API call.
+Add verifiable execution to any API call. One signup, one curl.
 
-ArkForge is a certifying proxy that forwards requests to any HTTPS API and returns a tamper-proof cryptographic proof (SHA-256 hash chain + Ed25519 signature + RFC 3161 certified timestamp). The Pro plan uses prepaid credits (0.10 EUR/proof) and adds Stripe as a 3rd independent witness.
+## Get started in 30 seconds
 
-Every call becomes: **forwarded** → **proven** → **verifiable**.
+### Step 1 — Get a free API key
 
-## One-line example
-
+```bash
+curl -X POST https://arkforge.fr/trust/v1/keys/free-signup \
+  -H "Content-Type: application/json" \
+  -d '{"email": "you@example.com"}'
+# → {"api_key": "mcp_free_xxxx...", "email": "you@example.com"}
 ```
-Without ArkForge:   Agent → API → Result
-With ArkForge:      Agent → ArkForge → API → Verifiable Proof
+
+### Step 2 — Make a verified API call
+
+```bash
+curl -X POST https://arkforge.fr/trust/v1/proxy \
+  -H "X-Api-Key: mcp_free_xxxx..." \
+  -H "Content-Type: application/json" \
+  -d '{"target": "https://api.example.com/v1/run",
+       "payload": {"task": "analyze", "text": "hello"}}'
 ```
+
+ArkForge forwards your request, fingerprints the exchange (SHA-256), signs it (Ed25519), and returns the result with a cryptographic proof.
+
+### Step 3 — Verify
+
+```bash
+curl https://arkforge.fr/trust/v1/proof/prf_20260227_110211_a27069
+# → full proof JSON: hashes, signature, timestamps, verification status
+```
+
+Or open it in a browser — each proof has a public HTML verification page.
+
+---
 
 ## Why use it?
 
@@ -34,7 +57,7 @@ With ArkForge:      Agent → ArkForge → API → Verifiable Proof
 - **Email** — welcome + proof receipts via SMTP
 - **Proof Specification** — open spec with test vectors for independent verification ([ark-forge/proof-spec](https://github.com/ark-forge/proof-spec))
 
-## Quick start
+## Self-hosting
 
 ```bash
 # Clone & install
