@@ -36,7 +36,7 @@ ArkForge doesn't take sides. The proof serves the truth.
 
 ## Phase 1 — Receipt verification via public URL
 
-**Goal:** Any client can call any API through ArkForge with a payment receipt. ArkForge fetches and verifies the receipt from the PSP. No provider onboarding required.
+**Goal:** Any client can call any API through ArkForge with a payment receipt. ArkForge fetches and verifies the receipt from the PSP. No provider onboarding required. Zero friction — one curl, nothing else.
 
 ### How it works
 
@@ -55,13 +55,25 @@ The client sends a request with a `receipt_url` — a public URL hosted by the P
 
 ArkForge:
 1. **Fetches** the `receipt_url` directly from the PSP (Stripe, block explorer, etc.)
-2. Reads and stores the receipt content (amount, status, date, currency)
-3. **Hashes** the raw receipt content (immutable snapshot)
+2. **Hashes** the raw receipt content (SHA-256 — immutable snapshot, this is the proof)
+3. **Parses** key fields (amount, status, date, currency) — deterministic parser with LLM fallback (Haiku) if parsing fails
 4. Forwards the request to the target API
 5. Hashes the response
 6. Creates the proof: `receipt_content_hash` + `request_hash` + `response_hash` + timestamp + signature
 
 The receipt is fetched from an **independent third party** (the PSP), not from the client. ArkForge doesn't trust the client — it verifies at the source.
+
+### Parsing resilience
+
+The raw HTML hash is always valid regardless of parsing success. Field extraction uses two layers:
+1. **Deterministic parser** (regex/BeautifulSoup) — fast, free, handles 99%+ of cases
+2. **LLM fallback** (Haiku) — activated only when the deterministic parser fails (~0.001$/call, negligible)
+
+Stripe rarely changes receipt formats (legal documents, not UI). Monitoring detects parsing failures in real-time.
+
+### Evolution path: Stripe API (post-adoption)
+
+Once clients have adopted the service and have existing accounts, Phase 1 can optionally migrate to **Stripe API verification** — the client provides a restricted read-only key once, ArkForge calls `GET /v1/charges/{id}` for structured JSON. More robust, no HTML parsing, but requires a one-time setup step. This is a natural evolution, not a launch requirement.
 
 ### Preferred PSPs (verified receipts)
 
