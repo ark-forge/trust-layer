@@ -11,6 +11,7 @@ setup(
         "uvicorn>=0.24.0",
         "httpx>=0.25.0",
         "stripe>=7.0.0",
+        "cryptography>=41.0.0",
     ],
     extras_require={
         "test": [
