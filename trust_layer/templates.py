@@ -129,6 +129,7 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ArkForge Proof \u2014 {proof_id}</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230B0F14'/%3E%3Cline x1='12' y1='32' x2='52' y2='32' stroke='%2300E5FF' stroke-width='5' stroke-linecap='round'/%3E%3Ccircle cx='32' cy='32' r='14' stroke='%23FFF' stroke-width='4' fill='none'/%3E%3Ccircle cx='32' cy='32' r='5' fill='%2300E5FF'/%3E%3C/svg%3E">
 <style>
 *{{margin:0;padding:0;box-sizing:border-box}}
 body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh;padding:2rem 1rem}}
@@ -297,7 +298,7 @@ details[open] summary::before{{content:"\u25bc "}}
     <!-- 9. FOOTER -->
     <div class="footer">
         <div class="tagline">ArkForge is a certifying proxy that turns API executions into independently verifiable events.</div>
-        <div class="arkforge"><a href="https://arkforge.fr">arkforge.fr</a></div>
+        <div class="arkforge"><a href="https://arkforge.fr" style="display:inline-flex;align-items:center;gap:6px"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="20" height="20" style="vertical-align:middle"><rect width="64" height="64" rx="14" fill="#0B0F14"/><line x1="12" y1="32" x2="52" y2="32" stroke="#00E5FF" stroke-width="5" stroke-linecap="round"/><circle cx="32" cy="32" r="14" stroke="#FFF" stroke-width="4" fill="none"/><circle cx="32" cy="32" r="5" fill="#00E5FF"/></svg> arkforge.fr</a></div>
     </div>
 
 </div>
