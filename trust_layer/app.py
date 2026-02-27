@@ -363,6 +363,9 @@ async def setup_key(request: Request):
         return _error_response("invalid_request", "email is required", 400)
 
     req_mode = body.get("mode", "live")
+    lang = body.get("lang", "fr")
+    if lang not in ("en", "fr"):
+        lang = "fr"
     sk = STRIPE_TEST_KEY if req_mode == "test" else STRIPE_LIVE_KEY
     if not sk:
         return _error_response("internal_error", f"Stripe {req_mode} key not configured", 500)
@@ -382,8 +385,8 @@ async def setup_key(request: Request):
             mode="setup",
             payment_method_types=["card"],
             customer=customer.id,
-            success_url="https://arkforge.fr/fr/tl-pro-success.html?session_id={CHECKOUT_SESSION_ID}",
-            cancel_url="https://arkforge.fr/fr/pricing.html",
+            success_url=f"https://arkforge.fr/{lang}/tl-pro-success.html?session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"https://arkforge.fr/{lang}/pricing.html",
             metadata={"product": "trust_layer_setup", "email": email, "stripe_mode": req_mode},
             api_key=sk,
         )
