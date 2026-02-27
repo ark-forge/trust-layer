@@ -2,18 +2,18 @@
 
 ## Vision
 
-ArkForge is a **digital notary** for agent-to-agent transactions. Like a real-world notary, ArkForge doesn't hold money, doesn't verify bank accounts, and doesn't take sides. It **records what happened**, signs it, timestamps it, and stores it immutably. In case of dispute, the proof serves whoever is right.
+ArkForge is a **digital notary** for agent-to-agent transactions. Like a real-world notary, ArkForge doesn't hold money, doesn't take sides, and doesn't resolve disputes. It **records what happened**, signs it, timestamps it, and stores it immutably. In case of dispute, the proof serves whoever is right.
 
 ## Core principle
 
-A notary doesn't call the bank to check if the transfer is real. A notary records what the parties presented, signs the document, and if someone lied — the notarized document becomes evidence against them.
+A notary records what the parties presented, signs the document, and if someone lied — the notarized document becomes evidence against them.
 
 ArkForge works the same way:
-- The client declares a payment (receipt, transaction ID, tx hash — anything)
-- ArkForge hashes it, forwards the request, hashes the response
-- The proof binds everything: declared payment + request + response + timestamp + signature
-- If the payment evidence is real → it proves the client paid
-- If the payment evidence is fake → it proves the client lied
+- The client provides a receipt URL for their payment
+- ArkForge fetches the receipt directly from the PSP (Stripe, blockchain explorer, etc.)
+- ArkForge forwards the request, hashes the response
+- The proof binds everything: verified receipt + request + response + timestamp + signature
+- The provider receives the proof and can verify the receipt themselves — that's their responsibility
 
 ArkForge doesn't take sides. The proof serves the truth.
 
@@ -34,13 +34,13 @@ ArkForge doesn't take sides. The proof serves the truth.
 
 ---
 
-## Phase 1 — Declarative payment evidence
+## Phase 1 — Receipt verification via public URL
 
-**Goal:** Any client can call any API through ArkForge with payment evidence. No provider onboarding required.
+**Goal:** Any client can call any API through ArkForge with a payment receipt. ArkForge fetches and verifies the receipt from the PSP. No provider onboarding required.
 
 ### How it works
 
-The client sends a request with `payment_evidence` — a declaration of payment to the provider:
+The client sends a request with a `receipt_url` — a public URL hosted by the PSP (not by the client or the provider):
 
 ```json
 {
@@ -48,52 +48,74 @@ The client sends a request with `payment_evidence` — a declaration of payment 
   "payload": {"repo_url": "https://github.com/owner/repo"},
   "payment_evidence": {
     "type": "stripe",
-    "transaction_id": "pi_3abc...",
-    "receipt_url": "https://pay.stripe.com/receipts/...",
+    "receipt_url": "https://pay.stripe.com/receipts/payment/CAcaFwo..."
+  }
+}
+```
+
+ArkForge:
+1. **Fetches** the `receipt_url` directly from the PSP (Stripe, block explorer, etc.)
+2. Reads and stores the receipt content (amount, status, date, currency)
+3. **Hashes** the raw receipt content (immutable snapshot)
+4. Forwards the request to the target API
+5. Hashes the response
+6. Creates the proof: `receipt_content_hash` + `request_hash` + `response_hash` + timestamp + signature
+
+The receipt is fetched from an **independent third party** (the PSP), not from the client. ArkForge doesn't trust the client — it verifies at the source.
+
+### Preferred PSPs (verified receipts)
+
+PSPs with publicly accessible receipt URLs. ArkForge fetches, reads, and hashes the content directly:
+
+| PSP | Receipt URL format | What ArkForge reads |
+|-----|-------------------|-------------------|
+| **Stripe** | `pay.stripe.com/receipts/...` | Amount, status, date, currency |
+| **Blockchain** | `etherscan.io/tx/0xabc...` (or any explorer) | Amount, from, to, confirmations, block |
+| **PayPal** | `paypal.com/activity/payment/...` | Amount, status, date |
+
+These are the **recommended** payment methods. The receipt is hosted by the PSP, publicly accessible, and independently verifiable. ArkForge fetches it directly — no trust in the client required.
+
+The proof marks these as: `payment_verification: "fetched"`
+
+### Declarative fallback (other PSPs)
+
+For PSPs without public receipt URLs (bank transfers, invoices, prepaid credits, etc.), the client provides payment metadata. ArkForge hashes it but **cannot independently verify** it:
+
+```json
+{
+  "payment_evidence": {
+    "type": "sepa",
+    "reference": "TRANSFER-2026-0227-XYZ",
     "amount": 1.00,
     "currency": "eur"
   }
 }
 ```
 
-ArkForge:
-1. Hashes the `payment_evidence` (immutable, whatever the client declared)
-2. Forwards the request to the target API
-3. Hashes the response
-4. Creates the proof: `payment_evidence_hash` + `request_hash` + `response_hash` + timestamp + signature
+ArkForge hashes and stores this as-is. The proof marks it clearly as: `payment_verification: "declared"`
+
+| Verification level | Meaning | PSPs |
+|-------------------|---------|------|
+| **`fetched`** | ArkForge fetched and verified the receipt from the PSP | Stripe, blockchain, PayPal |
+| **`declared`** | Client provided metadata, ArkForge stored it immutably but did not verify | SEPA, invoice, prepaid, other |
+
+The distinction is explicit in the proof. Consumers of the proof know exactly what ArkForge verified vs. what the client declared.
 
 ### The proof is neutral
 
 | Scenario | What the proof shows | Who wins |
 |----------|---------------------|----------|
-| Client really paid | `payment_evidence` contains a real Stripe PI → verifiable | Client |
-| Client faked receipt | `payment_evidence` contains a fake PI → verifiable | Provider |
+| Client really paid (fetched receipt) | Receipt from Stripe confirms payment | Client |
+| Client provides fake receipt URL | ArkForge fetch fails or content doesn't match | Client exposed |
+| Client provides real receipt for wrong provider | Receipt is in the proof — provider checks and sees it's not for them | Provider |
 | Provider denies delivery | Response `200 OK` with data, hashed and signed | Client |
-| Provider sent garbage | Response hashed — content is in the proof | Client |
+| Provider sent garbage | Response content is hashed — proof shows what was returned | Client |
 
-The proof doesn't judge. It records. Courts, auditors, and agents can verify independently.
-
-### Payment-agnostic by design
-
-The `payment_evidence` field accepts anything:
-
-| Type | Example | How to verify independently |
-|------|---------|---------------------------|
-| `stripe` | `pi_3abc...` + receipt URL | Stripe API or receipt URL |
-| `blockchain` | `0xabc...` tx hash + chain | Any block explorer |
-| `sepa` | Transfer reference + IBAN | Bank statement |
-| `paypal` | Transaction ID | PayPal dashboard |
-| `invoice` | Invoice number + amount | Provider's billing system |
-| `prepaid` | Account ID + credit balance | Provider's API |
-| `free` | `null` | N/A — no payment claimed |
-
-ArkForge doesn't care what the payment type is. It hashes the evidence and stores it immutably. Verification is done by the party that needs it, using the original payment system.
+The proof doesn't judge. It records. The provider receives the proof and decides whether the receipt is valid for them — that's their responsibility, not ArkForge's.
 
 ### No provider onboarding
 
 The provider doesn't need to register, connect Stripe, or know ArkForge exists. The client specifies the target URL. ArkForge is a transparent proxy — the provider receives a normal API call.
-
-This is the fundamental difference with a marketplace:
 
 | Marketplace | ArkForge |
 |-------------|----------|
@@ -104,7 +126,7 @@ This is the fundamental difference with a marketplace:
 
 ### What ArkForge charges for
 
-ArkForge charges the client for the **proof service** — not for the provider's API. The client pays:
+ArkForge charges the client for the **proof service** — not for the provider's API:
 - ArkForge → for the cryptographic proof (current pricing: 0.50 EUR/proof or free tier)
 - Provider → for the API service (their own billing, separately)
 
@@ -145,14 +167,15 @@ Agent client ── one call ──→ ArkForge
 - Legal compliance: Stripe holds the payment facilitator license, not ArkForge
 - Non-custodial: funds never sit in ArkForge's account
 
-### Two proof strengths
+### Three proof strengths
 
-| Mode | Payment evidence | Proof strength |
-|------|-----------------|----------------|
-| **Unregistered provider** (Phase 1) | Client-declared (`payment_evidence` field) | Declarative — immutable record of what the client claimed |
-| **Registered provider** (Phase 2) | ArkForge-orchestrated (Stripe Connect) | Witnessed — ArkForge directly observed the payment |
+| Mode | Payment evidence | Proof level |
+|------|-----------------|-------------|
+| **Unregistered + preferred PSP** (Phase 1) | ArkForge fetched receipt from PSP | `fetched` — independently verified |
+| **Unregistered + other PSP** (Phase 1) | Client-provided metadata | `declared` — stored immutably, not verified |
+| **Registered provider** (Phase 2) | ArkForge orchestrated the payment | `witnessed` — ArkForge created the payment |
 
-Both produce a valid, signed, timestamped proof. The difference is whether ArkForge can attest that the payment happened (witnessed) or only that the client declared it happened (declarative).
+All three produce a valid, signed, timestamped proof. The difference is clearly marked in the proof so consumers know exactly what level of payment verification was performed.
 
 ---
 
@@ -163,7 +186,7 @@ Both produce a valid, signed, timestamped proof. The difference is whether ArkFo
 | PSP | Orchestration method | Status |
 |-----|---------------------|--------|
 | **Stripe Connect** | Direct charges | Phase 2 |
-| **Blockchain** | Smart contract escrow or direct transfer verification | Phase 3 |
+| **Blockchain** | Smart contract or direct transfer verification | Phase 3 |
 | **Open Banking (PSD2)** | Payment initiation APIs (with client consent) | Phase 3 |
 
 The proof format remains universal. Only the PSP adapter changes.
@@ -189,9 +212,9 @@ ArkForge records, signs, and timestamps. It doesn't hold money, set prices, list
 | Spec version | Changes |
 |-------------|---------|
 | v1.1 (current) | Ed25519 signature, upstream_timestamp, free tier |
-| v2.0 (Phase 1) | `payment_evidence` object (client-declared), `payment_evidence_hash` in chain |
-| v2.1 (Phase 2) | `payment.witnessed: true/false` field, Stripe Connect witness |
-| v3.0 (Phase 3) | Multi-PSP `payment_evidence.type` values, orchestrated payment witnesses |
+| v2.0 (Phase 1) | `payment_evidence` object, `receipt_content_hash` in chain, `payment_verification` level (`fetched` / `declared`) |
+| v2.1 (Phase 2) | `payment_verification: "witnessed"` level, Stripe Connect witness |
+| v3.0 (Phase 3) | Multi-PSP orchestrated payment witnesses |
 
 Spec changes follow [semver](https://semver.org/). Breaking changes (chain hash formula) = major version. New optional fields = minor version.
 
