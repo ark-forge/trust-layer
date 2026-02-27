@@ -510,7 +510,7 @@ async def execute_proxy(
     verification_url = f"{TRUST_LAYER_BASE_URL}/v1/proof/{proof_id}"
     proof_record = {
         "proof_id": proof_id,
-        "spec_version": proof.get("spec_version", "1.1"),
+        "spec_version": proof.get("spec_version"),
         "verification_url": verification_url,
         "verification_algorithm": "https://github.com/ark-forge/proof-spec/blob/main/SPEC.md#2-chain-hash-algorithm",
         "hashes": proof["hashes"],

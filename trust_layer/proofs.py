@@ -10,6 +10,8 @@ from typing import Optional
 from .config import PROOFS_DIR
 from .persistence import save_json, load_json
 
+SPEC_VERSION = "1.1"
+
 
 def canonical_json(data: dict) -> str:
     """Deterministic JSON: sorted keys, no spaces."""
@@ -52,7 +54,7 @@ def generate_proof(
     chain_hash = sha256_hex(chain_input)
 
     result = {
-        "spec_version": "1.1",
+        "spec_version": SPEC_VERSION,
         "hashes": {
             "request": f"sha256:{request_hash}",
             "response": f"sha256:{response_hash}",
