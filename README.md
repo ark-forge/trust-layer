@@ -92,7 +92,7 @@ pytest tests/ -v
 These are stored in the proof and shadow profile. If the same API key sends a different identity, all subsequent proofs are flagged `identity_consistent: false`.
 
 **Response includes:**
-- `proof.spec_version` — proof format version (`"1.0"`)
+- `proof.spec_version` — proof format version (`"1.1"`)
 - `proof.payment` — Stripe transaction ID, amount, receipt URL
 - `proof.hashes` — SHA-256 of request, response, and chain
 - `proof.arkforge_signature` — Ed25519 signature of the chain hash (format: `ed25519:<base64url>`)
