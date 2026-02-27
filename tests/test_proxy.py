@@ -10,7 +10,8 @@ from trust_layer.proxy import (
     execute_proxy,
     ProxyError,
 )
-from trust_layer.payments.base import ChargeResult
+from trust_layer.config import PROOF_PRICE
+from trust_layer.credits import add_credits
 
 
 def test_validate_target_https():
@@ -97,49 +98,44 @@ async def test_execute_proxy_invalid_key():
             target="https://example.com/api",
             method="POST",
             payload={"key": "value"},
-            amount=0.50,
+            amount=0.10,
             currency="eur",
             api_key="mcp_test_invalid_nonexistent_key",
         )
     assert exc_info.value.code == "invalid_api_key"
 
 
-@pytest.mark.asyncio
-async def test_execute_proxy_full_flow(test_api_key):
-    """Full proxy flow with mock payment + mock target service."""
-    mock_charge = ChargeResult(
-        provider="stripe",
-        transaction_id="pi_test_flow",
-        amount=0.50,
-        currency="eur",
-        status="succeeded",
-        receipt_url="https://pay.stripe.com/receipts/test_flow",
-    )
-
-    mock_provider = AsyncMock()
-    mock_provider.charge.return_value = mock_charge
-
-    import httpx
-
+def _mock_http_client(response_body=None, status_code=200, headers=None):
+    """Helper to create a mock HTTP client."""
     mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"result": "scan_complete", "score": 85}
-    mock_response.headers = {}
+    mock_response.status_code = status_code
+    mock_response.json.return_value = response_body or {"result": "ok"}
+    mock_response.headers = headers or {}
 
     mock_client = AsyncMock()
     mock_client.post.return_value = mock_response
+    mock_client.get.return_value = mock_response
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=None)
+    return mock_client
 
-    with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
-         patch("httpx.AsyncClient", return_value=mock_client), \
+
+@pytest.mark.asyncio
+async def test_execute_proxy_full_flow(test_api_key):
+    """Full proxy flow with prepaid credits + mock target service."""
+    # Add credits first
+    add_credits(test_api_key, 10.00, "pi_test_flow")
+
+    mock_client = _mock_http_client({"result": "scan_complete", "score": 85})
+
+    with patch("httpx.AsyncClient", return_value=mock_client), \
          patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
 
         result = await execute_proxy(
             target="https://example.com/api/scan",
             method="POST",
             payload={"repo_url": "https://github.com/test/repo"},
-            amount=0.50,
+            amount=PROOF_PRICE,
             currency="eur",
             api_key=test_api_key,
         )
@@ -151,44 +147,29 @@ async def test_execute_proxy_full_flow(test_api_key):
     assert result["proof"]["proof_id"].startswith("prf_")
     assert "verification_url" in result["proof"]
     assert result["proof"]["hashes"]["chain"].startswith("sha256:")
-
-    mock_provider.charge.assert_called_once()
+    assert result["proof"]["payment"]["provider"] == "prepaid_credit"
 
 
 @pytest.mark.asyncio
 async def test_execute_proxy_service_error(test_api_key):
-    """Payment OK but service returns 500 — proof is still returned."""
-    mock_charge = ChargeResult(
-        provider="stripe", transaction_id="pi_test_502",
-        amount=0.50, currency="eur", status="succeeded", receipt_url=None,
-    )
-    mock_provider = AsyncMock()
-    mock_provider.charge.return_value = mock_charge
+    """Credits deducted but service returns 500 — proof is still returned."""
+    add_credits(test_api_key, 10.00, "pi_test_502")
 
-    mock_response = MagicMock()
-    mock_response.status_code = 500
-    mock_response.json.return_value = {"error": "internal server error"}
-    mock_response.headers = {}
+    mock_client = _mock_http_client({"error": "internal server error"}, status_code=500)
 
-    mock_client = AsyncMock()
-    mock_client.post.return_value = mock_response
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
-
-    with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
-         patch("httpx.AsyncClient", return_value=mock_client), \
+    with patch("httpx.AsyncClient", return_value=mock_client), \
          patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
 
         result = await execute_proxy(
             target="https://example.com/api/fail",
             method="POST",
             payload={},
-            amount=0.50,
+            amount=PROOF_PRICE,
             currency="eur",
             api_key=test_api_key,
         )
 
-    # Should return error with proof (payment happened)
+    # Should return error with proof (credits were deducted)
     assert "error" in result
     assert result["error"]["code"] == "service_error"
     assert "proof" in result
@@ -196,55 +177,37 @@ async def test_execute_proxy_service_error(test_api_key):
 
 
 @pytest.mark.asyncio
-async def test_execute_proxy_payment_failed(test_api_key):
-    """Payment fails — no forward, no proof."""
-    mock_charge = ChargeResult(
-        provider="stripe", transaction_id="pi_test_fail",
-        amount=0.50, currency="eur", status="failed", receipt_url=None,
-    )
-    mock_provider = AsyncMock()
-    mock_provider.charge.return_value = mock_charge
-
-    with patch("trust_layer.proxy.get_provider", return_value=mock_provider):
-        with pytest.raises(ProxyError) as exc_info:
-            await execute_proxy(
-                target="https://example.com/api",
-                method="POST",
-                payload={},
-                amount=0.50,
-                currency="eur",
-                api_key=test_api_key,
-            )
-    assert exc_info.value.code == "payment_failed"
+async def test_execute_proxy_insufficient_credits(test_api_key):
+    """No credits — 402 insufficient_credits."""
+    with pytest.raises(ProxyError) as exc_info:
+        await execute_proxy(
+            target="https://example.com/api",
+            method="POST",
+            payload={},
+            amount=PROOF_PRICE,
+            currency="eur",
+            api_key=test_api_key,
+        )
+    assert exc_info.value.code == "insufficient_credits"
+    assert exc_info.value.status == 402
 
 
 @pytest.mark.asyncio
 async def test_execute_proxy_captures_upstream_date(test_api_key):
     """Upstream Date header should be captured as upstream_timestamp in proof."""
-    mock_charge = ChargeResult(
-        provider="stripe", transaction_id="pi_test_date",
-        amount=0.50, currency="eur", status="succeeded", receipt_url=None,
+    add_credits(test_api_key, 10.00, "pi_test_date")
+
+    mock_client = _mock_http_client(
+        {"result": "ok"},
+        headers={"Date": "Thu, 26 Feb 2026 17:08:14 GMT"},
     )
-    mock_provider = AsyncMock()
-    mock_provider.charge.return_value = mock_charge
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"result": "ok"}
-    mock_response.headers = {"Date": "Thu, 26 Feb 2026 17:08:14 GMT"}
-
-    mock_client = AsyncMock()
-    mock_client.post.return_value = mock_response
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
-
-    with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
-         patch("httpx.AsyncClient", return_value=mock_client), \
+    with patch("httpx.AsyncClient", return_value=mock_client), \
          patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
 
         result = await execute_proxy(
             target="https://example.com/api",
-            method="POST", payload={}, amount=0.50, currency="eur",
+            method="POST", payload={}, amount=PROOF_PRICE, currency="eur",
             api_key=test_api_key,
         )
 
@@ -254,30 +217,16 @@ async def test_execute_proxy_captures_upstream_date(test_api_key):
 @pytest.mark.asyncio
 async def test_execute_proxy_has_arkforge_signature(test_api_key):
     """Proof should contain arkforge_signature and arkforge_pubkey."""
-    mock_charge = ChargeResult(
-        provider="stripe", transaction_id="pi_test_sig",
-        amount=0.50, currency="eur", status="succeeded", receipt_url=None,
-    )
-    mock_provider = AsyncMock()
-    mock_provider.charge.return_value = mock_charge
+    add_credits(test_api_key, 10.00, "pi_test_sig")
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"result": "ok"}
-    mock_response.headers = {}
+    mock_client = _mock_http_client()
 
-    mock_client = AsyncMock()
-    mock_client.post.return_value = mock_response
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
-
-    with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
-         patch("httpx.AsyncClient", return_value=mock_client), \
+    with patch("httpx.AsyncClient", return_value=mock_client), \
          patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
 
         result = await execute_proxy(
             target="https://example.com/api",
-            method="POST", payload={}, amount=0.50, currency="eur",
+            method="POST", payload={}, amount=PROOF_PRICE, currency="eur",
             api_key=test_api_key,
         )
 
@@ -296,30 +245,16 @@ async def test_execute_proxy_has_arkforge_signature(test_api_key):
 @pytest.mark.asyncio
 async def test_execute_proxy_has_spec_version(test_api_key):
     """Proof record should contain spec_version: '1.1'."""
-    mock_charge = ChargeResult(
-        provider="stripe", transaction_id="pi_test_spec",
-        amount=0.50, currency="eur", status="succeeded", receipt_url=None,
-    )
-    mock_provider = AsyncMock()
-    mock_provider.charge.return_value = mock_charge
+    add_credits(test_api_key, 10.00, "pi_test_spec")
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"result": "ok"}
-    mock_response.headers = {}
+    mock_client = _mock_http_client()
 
-    mock_client = AsyncMock()
-    mock_client.post.return_value = mock_response
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
-
-    with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
-         patch("httpx.AsyncClient", return_value=mock_client), \
+    with patch("httpx.AsyncClient", return_value=mock_client), \
          patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
 
         result = await execute_proxy(
             target="https://example.com/api",
-            method="POST", payload={}, amount=0.50, currency="eur",
+            method="POST", payload={}, amount=PROOF_PRICE, currency="eur",
             api_key=test_api_key,
         )
 
@@ -329,40 +264,26 @@ async def test_execute_proxy_has_spec_version(test_api_key):
 @pytest.mark.asyncio
 async def test_execute_proxy_idempotency(test_api_key):
     """Same idempotency key returns cached response."""
-    mock_charge = ChargeResult(
-        provider="stripe", transaction_id="pi_test_idemp",
-        amount=0.50, currency="eur", status="succeeded", receipt_url=None,
-    )
-    mock_provider = AsyncMock()
-    mock_provider.charge.return_value = mock_charge
+    add_credits(test_api_key, 10.00, "pi_test_idemp")
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"result": "ok"}
-    mock_response.headers = {}
+    mock_client = _mock_http_client()
 
-    mock_client = AsyncMock()
-    mock_client.post.return_value = mock_response
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
-
-    with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
-         patch("httpx.AsyncClient", return_value=mock_client), \
+    with patch("httpx.AsyncClient", return_value=mock_client), \
          patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
 
         result1 = await execute_proxy(
             target="https://example.com/api",
-            method="POST", payload={}, amount=0.50, currency="eur",
+            method="POST", payload={}, amount=PROOF_PRICE, currency="eur",
             api_key=test_api_key, idempotency_key="idemp-key-123",
         )
 
-        # Second call with same key — should return cached
+        # Second call with same key — should return cached (no additional debit)
         result2 = await execute_proxy(
             target="https://example.com/api",
-            method="POST", payload={}, amount=0.50, currency="eur",
+            method="POST", payload={}, amount=PROOF_PRICE, currency="eur",
             api_key=test_api_key, idempotency_key="idemp-key-123",
         )
 
     assert result1 == result2
-    # Provider should only be called once
-    assert mock_provider.charge.call_count == 1
+    # Only one HTTP call should have been made
+    assert mock_client.post.call_count == 1

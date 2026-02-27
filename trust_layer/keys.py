@@ -55,6 +55,8 @@ def create_api_key(stripe_customer_id: str, ref_id: str, email: str = "",
         "stripe_ref_id": ref_id,
         "email": email,
         "transactions_total": 0,
+        "credit_balance": 0.0,
+        "total_credits_purchased": 0.0,
     }
     save_api_keys(keys)
     logger.info("API key created for customer %s (plan=%s)", stripe_customer_id, plan)

@@ -8,7 +8,8 @@ from fastapi.testclient import TestClient
 
 from trust_layer.app import app
 from trust_layer.keys import create_api_key
-from trust_layer.payments.base import ChargeResult
+from trust_layer.credits import add_credits
+from trust_layer.config import PROOF_PRICE
 
 
 @pytest.fixture
@@ -18,19 +19,13 @@ def client():
 
 @pytest.fixture
 def api_key():
-    return create_api_key("cus_integ_test", "ref_integ_test", "integ@test.com", test_mode=True)
+    key = create_api_key("cus_integ_test", "ref_integ_test", "integ@test.com", test_mode=True)
+    add_credits(key, 10.00, "pi_integ_setup")
+    return key
 
 
-def _mock_proxy_deps():
-    """Patch payment provider and HTTP client for integration tests."""
-    mock_charge = ChargeResult(
-        provider="stripe", transaction_id="pi_integ_test",
-        amount=0.50, currency="eur", status="succeeded",
-        receipt_url="https://pay.stripe.com/receipts/integ",
-    )
-    mock_provider = AsyncMock()
-    mock_provider.charge.return_value = mock_charge
-
+def _mock_http_client():
+    """Patch HTTP client for integration tests."""
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.json.return_value = {"scanned": True, "frameworks": ["pytorch"]}
@@ -41,7 +36,7 @@ def _mock_proxy_deps():
     mock_http.__aenter__ = AsyncMock(return_value=mock_http)
     mock_http.__aexit__ = AsyncMock(return_value=None)
 
-    return mock_provider, mock_http
+    return mock_http
 
 
 # --- Health ---
@@ -60,14 +55,15 @@ def test_pricing(client):
     r = client.get("/v1/pricing")
     assert r.status_code == 200
     data = r.json()
-    assert "proxy" in data
-    assert "eur" in data["proxy"]["currencies"]
+    assert "plans" in data
+    assert data["plans"]["pro"]["proof_price"] == f"{PROOF_PRICE} EUR"
+    assert "buy_credits" in data["plans"]["pro"]
 
 
 # --- Proxy ---
 
 def test_proxy_no_auth(client):
-    r = client.post("/v1/proxy", json={"target": "https://example.com", "amount": 0.50, "payload": {}})
+    r = client.post("/v1/proxy", json={"target": "https://example.com", "payload": {}})
     assert r.status_code == 401
     assert r.json()["error"]["code"] == "invalid_api_key"
 
@@ -75,7 +71,7 @@ def test_proxy_no_auth(client):
 def test_proxy_invalid_key(client):
     r = client.post(
         "/v1/proxy",
-        json={"target": "https://example.com", "amount": 0.50, "payload": {}},
+        json={"target": "https://example.com", "payload": {}},
         headers={"Authorization": "Bearer mcp_test_invalid_000"},
     )
     assert r.status_code == 401
@@ -84,7 +80,7 @@ def test_proxy_invalid_key(client):
 def test_proxy_missing_target(client, api_key):
     r = client.post(
         "/v1/proxy",
-        json={"amount": 0.50, "payload": {}},
+        json={"payload": {}},
         headers={"Authorization": f"Bearer {api_key}"},
     )
     assert r.status_code == 400
@@ -94,37 +90,17 @@ def test_proxy_missing_target(client, api_key):
 def test_proxy_invalid_currency(client, api_key):
     r = client.post(
         "/v1/proxy",
-        json={"target": "https://example.com", "amount": 0.50, "currency": "btc", "payload": {}},
+        json={"target": "https://example.com", "currency": "btc", "payload": {}},
         headers={"Authorization": f"Bearer {api_key}"},
     )
     assert r.status_code == 400
     assert r.json()["error"]["code"] == "invalid_currency"
 
 
-def test_proxy_amount_too_low(client, api_key):
-    r = client.post(
-        "/v1/proxy",
-        json={"target": "https://example.com", "amount": 0.10, "payload": {}},
-        headers={"Authorization": f"Bearer {api_key}"},
-    )
-    assert r.status_code == 400
-    assert r.json()["error"]["code"] == "invalid_amount"
-
-
-def test_proxy_amount_too_high(client, api_key):
-    r = client.post(
-        "/v1/proxy",
-        json={"target": "https://example.com", "amount": 100.0, "payload": {}},
-        headers={"Authorization": f"Bearer {api_key}"},
-    )
-    assert r.status_code == 400
-    assert r.json()["error"]["code"] == "invalid_amount"
-
-
 def test_proxy_http_target_rejected(client, api_key):
     r = client.post(
         "/v1/proxy",
-        json={"target": "http://example.com", "amount": 0.50, "payload": {}},
+        json={"target": "http://example.com", "payload": {}},
         headers={"Authorization": f"Bearer {api_key}"},
     )
     assert r.status_code == 400
@@ -134,24 +110,39 @@ def test_proxy_http_target_rejected(client, api_key):
 def test_proxy_private_ip_rejected(client, api_key):
     r = client.post(
         "/v1/proxy",
-        json={"target": "https://192.168.1.1/api", "amount": 0.50, "payload": {}},
+        json={"target": "https://192.168.1.1/api", "payload": {}},
         headers={"Authorization": f"Bearer {api_key}"},
     )
     assert r.status_code == 400
 
 
-def test_proxy_full_success(client, api_key):
-    mock_provider, mock_http = _mock_proxy_deps()
+def test_proxy_insufficient_credits(client):
+    """Pro key with no credits should get 402."""
+    key = create_api_key("cus_no_credits", "ref_no_credits", "no@credits.com", test_mode=True)
+    mock_http = _mock_http_client()
 
-    with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
-         patch("httpx.AsyncClient", return_value=mock_http), \
+    with patch("httpx.AsyncClient", return_value=mock_http), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+        r = client.post(
+            "/v1/proxy",
+            json={"target": "https://example.com/api", "payload": {}},
+            headers={"Authorization": f"Bearer {key}"},
+        )
+
+    assert r.status_code == 402
+    assert r.json()["error"]["code"] == "insufficient_credits"
+
+
+def test_proxy_full_success(client, api_key):
+    mock_http = _mock_http_client()
+
+    with patch("httpx.AsyncClient", return_value=mock_http), \
          patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
 
         r = client.post(
             "/v1/proxy",
             json={
                 "target": "https://example.com/api/scan",
-                "amount": 0.50,
                 "payload": {"repo_url": "https://github.com/test/repo"},
             },
             headers={"Authorization": f"Bearer {api_key}"},
@@ -162,6 +153,7 @@ def test_proxy_full_success(client, api_key):
     assert "proof" in data
     assert "service_response" in data
     assert data["proof"]["proof_id"].startswith("prf_")
+    assert data["proof"]["payment"]["provider"] == "prepaid_credit"
     assert data["service_response"]["status_code"] == 200
 
     # Check X-ArkForge-Proof header
@@ -177,15 +169,14 @@ def test_proof_not_found(client):
 
 def test_proof_verification_after_proxy(client, api_key):
     """Full flow: proxy call → verify proof."""
-    mock_provider, mock_http = _mock_proxy_deps()
+    mock_http = _mock_http_client()
 
-    with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
-         patch("httpx.AsyncClient", return_value=mock_http), \
+    with patch("httpx.AsyncClient", return_value=mock_http), \
          patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
 
         r = client.post(
             "/v1/proxy",
-            json={"target": "https://example.com/api", "amount": 0.50, "payload": {}},
+            json={"target": "https://example.com/api", "payload": {}},
             headers={"Authorization": f"Bearer {api_key}"},
         )
 
@@ -221,6 +212,9 @@ def test_usage_with_key(client, api_key):
     assert "daily" in data
     assert "used" in data["daily"]
     assert "remaining" in data["daily"]
+    # Pro key should have credit info
+    assert "credit_balance" in data
+    assert "proofs_remaining" in data
 
 
 # --- Pubkey ---
@@ -240,17 +234,16 @@ def test_pubkey_returns_valid_key(client):
 
 def test_proxy_full_flow_has_signature_and_spec(client, api_key):
     """Full flow: proxy call produces proof with signature, spec_version, pubkey."""
-    mock_provider, mock_http = _mock_proxy_deps()
+    mock_http = _mock_http_client()
     # Add Date header to mock upstream response
     mock_http.post.return_value.headers = {"Date": "Thu, 26 Feb 2026 17:00:00 GMT"}
 
-    with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
-         patch("httpx.AsyncClient", return_value=mock_http), \
+    with patch("httpx.AsyncClient", return_value=mock_http), \
          patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
 
         r = client.post(
             "/v1/proxy",
-            json={"target": "https://example.com/api", "amount": 0.50, "payload": {}},
+            json={"target": "https://example.com/api", "payload": {}},
             headers={"Authorization": f"Bearer {api_key}"},
         )
 

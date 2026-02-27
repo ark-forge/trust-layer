@@ -22,14 +22,16 @@ from .config import (
     PROOFS_DIR,
     TRUST_LAYER_BASE_URL,
     SUPPORTED_CURRENCIES,
-    MIN_AMOUNT,
-    MAX_AMOUNT,
+    PROOF_PRICE,
+    MIN_CREDIT_PURCHASE,
+    MAX_CREDIT_PURCHASE,
     RATE_LIMIT_PER_KEY_PER_DAY,
     FREE_TIER_MONTHLY_LIMIT,
     PROOF_ACCESS_LOG,
     ARKFORGE_PUBLIC_KEY,
 )
-from .keys import validate_api_key, create_api_key, deactivate_key_by_ref, is_test_key
+from .keys import validate_api_key, create_api_key, deactivate_key_by_ref, is_test_key, is_free_key
+from .credits import add_credits, get_balance
 from .proofs import load_proof, store_proof, get_public_proof, verify_proof_integrity
 from .proxy import execute_proxy, ProxyError, drain_background_tasks, _track_task, _log_background_task
 from .templates import render_proof_page
@@ -224,18 +226,13 @@ async def proxy_endpoint(
     if not target:
         return _error_response("invalid_target", "Missing 'target' field", 400)
 
-    # Free tier keys don't require amount
-    if amount is None:
-        key_info = validate_api_key(api_key)
-        if key_info and key_info.get("plan") == "free":
-            amount = 0.0
-        else:
-            return _error_response("invalid_amount", "Missing 'amount' field", 400)
-
-    try:
-        amount = float(amount)
-    except (TypeError, ValueError):
-        return _error_response("invalid_amount", f"Amount must be a number, got '{amount}'", 400)
+    # Amount is fixed for pro keys (PROOF_PRICE) and 0 for free keys
+    # The body "amount" field is ignored — kept for backward compat but not used
+    key_info = validate_api_key(api_key)
+    if key_info and key_info.get("plan") == "free":
+        amount = 0.0
+    else:
+        amount = PROOF_PRICE
 
     try:
         result = await execute_proxy(
@@ -464,6 +461,82 @@ async def free_signup(request: Request):
     }
 
 
+# --- POST /v1/credits/buy ---
+
+@app.post("/v1/credits/buy")
+async def buy_credits(
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None),
+):
+    """Buy prepaid credits by charging the saved card off-session."""
+    api_key = _get_api_key(authorization, x_api_key)
+    if not api_key:
+        return _error_response("invalid_api_key", "API key required", 401)
+
+    key_info = validate_api_key(api_key)
+    if not key_info:
+        return _error_response("invalid_api_key", "Invalid or inactive API key", 401)
+
+    if is_free_key(api_key):
+        return _error_response("invalid_plan", "Free tier keys cannot buy credits. Upgrade to Pro.", 403)
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    amount = body.get("amount", 10.00)
+    try:
+        amount = float(amount)
+    except (TypeError, ValueError):
+        return _error_response("invalid_amount", f"Amount must be a number, got '{amount}'", 400)
+
+    if amount < MIN_CREDIT_PURCHASE:
+        return _error_response("invalid_amount", f"Minimum credit purchase is {MIN_CREDIT_PURCHASE} EUR", 400)
+    if amount > MAX_CREDIT_PURCHASE:
+        return _error_response("invalid_amount", f"Maximum credit purchase is {MAX_CREDIT_PURCHASE} EUR", 400)
+
+    customer_id = key_info.get("stripe_customer_id", "")
+    if not customer_id:
+        return _error_response("no_payment_method", "No payment method linked. Use /v1/keys/setup first.", 400)
+
+    # Charge off-session via Stripe
+    from .payments import get_provider
+    provider = get_provider(api_key)
+    try:
+        charge_result = await provider.charge(
+            amount=amount,
+            currency="eur",
+            customer_id=customer_id,
+            description=f"ArkForge Trust Layer — {amount:.2f} EUR credits",
+            metadata={
+                "product": "trust_layer_credits",
+                "api_key_prefix": api_key[:12],
+            },
+        )
+    except Exception as e:
+        logger.error("Credit purchase payment failed: %s", e)
+        return _error_response("payment_failed", f"Payment failed: {str(e)}", 402)
+
+    if charge_result.status != "succeeded":
+        return _error_response("payment_failed", f"Payment status: {charge_result.status}", 402)
+
+    # Add credits
+    new_balance = add_credits(api_key, amount, charge_result.transaction_id)
+    proofs_available = int(new_balance / PROOF_PRICE)
+
+    logger.info("Credits purchased: %.2f EUR for %s (pi=%s)", amount, api_key[:16], charge_result.transaction_id)
+
+    return {
+        "credits_added": amount,
+        "balance": new_balance,
+        "proofs_available": proofs_available,
+        "receipt_url": charge_result.receipt_url,
+        "transaction_id": charge_result.transaction_id,
+    }
+
+
 # --- POST /v1/webhooks/stripe ---
 
 @app.post("/v1/webhooks/stripe")
@@ -540,7 +613,9 @@ async def root():
         "docs": "https://github.com/ark-forge/trust-layer",
         "endpoints": {
             "proxy": "POST /v1/proxy",
+            "credits_buy": "POST /v1/credits/buy",
             "proof": "GET /v1/proof/{proof_id}",
+            "usage": "GET /v1/usage",
             "pubkey": "GET /v1/pubkey",
             "health": "GET /v1/health",
             "pricing": "GET /v1/pricing",
@@ -571,7 +646,13 @@ async def usage(
     api_key = _get_api_key(authorization, x_api_key)
     if not api_key:
         return _error_response("invalid_api_key", "API key required", 401)
-    return get_usage(api_key)
+    result = get_usage(api_key)
+    # Add credit balance for pro/test keys
+    if not is_free_key(api_key):
+        balance = get_balance(api_key)
+        result["credit_balance"] = balance
+        result["proofs_remaining"] = int(balance / PROOF_PRICE) if PROOF_PRICE > 0 else 0
+    return result
 
 
 # --- GET /v1/pricing ---
@@ -583,23 +664,18 @@ async def pricing():
             "free": {
                 "price": "0 EUR/month",
                 "limit": f"{FREE_TIER_MONTHLY_LIMIT} proofs/month",
-                "proofs": "public",
+                "witnesses": "3 (Ed25519, TSA, Archive.org)",
                 "setup": f"{TRUST_LAYER_BASE_URL}/v1/keys/free-signup",
                 "credit_card_required": False,
             },
             "pro": {
-                "price": "pay-per-proof",
+                "proof_price": f"{PROOF_PRICE} EUR",
+                "credits": f"prepaid (min {MIN_CREDIT_PURCHASE} EUR, max {MAX_CREDIT_PURCHASE} EUR)",
                 "limit": f"{RATE_LIMIT_PER_KEY_PER_DAY} proofs/day",
-                "proofs": "public",
+                "witnesses": "3 (Ed25519, TSA, Archive.org)",
                 "setup": f"{TRUST_LAYER_BASE_URL}/v1/keys/setup",
+                "buy_credits": f"{TRUST_LAYER_BASE_URL}/v1/credits/buy",
             },
-        },
-        "proxy": {
-            "description": "Pay any HTTPS API via proxy — charge, forward, prove",
-            "min_amount": MIN_AMOUNT,
-            "max_amount": MAX_AMOUNT,
-            "currencies": SUPPORTED_CURRENCIES,
-            "fee": "0% — you pay only the amount you specify",
         },
         "contact": "contact@arkforge.fr",
     }

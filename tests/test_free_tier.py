@@ -60,8 +60,10 @@ async def test_free_tier_skips_stripe(free_api_key):
 
 
 @pytest.mark.asyncio
-async def test_free_tier_no_stripe_call(free_api_key):
-    """Ensure get_provider is never called for free tier."""
+async def test_free_tier_no_credit_debit(free_api_key):
+    """Ensure credits are not debited for free tier."""
+    from trust_layer.credits import get_balance
+
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.json.return_value = {"result": "ok"}
@@ -72,10 +74,7 @@ async def test_free_tier_no_stripe_call(free_api_key):
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=None)
 
-    mock_get_provider = MagicMock()
-
-    with patch("trust_layer.proxy.get_provider", mock_get_provider), \
-         patch("httpx.AsyncClient", return_value=mock_client), \
+    with patch("httpx.AsyncClient", return_value=mock_client), \
          patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
 
         await execute_proxy(
@@ -87,7 +86,8 @@ async def test_free_tier_no_stripe_call(free_api_key):
             api_key=free_api_key,
         )
 
-    mock_get_provider.assert_not_called()
+    # Free tier should not have any credit balance changes
+    assert get_balance(free_api_key) == 0.0
 
 
 @pytest.mark.asyncio
@@ -175,7 +175,7 @@ def test_free_tier_template_greys_out_stripe():
 
 
 def test_pro_tier_template_shows_stripe():
-    """Pro tier proof page should show Stripe witness in green."""
+    """Legacy pro tier proof page should show Stripe witness in green."""
     proof = {
         "proof_id": "prf_test_pro",
         "timestamp": "2026-02-27T15:00:00Z",
@@ -193,3 +193,22 @@ def test_pro_tier_template_shows_stripe():
     assert "not applicable (free tier)" not in html
     # Payment verified text
     assert "Payment verified independently by Stripe" in html
+
+
+def test_prepaid_credit_template():
+    """Prepaid credit proof page should show credit witness in green."""
+    proof = {
+        "proof_id": "prf_test_prepaid",
+        "timestamp": "2026-02-27T15:00:00Z",
+        "hashes": {"chain": "sha256:abc", "request": "sha256:def", "response": "sha256:ghi"},
+        "parties": {"buyer_fingerprint": "sha256:buyer", "seller": "example.com"},
+        "payment": {"provider": "prepaid_credit", "transaction_id": "crd_test", "amount": 0.10, "currency": "EUR", "status": "succeeded", "receipt_url": None},
+        "timestamp_authority": {"status": "verified"},
+        "verification_url": "https://test.arkforge.fr/v1/proof/prf_test_prepaid",
+    }
+
+    html = render_proof_page(proof, integrity_verified=True)
+
+    assert "Prepaid credits" in html
+    assert "deducted from prepaid balance" in html
+    assert "not applicable (free tier)" not in html

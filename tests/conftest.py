@@ -57,6 +57,11 @@ def _isolate_data(tmp_path, monkeypatch):
     monkeypatch.setattr(proxy_mod, "ARKFORGE_PUBLIC_KEY", test_pubkey)
     monkeypatch.setattr(proxy_mod, "BACKGROUND_TASKS_LOG", tmp_path / "data" / "background_tasks_log.jsonl")
 
+    # Patch credits module
+    import trust_layer.credits as credits_mod
+    monkeypatch.setattr(credits_mod, "API_KEYS_FILE", tmp_path / "data" / "api_keys.json")
+    monkeypatch.setattr(credits_mod, "CREDIT_TRANSACTIONS_LOG", tmp_path / "data" / "credit_transactions.jsonl")
+
     import trust_layer.app as app_mod
     monkeypatch.setattr(app_mod, "TRUST_LAYER_BASE_URL", "https://test.arkforge.fr")
     monkeypatch.setattr(app_mod, "ARKFORGE_PUBLIC_KEY", test_pubkey)

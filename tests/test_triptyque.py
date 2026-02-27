@@ -6,7 +6,8 @@ from unittest.mock import patch, AsyncMock, MagicMock
 from trust_layer.proxy import _inject_digital_stamp, _submit_archive_org, execute_proxy
 from trust_layer.proofs import verify_proof_integrity, store_proof, load_proof, get_public_proof
 from trust_layer.templates import _esc, render_proof_page
-from trust_layer.payments.base import ChargeResult
+from trust_layer.credits import add_credits
+from trust_layer.config import PROOF_PRICE
 
 
 # --- Helpers ---
@@ -29,12 +30,12 @@ def _make_proof_record(proof_id="prf_20260225_120000_abc123"):
             "agent_version": None,
         },
         "payment": {
-            "provider": "stripe",
-            "transaction_id": "pi_test_triptyque",
-            "amount": 0.50,
+            "provider": "prepaid_credit",
+            "transaction_id": "crd_test_triptyque",
+            "amount": PROOF_PRICE,
             "currency": "eur",
             "status": "succeeded",
-            "receipt_url": "https://pay.stripe.com/receipts/test",
+            "receipt_url": None,
         },
         "timestamp": "2026-02-25T12:00:00Z",
         "timestamp_authority": {"status": "submitted", "provider": "freetsa.org", "tsr_url": f"https://test.arkforge.fr/v1/proof/{proof_id}/tsr"},
@@ -42,56 +43,25 @@ def _make_proof_record(proof_id="prf_20260225_120000_abc123"):
     }
 
 
-def _mock_full_proxy():
-    """Return context managers for a full proxy mock (payment + service OK)."""
-    mock_charge = ChargeResult(
-        provider="stripe",
-        transaction_id="pi_test_triptyque",
-        amount=0.50,
-        currency="eur",
-        status="succeeded",
-        receipt_url="https://pay.stripe.com/receipts/test",
-    )
-    mock_provider = AsyncMock()
-    mock_provider.charge.return_value = mock_charge
-
+def _mock_http_client(response_body=None, status_code=200, headers=None):
+    """Return a mock HTTP client."""
     mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"result": "scan_complete", "score": 85}
-    mock_response.headers = {}
+    mock_response.status_code = status_code
+    mock_response.json.return_value = response_body or {"result": "scan_complete", "score": 85}
+    mock_response.headers = headers or {}
 
     mock_client = AsyncMock()
     mock_client.post.return_value = mock_response
+    mock_client.get.return_value = mock_response
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=None)
 
-    return mock_provider, mock_client
+    return mock_client
 
 
-def _mock_error_proxy():
-    """Return context managers for a proxy mock where service returns 500."""
-    mock_charge = ChargeResult(
-        provider="stripe",
-        transaction_id="pi_test_err",
-        amount=0.50,
-        currency="eur",
-        status="succeeded",
-        receipt_url=None,
-    )
-    mock_provider = AsyncMock()
-    mock_provider.charge.return_value = mock_charge
-
-    mock_response = MagicMock()
-    mock_response.status_code = 500
-    mock_response.json.return_value = {"error": "internal server error"}
-    mock_response.headers = {}
-
-    mock_client = AsyncMock()
-    mock_client.post.return_value = mock_response
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
-
-    return mock_provider, mock_client
+def _mock_error_http_client():
+    """Return a mock HTTP client that returns 500."""
+    return _mock_http_client({"error": "internal server error"}, status_code=500)
 
 
 # ============================================================
@@ -103,17 +73,17 @@ class TestLevel1DigitalStamp:
     @pytest.mark.asyncio
     async def test_attestation_present_in_success(self, test_api_key):
         """Attestation is injected into successful proxy responses."""
-        mock_provider, mock_client = _mock_full_proxy()
+        add_credits(test_api_key, 10.00, "pi_test_triptyque")
+        mock_client = _mock_http_client()
 
-        with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
-             patch("httpx.AsyncClient", return_value=mock_client), \
+        with patch("httpx.AsyncClient", return_value=mock_client), \
              patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
 
             result = await execute_proxy(
                 target="https://example.com/api/scan",
                 method="POST",
                 payload={"repo_url": "https://github.com/test/repo"},
-                amount=0.50,
+                amount=PROOF_PRICE,
                 currency="eur",
                 api_key=test_api_key,
             )
@@ -128,17 +98,17 @@ class TestLevel1DigitalStamp:
     @pytest.mark.asyncio
     async def test_no_attestation_on_error_upstream(self, test_api_key):
         """No attestation when upstream service returns 500."""
-        mock_provider, mock_client = _mock_error_proxy()
+        add_credits(test_api_key, 10.00, "pi_test_err")
+        mock_client = _mock_error_http_client()
 
-        with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
-             patch("httpx.AsyncClient", return_value=mock_client), \
+        with patch("httpx.AsyncClient", return_value=mock_client), \
              patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
 
             result = await execute_proxy(
                 target="https://example.com/api/fail",
                 method="POST",
                 payload={},
-                amount=0.50,
+                amount=PROOF_PRICE,
                 currency="eur",
                 api_key=test_api_key,
             )
@@ -151,12 +121,7 @@ class TestLevel1DigitalStamp:
     @pytest.mark.asyncio
     async def test_no_attestation_on_raw_text(self, test_api_key):
         """No attestation when response is _raw_text (non-JSON)."""
-        mock_charge = ChargeResult(
-            provider="stripe", transaction_id="pi_test_raw",
-            amount=0.50, currency="eur", status="succeeded", receipt_url=None,
-        )
-        mock_provider = AsyncMock()
-        mock_provider.charge.return_value = mock_charge
+        add_credits(test_api_key, 10.00, "pi_test_raw")
 
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -169,15 +134,14 @@ class TestLevel1DigitalStamp:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=None)
 
-        with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
-             patch("httpx.AsyncClient", return_value=mock_client), \
+        with patch("httpx.AsyncClient", return_value=mock_client), \
              patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
 
             result = await execute_proxy(
                 target="https://example.com/api/html",
                 method="POST",
                 payload={},
-                amount=0.50,
+                amount=PROOF_PRICE,
                 currency="eur",
                 api_key=test_api_key,
             )
@@ -189,17 +153,17 @@ class TestLevel1DigitalStamp:
     @pytest.mark.asyncio
     async def test_chain_hash_not_affected(self, test_api_key):
         """Chain hash integrity is NOT affected by attestation injection."""
-        mock_provider, mock_client = _mock_full_proxy()
+        add_credits(test_api_key, 10.00, "pi_test_chain")
+        mock_client = _mock_http_client()
 
-        with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
-             patch("httpx.AsyncClient", return_value=mock_client), \
+        with patch("httpx.AsyncClient", return_value=mock_client), \
              patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
 
             result = await execute_proxy(
                 target="https://example.com/api/scan",
                 method="POST",
                 payload={"test": True},
-                amount=0.50,
+                amount=PROOF_PRICE,
                 currency="eur",
                 api_key=test_api_key,
             )
@@ -255,16 +219,14 @@ class TestLevel2GhostStamp:
 
     def test_four_headers_on_success(self, client, test_api_key):
         """4 X-ArkForge-* headers present on successful proxy response."""
-        mock_provider, mock_client = _mock_full_proxy()
+        add_credits(test_api_key, 10.00, "pi_test_headers")
+        mock_client = _mock_http_client()
 
-        with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
-             patch("httpx.AsyncClient", return_value=mock_client), \
+        with patch("httpx.AsyncClient", return_value=mock_client), \
              patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
 
             resp = client.post("/v1/proxy", json={
                 "target": "https://example.com/api",
-                "amount": 0.50,
-                "currency": "eur",
                 "payload": {"test": True},
             }, headers={"X-Api-Key": test_api_key})
 
@@ -276,16 +238,14 @@ class TestLevel2GhostStamp:
 
     def test_verified_false_on_service_error(self, client, test_api_key):
         """X-ArkForge-Verified is false when upstream returns 500."""
-        mock_provider, mock_client = _mock_error_proxy()
+        add_credits(test_api_key, 10.00, "pi_test_err_header")
+        mock_client = _mock_error_http_client()
 
-        with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
-             patch("httpx.AsyncClient", return_value=mock_client), \
+        with patch("httpx.AsyncClient", return_value=mock_client), \
              patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
 
             resp = client.post("/v1/proxy", json={
                 "target": "https://example.com/api/fail",
-                "amount": 0.50,
-                "currency": "eur",
                 "payload": {},
             }, headers={"X-Api-Key": test_api_key})
 
@@ -293,16 +253,14 @@ class TestLevel2GhostStamp:
 
     def test_backward_compat_proof_header(self, client, test_api_key):
         """X-ArkForge-Proof header still present (backward compat)."""
-        mock_provider, mock_client = _mock_full_proxy()
+        add_credits(test_api_key, 10.00, "pi_test_compat")
+        mock_client = _mock_http_client()
 
-        with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
-             patch("httpx.AsyncClient", return_value=mock_client), \
+        with patch("httpx.AsyncClient", return_value=mock_client), \
              patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
 
             resp = client.post("/v1/proxy", json={
                 "target": "https://example.com/api",
-                "amount": 0.50,
-                "currency": "eur",
                 "payload": {},
             }, headers={"X-Api-Key": test_api_key})
 
@@ -364,11 +322,11 @@ class TestLevel3VisualStamp:
         proof["timestamp_authority"]["status"] = "verified"
         # We need integrity to pass — store raw data so verify_proof_integrity works
         from trust_layer.proofs import sha256_hex, canonical_json
-        req_data = {"target": "https://example.com", "method": "POST", "payload": {}, "amount": 0.5, "currency": "eur"}
+        req_data = {"target": "https://example.com", "method": "POST", "payload": {}, "amount": 0.1, "currency": "eur"}
         resp_data = {"result": "ok"}
         req_hash = sha256_hex(canonical_json(req_data))
         resp_hash = sha256_hex(canonical_json(resp_data))
-        chain_input = req_hash + resp_hash + "pi_test_triptyque" + "2026-02-25T12:00:00Z" + "buyer_hash_xyz" + "example.com"
+        chain_input = req_hash + resp_hash + "crd_test_triptyque" + "2026-02-25T12:00:00Z" + "buyer_hash_xyz" + "example.com"
         chain_hash = sha256_hex(chain_input)
         proof["hashes"] = {
             "request": f"sha256:{req_hash}",
@@ -387,8 +345,7 @@ class TestLevel3VisualStamp:
         pid = self._store_test_proof("prf_test_payment")
         resp = client.get(f"/v1/proof/{pid}", headers={"Accept": "text/html"})
         assert resp.status_code == 200
-        assert "0.5" in resp.text
-        assert "Stripe" in resp.text
+        assert "0.1" in resp.text
 
     def test_short_url_redirects(self, client):
         """GET /v/{proof_id} returns 302 redirect to full path."""
@@ -481,15 +438,15 @@ class TestArchiveOrgWitness:
     async def test_archive_org_called_in_execute_proxy(self, test_api_key):
         """_archive_org_background is fired during execute_proxy."""
         import asyncio
-        mock_provider, mock_client = _mock_full_proxy()
+        add_credits(test_api_key, 10.00, "pi_test_archive")
+        mock_client = _mock_http_client()
         archive_result = {
             "status": "submitted",
             "snapshot_url": "https://web.archive.org/web/20260225/https://test.arkforge.fr/v1/proof/prf_test",
             "submitted_at": "2026-02-25T12:00:00+00:00",
         }
 
-        with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
-             patch("httpx.AsyncClient", return_value=mock_client), \
+        with patch("httpx.AsyncClient", return_value=mock_client), \
              patch("trust_layer.proxy.submit_hash", return_value=None), \
              patch("trust_layer.proxy.send_proof_email"), \
              patch("trust_layer.proxy._submit_archive_org", return_value=archive_result):
@@ -498,7 +455,7 @@ class TestArchiveOrgWitness:
                 target="https://example.com/api/scan",
                 method="POST",
                 payload={"test": True},
-                amount=0.50,
+                amount=PROOF_PRICE,
                 currency="eur",
                 api_key=test_api_key,
             )
@@ -514,10 +471,10 @@ class TestArchiveOrgWitness:
     async def test_archive_org_failure_does_not_break_flow(self, test_api_key):
         """When _submit_archive_org returns None, flow continues without archive_org."""
         import asyncio
-        mock_provider, mock_client = _mock_full_proxy()
+        add_credits(test_api_key, 10.00, "pi_test_archive_fail")
+        mock_client = _mock_http_client()
 
-        with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
-             patch("httpx.AsyncClient", return_value=mock_client), \
+        with patch("httpx.AsyncClient", return_value=mock_client), \
              patch("trust_layer.proxy.submit_hash", return_value=None), \
              patch("trust_layer.proxy.send_proof_email"), \
              patch("trust_layer.proxy._submit_archive_org", return_value=None):
@@ -526,7 +483,7 @@ class TestArchiveOrgWitness:
                 target="https://example.com/api/scan",
                 method="POST",
                 payload={"test": True},
-                amount=0.50,
+                amount=PROOF_PRICE,
                 currency="eur",
                 api_key=test_api_key,
             )

@@ -15,6 +15,7 @@ from .config import (
     SUPPORTED_CURRENCIES,
     MIN_AMOUNT,
     MAX_AMOUNT,
+    PROOF_PRICE,
     PROXY_TIMEOUT_SECONDS,
     MAX_RESPONSE_STORE_BYTES,
     IDEMPOTENCY_DIR,
@@ -27,8 +28,8 @@ from .config import (
     get_signing_key,
 )
 from .keys import validate_api_key
-from .payments import get_provider
 from .payments.base import ChargeResult
+from .credits import get_balance, debit_credits, InsufficientCredits
 from .proofs import sha256_hex, generate_proof_id, generate_proof, store_proof
 from .persistence import load_json, save_json
 from .rate_limit import check_rate_limit
@@ -388,7 +389,7 @@ async def execute_proxy(
     if is_free:
         amount = 0.0
     else:
-        amount = validate_amount(amount)
+        amount = PROOF_PRICE  # Fixed price per proof for pro/test keys
 
     # 3. Check rate limit
     allowed, remaining = check_rate_limit(api_key)
@@ -407,6 +408,8 @@ async def execute_proxy(
     # 6. Charge via payment provider (skip for free tier)
     target_domain = urlparse(target).hostname or "unknown"
 
+    proof_id_for_debit = generate_proof_id()
+
     if is_free:
         charge_result = ChargeResult(
             provider="none",
@@ -417,29 +420,23 @@ async def execute_proxy(
             receipt_url=None,
         )
     else:
-        provider = get_provider(api_key)
-        customer_id = key_info.get("stripe_customer_id", "")
-        if not customer_id:
-            raise ProxyError("invalid_api_key", "No payment method linked to this API key", 400)
-
-        try:
-            charge_result: ChargeResult = await provider.charge(
-                amount=amount,
-                currency=currency,
-                customer_id=customer_id,
-                description=description or f"ArkForge proxy: {target_domain}",
-                metadata={
-                    "product": "trust_layer_proxy",
-                    "target_domain": target_domain,
-                    "api_key_prefix": api_key[:12],
-                },
+        # Prepaid credit deduction
+        balance = get_balance(api_key)
+        if balance < PROOF_PRICE:
+            raise ProxyError(
+                "insufficient_credits",
+                f"Insufficient credits ({balance:.2f} EUR). Buy credits at /v1/credits/buy",
+                402,
             )
-        except Exception as e:
-            logger.error("Payment failed: %s", e)
-            raise ProxyError("payment_failed", f"Payment failed: {str(e)}", 402)
-
-        if charge_result.status != "succeeded":
-            raise ProxyError("payment_failed", f"Payment status: {charge_result.status}", 402)
+        debit_id = debit_credits(api_key, PROOF_PRICE, proof_id_for_debit)
+        charge_result = ChargeResult(
+            provider="prepaid_credit",
+            transaction_id=debit_id,
+            amount=PROOF_PRICE,
+            currency="eur",
+            status="succeeded",
+            receipt_url=None,
+        )
 
     # Payment OK — from here, always return proof even on service error
     payment_data = {
@@ -489,7 +486,7 @@ async def execute_proxy(
     # 9. Generate proof (with party identities)
     buyer_fingerprint = sha256_hex(api_key)
     seller = target_domain
-    proof_id = generate_proof_id()
+    proof_id = proof_id_for_debit
     proof = generate_proof(request_data, response_data, payment_data, timestamp, buyer_fingerprint, seller,
                            agent_identity=agent_identity, agent_version=agent_version,
                            upstream_timestamp=upstream_timestamp)

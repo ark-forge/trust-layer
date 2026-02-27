@@ -84,14 +84,22 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
 
     # --- Witnesses ---
     is_free_tier = payment.get("provider") == "none" or payment.get("status") == "free_tier"
+    is_prepaid = payment.get("provider") == "prepaid_credit"
     if is_free_tier:
-        stripe_color = "#475569"
-        stripe_witness = "Stripe"
-        stripe_desc = "not applicable (free tier)"
+        payment_color = "#475569"
+        payment_witness = "Stripe"
+        payment_desc = "not applicable (free tier)"
+        payment_line = "Payment not required (free tier)"
+    elif is_prepaid:
+        payment_color = "#22c55e"
+        payment_witness = "Prepaid credits"
+        payment_desc = "deducted from prepaid balance"
+        payment_line = "Payment via prepaid credits"
     else:
-        stripe_color = "#22c55e"
-        stripe_witness = f'<a href="{receipt_url}" style="color:#38bdf8;text-decoration:none">Stripe</a>' if receipt_url else "Stripe"
-        stripe_desc = "confirms payment occurred"
+        payment_color = "#22c55e"
+        payment_witness = f'<a href="{receipt_url}" style="color:#38bdf8;text-decoration:none">Stripe</a>' if receipt_url else "Stripe"
+        payment_desc = "confirms payment occurred"
+        payment_line = "Payment verified independently by Stripe"
 
     ots_color = "#22c55e" if ots_status == "verified" else "#f59e0b"
     if ots_status == "verified":
@@ -190,8 +198,8 @@ details[open] summary::before{{content:"\u25bc "}}
     <div class="card">
         <h2>Why this proof can be trusted</h2>
         <div class="trust-point">
-            <div class="dot" style="background:{stripe_color}"></div>
-            <p>{"Payment not required (free tier)" if is_free_tier else "Payment verified independently by Stripe"}</p>
+            <div class="dot" style="background:{payment_color}"></div>
+            <p>{payment_line}</p>
         </div>
         <div class="trust-point">
             <div class="dot" style="background:#22c55e"></div>
@@ -211,9 +219,9 @@ details[open] summary::before{{content:"\u25bc "}}
     <div class="card">
         <h2>Independent verification sources</h2>
         <div class="witness">
-            <div class="dot" style="background:{stripe_color}"></div>
-            <span class="name">{stripe_witness}</span>
-            <span class="desc">\u2014 {stripe_desc}</span>
+            <div class="dot" style="background:{payment_color}"></div>
+            <span class="name">{payment_witness}</span>
+            <span class="desc">\u2014 {payment_desc}</span>
         </div>
         <div class="witness">
             <div class="dot" style="background:{ots_color}"></div>

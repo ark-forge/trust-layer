@@ -2,7 +2,7 @@
 
 Add verifiable execution to any API call.
 
-ArkForge is a certifying proxy that forwards requests to any HTTPS API and returns a tamper-proof cryptographic proof (SHA-256 hash chain + Ed25519 signature + RFC 3161 certified timestamp). The Pro plan adds Stripe payment as a 4th independent witness.
+ArkForge is a certifying proxy that forwards requests to any HTTPS API and returns a tamper-proof cryptographic proof (SHA-256 hash chain + Ed25519 signature + RFC 3161 certified timestamp). The Pro plan uses prepaid credits (0.10 EUR/proof) and adds Stripe as a 3rd independent witness.
 
 Every call becomes: **forwarded** → **proven** → **verifiable**.
 
@@ -16,14 +16,14 @@ With ArkForge:      Agent → ArkForge → API → Verifiable Proof
 ## Why use it?
 
 - Prove what your agent actually did
-- Attach payments to execution
+- Attach prepaid credits to execution
 - Create audit-ready API calls
 - Add trust without modifying existing services
 
 ## Features
 
 - **Proxy** — forwards requests to upstream APIs, meters usage, creates proof
-- **Payments** — Stripe off-session charges, test/live modes, webhook lifecycle
+- **Prepaid credits** — buy credits via Stripe Checkout, deducted per proof (0.10 EUR/proof)
 - **Proofs** — SHA-256 hash chain per call, publicly verifiable, anchored via RFC 3161 Timestamp Authority and archived on Archive.org
 - **Ed25519 signature** — every proof is signed by ArkForge's Ed25519 key, proving origin. Public key served at `GET /v1/pubkey`
 - **API keys** — `mcp_free_*` / `mcp_pro_*` / `mcp_test_*` prefixes auto-select plan and Stripe mode
@@ -67,6 +67,7 @@ pytest tests/ -v
 | `GET` | `/v1/proof/{proof_id}` | Retrieve and verify proof (JSON or HTML — see content negotiation) |
 | `GET` | `/v/{proof_id}` | Short URL — 302 redirect to `/v1/proof/{proof_id}` |
 | `GET` | `/v1/proof/{proof_id}/tsr` | Download RFC 3161 timestamp response file |
+| `POST` | `/v1/credits/buy` | Buy prepaid credits via Stripe Checkout (returns checkout URL) |
 | `GET` | `/v1/pubkey` | ArkForge's Ed25519 public key for signature verification |
 
 ## Core flow — POST /v1/proxy
@@ -74,8 +75,6 @@ pytest tests/ -v
 ```json
 {
   "target": "https://example.com/api/scan",
-  "amount": 0.50,
-  "currency": "eur",
   "method": "POST",
   "payload": {"repo_url": "https://github.com/owner/repo"},
   "description": "EU AI Act compliance scan"
@@ -93,7 +92,7 @@ These are stored in the proof and shadow profile. If the same API key sends a di
 
 **Response includes:**
 - `proof.spec_version` — proof format version (see [proof-spec](https://github.com/ark-forge/proof-spec))
-- `proof.payment` — Stripe transaction ID, amount, receipt URL
+- `proof.payment` — Stripe transaction ID, credit deduction, receipt URL
 - `proof.hashes` — SHA-256 of request, response, and chain
 - `proof.arkforge_signature` — Ed25519 signature of the chain hash (format: `ed25519:<base64url>`)
 - `proof.arkforge_pubkey` — ArkForge's Ed25519 public key used for signing
@@ -152,13 +151,12 @@ Badge colors:
 - **Orange** (`#f59e0b`) — integrity verified, timestamp pending
 - **Red** (`#ef4444`) — integrity check failed
 
-The proof page shows up to 4 independent witnesses:
-- **Stripe** — confirms payment occurred (Pro plan only; greyed out on Free tier)
+The proof page shows up to 3 independent witnesses:
 - **Ed25519 Signature** — proves ArkForge origin (green if signed, grey if not)
 - **RFC 3161 Timestamp** — certified by FreeTSA.org (green when verified, orange when pending)
 - **Archive.org** — public snapshot of the proof page on the Wayback Machine (green if snapshot exists, grey if not yet available)
 
-Free tier proofs have 3 witnesses (Ed25519, RFC 3161, Archive.org). Pro proofs add Stripe as a 4th witness.
+All proofs (Free and Pro) have 3 witnesses. Pro proofs additionally record the Stripe credit purchase receipt for audit.
 
 **Short URL:** `GET /v/{proof_id}` → 302 redirect to the full proof endpoint. Cacheable (24h).
 
@@ -236,7 +234,7 @@ Agent Client
     v
 Trust Layer (/v1/proxy)
     |--- 1. Validate API key + rate limit
-    |--- 2. Charge via Stripe (off-session)
+    |--- 2. Deduct 1 credit (Pro/Test) or check monthly quota (Free)
     |--- 3. Forward request to upstream API
     |--- 4. Hash request + response (SHA-256 chain)
     |--- 5. Store proof, return response immediately
@@ -250,7 +248,7 @@ Upstream API (any HTTPS endpoint)
 
 ## New client onboarding
 
-### 1. Save a card
+### 1. Save a card and get an API key
 
 ```bash
 curl -X POST https://arkforge.fr/trust/v1/keys/setup \
@@ -259,13 +257,21 @@ curl -X POST https://arkforge.fr/trust/v1/keys/setup \
 # Returns: {"checkout_url": "https://checkout.stripe.com/...", ...}
 ```
 
-Open `checkout_url` in a browser — enter a card. No charge yet.
+Open `checkout_url` in a browser — enter a card. No charge yet. Stripe webhook fires automatically and the Trust Layer creates an API key (`mcp_pro_...`) and emails it to the client. Free keys (`mcp_free_...`) are created without payment.
 
 For test mode, add `"mode": "test"` and use Stripe test card `4242 4242 4242 4242`.
 
-### 2. Receive API key
+### 2. Buy credits
 
-Stripe webhook fires automatically. The Trust Layer creates an API key (`mcp_pro_...`) and emails it to the client. Free keys (`mcp_free_...`) are created without payment.
+```bash
+curl -X POST https://arkforge.fr/trust/v1/credits/buy \
+  -H "X-Api-Key: mcp_pro_..." \
+  -H "Content-Type: application/json" \
+  -d '{"amount": 5.00}'
+# Returns: {"checkout_url": "https://checkout.stripe.com/...", "credits": 50, ...}
+```
+
+Complete payment in browser. Credits (0.10 EUR each) are added to the key automatically.
 
 ### 3. Use the proxy
 
@@ -277,21 +283,54 @@ curl -X POST https://arkforge.fr/trust/v1/proxy \
   -H "Content-Type: application/json" \
   -d '{
     "target": "https://arkforge.fr/api/v1/scan-repo",
-    "amount": 0.50,
-    "currency": "eur",
     "payload": {"repo_url": "https://github.com/owner/repo"}
   }'
 ```
 
+Each call deducts 1 credit. If the balance is 0, the call returns `402 Payment Required`.
+
+## Credits
+
+Pro and Test keys use prepaid credits. Each proof costs **0.10 EUR** (1 credit). Credits are bought in advance via Stripe Checkout and deducted automatically on each `/v1/proxy` call.
+
+### Buy credits
+
+```bash
+curl -X POST https://arkforge.fr/trust/v1/credits/buy \
+  -H "X-Api-Key: mcp_pro_..." \
+  -H "Content-Type: application/json" \
+  -d '{"amount": 5.00}'
+# Returns: {"checkout_url": "https://checkout.stripe.com/...", "credits": 50, ...}
+```
+
+Open `checkout_url` in a browser to complete payment. Credits are added to the key once Stripe confirms the payment (via webhook). Minimum purchase: 1.00 EUR (10 credits).
+
+### Check balance
+
+```bash
+curl https://arkforge.fr/trust/v1/usage \
+  -H "X-Api-Key: mcp_pro_..."
+# Returns: {..., "credit_balance": 47, ...}
+```
+
+### How credits work
+
+1. **Buy** — `POST /v1/credits/buy` with desired EUR amount. Stripe Checkout session is created.
+2. **Pay** — complete payment in browser. Webhook adds credits to the key.
+3. **Use** — each `POST /v1/proxy` call deducts 1 credit (0.10 EUR). If balance is 0, the call is rejected with `402 Payment Required`.
+4. **Top up** — buy more credits anytime. Credits never expire.
+
+Free keys (`mcp_free_*`) do not use credits — they have a monthly quota of 100 proofs at no cost.
+
 ## Plans and API key prefixes
 
-| Prefix | Plan | Stripe | Witnesses | Limits |
-|--------|------|--------|-----------|--------|
+| Prefix | Plan | Payment | Witnesses | Limits |
+|--------|------|---------|-----------|--------|
 | `mcp_free_*` | Free | No charge | 3 (Ed25519, RFC 3161, Archive.org) | 100 proofs/month |
-| `mcp_pro_*` | Pro | Pay-per-proof | 4 (+ Stripe receipt) | 100 proofs/day |
-| `mcp_test_*` | Test | Test mode | 4 (+ Stripe test) | 100 proofs/day |
+| `mcp_pro_*` | Pro | Prepaid credits (0.10 EUR/proof) | 3 (Ed25519, RFC 3161, Archive.org) | 100 proofs/day |
+| `mcp_test_*` | Test | Test credits (Stripe test mode) | 3 (Ed25519, RFC 3161, Archive.org) | 100 proofs/day |
 
-The proxy auto-selects the right Stripe keys, witnesses, and rate limits based on the API key prefix. Free tier skips Stripe entirely (no credit card required). Test mode uses Stripe test keys (card `4242 4242 4242 4242`).
+The proxy auto-selects the right plan, witnesses, and rate limits based on the API key prefix. Free tier skips Stripe entirely (no credit card required). Pro keys require a positive credit balance — buy credits via `POST /v1/credits/buy`. Test mode uses Stripe test keys (card `4242 4242 4242 4242`).
 
 ## Conformance testing
 

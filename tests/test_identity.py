@@ -8,7 +8,8 @@ from fastapi.testclient import TestClient
 
 from trust_layer.app import app
 from trust_layer.keys import create_api_key
-from trust_layer.payments.base import ChargeResult
+from trust_layer.credits import add_credits
+from trust_layer.config import PROOF_PRICE
 from trust_layer.proofs import generate_proof
 from trust_layer.proxy import execute_proxy, _update_agent_profile
 
@@ -20,19 +21,13 @@ def client():
 
 @pytest.fixture
 def api_key():
-    return create_api_key("cus_id_test", "ref_id_test", "id@test.com", test_mode=True)
+    key = create_api_key("cus_id_test", "ref_id_test", "id@test.com", test_mode=True)
+    add_credits(key, 10.00, "pi_id_setup")
+    return key
 
 
-def _mock_proxy_deps():
-    """Patch payment provider and HTTP client."""
-    mock_charge = ChargeResult(
-        provider="stripe", transaction_id="pi_id_test",
-        amount=0.50, currency="eur", status="succeeded",
-        receipt_url="https://pay.stripe.com/receipts/id_test",
-    )
-    mock_provider = AsyncMock()
-    mock_provider.charge.return_value = mock_charge
-
+def _mock_http_client():
+    """Patch HTTP client."""
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.json.return_value = {"result": "ok"}
@@ -43,7 +38,7 @@ def _mock_proxy_deps():
     mock_http.__aenter__ = AsyncMock(return_value=mock_http)
     mock_http.__aexit__ = AsyncMock(return_value=None)
 
-    return mock_provider, mock_http
+    return mock_http
 
 
 # --- 1. Proof with identity headers ---
@@ -177,15 +172,14 @@ def test_chain_hash_unchanged_with_identity():
 
 def test_proxy_with_identity_headers(client, api_key):
     """POST /v1/proxy with X-Agent-Identity → proof contains identity."""
-    mock_provider, mock_http = _mock_proxy_deps()
+    mock_http = _mock_http_client()
 
-    with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
-         patch("httpx.AsyncClient", return_value=mock_http), \
+    with patch("httpx.AsyncClient", return_value=mock_http), \
          patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
 
         r = client.post(
             "/v1/proxy",
-            json={"target": "https://example.com/api", "amount": 0.50, "payload": {}},
+            json={"target": "https://example.com/api", "payload": {}},
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "X-Agent-Identity": "integration-test-agent",
@@ -204,15 +198,14 @@ def test_proxy_with_identity_headers(client, api_key):
 
 def test_proof_endpoint_shows_identity(client, api_key):
     """GET /v1/proof/{id} → identity_consistent visible publicly."""
-    mock_provider, mock_http = _mock_proxy_deps()
+    mock_http = _mock_http_client()
 
-    with patch("trust_layer.proxy.get_provider", return_value=mock_provider), \
-         patch("httpx.AsyncClient", return_value=mock_http), \
+    with patch("httpx.AsyncClient", return_value=mock_http), \
          patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
 
         r = client.post(
             "/v1/proxy",
-            json={"target": "https://example.com/api", "amount": 0.50, "payload": {}},
+            json={"target": "https://example.com/api", "payload": {}},
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "X-Agent-Identity": "public-test-agent",

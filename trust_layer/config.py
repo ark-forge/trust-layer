@@ -50,6 +50,12 @@ MIN_AMOUNT = 0.50
 MAX_AMOUNT = 50.00
 PROXY_TIMEOUT_SECONDS = 120
 MAX_RESPONSE_STORE_BYTES = 1_000_000  # 1 MB
+
+# --- Prepaid credits ---
+PROOF_PRICE = 0.10                # EUR per proof (Pro/Test)
+MIN_CREDIT_PURCHASE = 1.00        # Min credit purchase (= 10 proofs)
+MAX_CREDIT_PURCHASE = 100.00      # Max credit purchase (= 1000 proofs)
+CREDIT_TRANSACTIONS_LOG = DATA_DIR / "credit_transactions.jsonl"
 RATE_LIMIT_PER_KEY_PER_DAY = 100
 FREE_TIER_MONTHLY_LIMIT = 100
 IDEMPOTENCY_TTL_HOURS = 24
