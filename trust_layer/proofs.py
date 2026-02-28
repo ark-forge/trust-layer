@@ -11,6 +11,7 @@ from .config import PROOFS_DIR
 from .persistence import save_json, load_json
 
 SPEC_VERSION = "1.1"
+SPEC_VERSION_RECEIPT = "2.0"
 
 
 def canonical_json(data: dict) -> str:
@@ -41,6 +42,8 @@ def generate_proof(
     agent_identity: Optional[str] = None,
     agent_version: Optional[str] = None,
     upstream_timestamp: Optional[str] = None,
+    receipt_content_hash: Optional[str] = None,
+    payment_evidence: Optional[dict] = None,
 ) -> dict:
     """Generate a proof with request/response/chain hashes + party identities."""
     request_hash = sha256_hex(canonical_json(request_data))
@@ -51,10 +54,15 @@ def generate_proof(
     chain_input = request_hash + response_hash + payment_intent_id + timestamp + buyer_fingerprint + seller
     if upstream_timestamp:
         chain_input += upstream_timestamp
+    if receipt_content_hash:
+        chain_input += receipt_content_hash
     chain_hash = sha256_hex(chain_input)
 
+    # Spec version: 2.0 if receipt evidence is included, 1.1 otherwise
+    spec_version = SPEC_VERSION_RECEIPT if receipt_content_hash else SPEC_VERSION
+
     result = {
-        "spec_version": SPEC_VERSION,
+        "spec_version": spec_version,
         "hashes": {
             "request": f"sha256:{request_hash}",
             "response": f"sha256:{response_hash}",
@@ -74,6 +82,8 @@ def generate_proof(
     }
     if upstream_timestamp:
         result["upstream_timestamp"] = upstream_timestamp
+    if payment_evidence:
+        result["payment_evidence"] = payment_evidence
     return result
 
 
@@ -116,6 +126,14 @@ def verify_proof_integrity(proof: dict) -> bool:
     if upstream_timestamp:
         chain_input += upstream_timestamp
 
+    # Receipt content hash (spec v2.0+)
+    pe = proof.get("payment_evidence") or {}
+    receipt_content_hash = pe.get("receipt_content_hash", "")
+    if receipt_content_hash:
+        # Strip "sha256:" prefix if present
+        receipt_content_hash = receipt_content_hash.replace("sha256:", "")
+        chain_input += receipt_content_hash
+
     computed_chain = sha256_hex(chain_input)
 
     return computed_chain == expected_chain
@@ -140,6 +158,7 @@ def get_public_proof(proof: dict) -> dict:
         "arkforge_signature": proof.get("arkforge_signature"),
         "arkforge_pubkey": proof.get("arkforge_pubkey"),
         "identity_consistent": proof.get("identity_consistent"),
+        "payment_evidence": proof.get("payment_evidence"),
         "views_count": proof.get("views_count", 0),
     }
     return result

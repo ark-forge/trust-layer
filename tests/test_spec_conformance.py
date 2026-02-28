@@ -1,7 +1,7 @@
-"""Conformance tests against ArkForge Proof Specification v1.
+"""Conformance tests against ArkForge Proof Specification v2.
 
-Reads test vectors from the proof-spec repo and validates that
-the Trust Layer implementation produces identical results.
+Reads test vectors from the local proof-spec repo (preferred) or GitHub,
+and validates that the Trust Layer implementation produces identical results.
 
 If this test fails, either the spec or the implementation has drifted.
 """
@@ -9,26 +9,29 @@ If this test fails, either the spec or the implementation has drifted.
 import json
 import hashlib
 import urllib.request
+from pathlib import Path
 
 import pytest
 
 from trust_layer.proofs import canonical_json, sha256_hex
 
-# Test vectors URL — pinned to main branch
-VECTORS_URL = "https://raw.githubusercontent.com/ark-forge/proof-spec/main/test-vectors.json"
+# Local proof-spec repo (preferred — always in sync)
+VECTORS_LOCAL = Path(__file__).parent.parent.parent / "proof-spec" / "test-vectors.json"
 
-# Fallback: local copy for offline testing
-VECTORS_LOCAL = None
+# Fallback: GitHub raw URL
+VECTORS_URL = "https://raw.githubusercontent.com/ark-forge/proof-spec/main/test-vectors.json"
 
 
 def _load_vectors():
-    """Load test vectors from GitHub, fall back to inline."""
+    """Load test vectors from local proof-spec repo, fall back to GitHub."""
+    if VECTORS_LOCAL.exists():
+        return json.loads(VECTORS_LOCAL.read_text())
     try:
         with urllib.request.urlopen(VECTORS_URL, timeout=10) as resp:
             return json.loads(resp.read())
     except Exception:
         pass
-    # Inline fallback (last known good)
+    # Inline fallback (last known good — minimal_transaction only)
     return {
         "vectors": [
             {
@@ -42,6 +45,8 @@ def _load_vectors():
                     "seller": "arkforge.fr",
                 },
                 "expected": {
+                    "canonical_request": "{\"repo_url\":\"https://github.com/example/app\"}",
+                    "canonical_response": "{\"files_scanned\":42,\"frameworks\":[\"openai\"]}",
                     "request_hash": "0987aa49eb45583406b66c77ea6f35498bd318b81040bec9c54ab439114abe42",
                     "response_hash": "bad7c7f7f632182e9d746c9a4a02aea5f526a6a76c5108c4a98a7c4823fdbef2",
                     "buyer_fingerprint": "7c8f263e06d5ce4681f750ad64ede882a4ebd87de60f9ae0e6b06f0300645a11",
@@ -111,6 +116,8 @@ def test_chain_hash(vector):
     )
     if inp.get("upstream_timestamp"):
         chain_input += inp["upstream_timestamp"]
+    if inp.get("receipt_content_hash"):
+        chain_input += inp["receipt_content_hash"]
     chain_hash = sha256_hex(chain_input)
 
     assert chain_hash == expected["chain_hash"], f"Chain hash mismatch for {vector['name']}"

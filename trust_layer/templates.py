@@ -54,6 +54,8 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
     arkforge_signature = proof.get("arkforge_signature")
     arkforge_pubkey = proof.get("arkforge_pubkey")
 
+    payment_evidence = proof.get("payment_evidence") or {}
+
     ots_status = ots.get("status", "unknown")
     seller = _esc(parties.get("seller", ""))
     agent_identity = parties.get("agent_identity")
@@ -117,6 +119,35 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
     has_signature = bool(arkforge_signature)
     sig_color = "#22c55e" if has_signature else "#475569"
     sig_label = "origin authenticated by Ed25519 digital signature" if has_signature else "signature not available"
+
+    # --- Payment evidence section (conditional) ---
+    payment_evidence_html = ""
+    if payment_evidence and payment_evidence.get("receipt_url"):
+        pe_status = payment_evidence.get("payment_verification", "unknown")
+        pe_color = "#22c55e" if pe_status == "fetched" else "#ef4444"
+        pe_label = f"Fetched from {_esc(payment_evidence.get('type', 'unknown')).capitalize()}" if pe_status == "fetched" else "Fetch failed"
+        pe_hash = _esc(payment_evidence.get("receipt_content_hash", ""))
+        pe_url = _esc(payment_evidence.get("receipt_url", ""))
+        pe_parsing = payment_evidence.get("parsing_status", "not_attempted")
+        pe_fields = payment_evidence.get("parsed_fields") or {}
+
+        pe_parsed_rows = ""
+        if pe_fields.get("amount") is not None:
+            currency_display = (pe_fields.get("currency") or "").upper()
+            pe_parsed_rows += f'<div class="row"><span class="label">Amount</span><span class="val">{_esc(str(pe_fields["amount"]))} {_esc(currency_display)}</span></div>'
+        if pe_fields.get("status"):
+            pe_parsed_rows += f'<div class="row"><span class="label">Status</span><span class="val">{_esc(pe_fields["status"])}</span></div>'
+        if pe_fields.get("date"):
+            pe_parsed_rows += f'<div class="row"><span class="label">Date</span><span class="val">{_esc(pe_fields["date"])}</span></div>'
+
+        payment_evidence_html = f"""
+    <div class="card">
+        <h2>External payment evidence</h2>
+        <div class="row"><span class="label">Verification</span><span class="val" style="color:{pe_color}">{pe_label}</span></div>
+        {"" if not pe_hash else f'<div class="row"><span class="label">Receipt hash</span><span class="val" style="font-family:monospace;font-size:0.75rem">{pe_hash}</span></div>'}
+{pe_parsed_rows}
+        {"" if not pe_url else f'<div class="row"><span class="label">Receipt</span><span class="val"><a href="{pe_url}" style="color:#38bdf8;text-decoration:none">View original receipt &#8599;</a></span></div>'}
+    </div>"""
 
     # --- Identity row (conditional) ---
     identity_row = ""
@@ -245,6 +276,9 @@ details[open] summary::before{{content:"\u25bc "}}
         </div>
     </div>
 
+    <!-- 5b. EXTERNAL PAYMENT EVIDENCE -->
+{payment_evidence_html}
+
     <!-- 6. STANDALONE TRUST STATEMENT -->
     <p class="standalone">You do not need to trust ArkForge to verify this proof.</p>
 
@@ -269,7 +303,8 @@ details[open] summary::before{{content:"\u25bc "}}
             {"" if not arkforge_signature else f'<div class="tech-row"><span class="tech-label">Signature</span><span class="tech-val">{_esc(arkforge_signature)}</span></div>'}
             {"" if not arkforge_pubkey else f'<div class="tech-row"><span class="tech-label">Public key</span><span class="tech-val">{_esc(arkforge_pubkey)}</span></div>'}
             {"" if not spec_version else f'<div class="tech-row"><span class="tech-label">Spec version</span><span class="tech-val">{_esc(spec_version)}</span></div>'}
-            <div class="tech-row"><span class="tech-label">Algorithm</span><span class="tech-val">SHA-256(request + response + payment_id + timestamp + buyer + seller{" + upstream_timestamp" if upstream_timestamp else ""})</span></div>
+            {"" if not payment_evidence.get("receipt_content_hash") else f'<div class="tech-row"><span class="tech-label">Receipt hash</span><span class="tech-val">{_esc(payment_evidence.get("receipt_content_hash", ""))}</span></div>'}
+            <div class="tech-row"><span class="tech-label">Algorithm</span><span class="tech-val">SHA-256(request + response + payment_id + timestamp + buyer + seller{" + upstream_timestamp" if upstream_timestamp else ""}{" + receipt_hash" if payment_evidence.get("receipt_content_hash") else ""})</span></div>
         </div>
     </details>
 

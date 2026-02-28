@@ -49,6 +49,7 @@ Or open it in a browser — each proof has a public HTML verification page.
 - **Prepaid credits** — buy credits via Stripe Checkout, deducted per proof (0.10 EUR/proof)
 - **Proofs** — SHA-256 hash chain per call, publicly verifiable, anchored via RFC 3161 Timestamp Authority and archived on Archive.org
 - **Ed25519 signature** — every proof is signed by ArkForge's Ed25519 key, proving origin. Public key served at `GET /v1/pubkey`
+- **External receipt verification** — attach a Stripe receipt URL to any proxy call; ArkForge fetches, hashes, and parses it independently (see below)
 - **API keys** — `mcp_free_*` / `mcp_pro_*` / `mcp_test_*` prefixes auto-select plan and Stripe mode
 - **Free tier** — 100 proofs/month, no credit card required
 - **Agent identity** — optional `X-Agent-Identity` / `X-Agent-Version` headers, mismatch detection across calls
@@ -104,6 +105,23 @@ pytest tests/ -v
 }
 ```
 
+**Optional body field — external payment evidence:**
+
+```json
+{
+  "target": "https://provider.com/api/endpoint",
+  "payload": {"task": "analyze"},
+  "payment_evidence": {
+    "type": "stripe",
+    "receipt_url": "https://pay.stripe.com/receipts/payment/CAcaFwo..."
+  }
+}
+```
+
+When `payment_evidence.receipt_url` is provided, ArkForge fetches the receipt directly from the PSP, hashes the raw content (SHA-256), parses key fields (amount, currency, status, date), and includes the `receipt_content_hash` in the proof's chain hash. The receipt hash is the proof — it remains valid even if parsing fails.
+
+Currently supported PSPs: **Stripe** (`pay.stripe.com`, `receipt.stripe.com`). The parser architecture is extensible — adding a new PSP requires implementing a single `ReceiptParser` subclass.
+
 **Optional headers:**
 
 | Header | Description |
@@ -114,12 +132,13 @@ pytest tests/ -v
 These are stored in the proof and shadow profile. If the same API key sends a different identity, all subsequent proofs are flagged `identity_consistent: false`.
 
 **Response includes:**
-- `proof.spec_version` — proof format version (see [proof-spec](https://github.com/ark-forge/proof-spec))
+- `proof.spec_version` — proof format version (`1.1` without receipt, `2.0` with receipt — see [proof-spec](https://github.com/ark-forge/proof-spec))
 - `proof.payment` — Stripe transaction ID, credit deduction, receipt URL
 - `proof.hashes` — SHA-256 of request, response, and chain
 - `proof.arkforge_signature` — Ed25519 signature of the chain hash (format: `ed25519:<base64url>`)
 - `proof.arkforge_pubkey` — ArkForge's Ed25519 public key used for signing
 - `proof.upstream_timestamp` — upstream service's `Date` header (if present)
+- `proof.payment_evidence` — external receipt verification (if `payment_evidence` was provided in request, see below)
 - `proof.parties.agent_identity` / `agent_version` — declared identity (if provided)
 - `proof.identity_consistent` — `true` / `false` / `null` (consistency check)
 - `proof.verification_url` — public URL to verify the proof
@@ -183,12 +202,68 @@ All proofs (Free and Pro) have 3 witnesses. Pro proofs additionally record the S
 
 **Short URL:** `GET /v/{proof_id}` → 302 redirect to the full proof endpoint. Cacheable (24h).
 
+## External payment evidence
+
+When a client pays a provider directly (outside ArkForge), they can attach a `payment_evidence` object to the proxy call. ArkForge fetches the receipt from the PSP, hashes it, and binds it to the proof.
+
+### How it works
+
+1. Client includes `payment_evidence.receipt_url` in `POST /v1/proxy`
+2. ArkForge validates the URL (HTTPS only, whitelisted PSP domains)
+3. ArkForge fetches the receipt page directly from the PSP
+4. Raw content is hashed (SHA-256) — this is the immutable proof
+5. Key fields are parsed (amount, currency, status, date)
+6. `receipt_content_hash` is included in the chain hash formula
+7. The `payment_evidence` object is stored in the proof
+
+### Payment evidence in the proof
+
+```json
+{
+  "payment_evidence": {
+    "type": "stripe",
+    "receipt_url": "https://pay.stripe.com/receipts/payment/...",
+    "receipt_fetch_status": "fetched",
+    "receipt_content_hash": "sha256:a1b2c3...",
+    "parsing_status": "success",
+    "parsed_fields": {"amount": 49.99, "currency": "usd", "status": "paid", "date": "February 28, 2026"},
+    "payment_verification": "fetched"
+  }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `type` | PSP type (`stripe`, or as declared by client) |
+| `receipt_url` | Original receipt URL |
+| `receipt_fetch_status` | `fetched` (success) or `failed` (timeout, HTTP error, invalid domain) |
+| `receipt_content_hash` | SHA-256 of the raw receipt bytes — included in chain hash |
+| `parsing_status` | `success`, `failed`, or `not_attempted` |
+| `parsed_fields` | Extracted fields (amount, currency, status, date) — null if parsing failed |
+| `payment_verification` | `fetched` (independently verified) or `failed` |
+| `receipt_fetch_error` | Error details (only present on failure) |
+
+### Supported PSPs
+
+| PSP | Domains | Parser |
+|-----|---------|--------|
+| **Stripe** | `pay.stripe.com`, `receipt.stripe.com` | Regex-based (amount, currency, status, date) |
+
+The parser architecture is extensible. Adding a new PSP requires subclassing `ReceiptParser` and calling `register_parser()` — no changes to the proxy, proof, or API code.
+
+### Security
+
+- **SSRF protection** — only whitelisted PSP domains are fetched (whitelist auto-built from registered parsers)
+- **HTTPS only** — HTTP URLs are rejected
+- **Size limit** — max 500 KB response, max 3 redirects, 10s timeout
+- **Hash immutability** — the `receipt_content_hash` is in the chain hash formula, so modifying the receipt after the fact breaks verification
+
 ## Chain hash algorithm
 
 The chain hash binds every element of a transaction into a single verifiable seal. The formula is public and deterministic — anyone can recompute it:
 
 ```
-chain_hash = SHA256(request_hash + response_hash + payment_intent_id + timestamp + buyer_fingerprint + seller [+ upstream_timestamp])
+chain_hash = SHA256(request_hash + response_hash + payment_intent_id + timestamp + buyer_fingerprint + seller [+ upstream_timestamp] [+ receipt_content_hash])
 ```
 
 Where:
@@ -199,10 +274,13 @@ Where:
 - `buyer_fingerprint` = SHA-256 of the API key
 - `seller` = target domain (e.g. `example.com`)
 - `upstream_timestamp` = upstream service's `Date` header (included **only** when present in the proof JSON)
+- `receipt_content_hash` = SHA-256 of the raw receipt bytes (included **only** when `payment_evidence.receipt_content_hash` is present — strip the `sha256:` prefix before concatenation)
 
 All values are concatenated as raw strings (no separator) before hashing. Canonical JSON uses `json.dumps(data, sort_keys=True, separators=(",", ":"))`.
 
-**Backward compatibility:** if `upstream_timestamp` is absent or null in the proof JSON, it is not included in the chain input. This preserves verification of proofs created before this field was introduced.
+**Spec versions:** proofs without `payment_evidence` use spec version `1.1`. Proofs with a `receipt_content_hash` use spec version `2.0`.
+
+**Backward compatibility:** optional fields (`upstream_timestamp`, `receipt_content_hash`) are only included in the chain input when present in the proof JSON. Older proofs (v1.1) verify with the same formula by omitting those fields.
 
 ## Digital signature
 
@@ -219,7 +297,7 @@ Every proof's chain hash is signed with ArkForge's Ed25519 private key. This pro
 ed25519:ZLlGE0eN0eTNUE9vaK1tStf6AuoFUWqJBvqx7QgxfEY
 ```
 
-**What the signature guarantees:** integrity of all fields covered by the chain hash (request, response, payment, timestamp, buyer, seller, upstream_timestamp if present).
+**What the signature guarantees:** integrity of all fields covered by the chain hash (request, response, payment, timestamp, buyer, seller, upstream_timestamp if present, receipt_content_hash if present).
 
 **What the signature does NOT cover:** `views_count`, `identity_consistent`, `archive_org`, and other informational/mutable metadata.
 
@@ -236,16 +314,17 @@ TIMESTAMP=$(echo -n "$PROOF" | jq -r '.timestamp')
 BUYER=$(echo -n "$PROOF" | jq -r '.parties.buyer_fingerprint')
 SELLER=$(echo -n "$PROOF" | jq -r '.parties.seller')
 UPSTREAM=$(echo -n "$PROOF" | jq -r '.upstream_timestamp // empty')
+RECEIPT_HASH=$(echo -n "$PROOF" | jq -r '.payment_evidence.receipt_content_hash // empty' | sed 's/sha256://')
 
 # 2. Recompute the chain hash
-COMPUTED=$(echo -n "${REQUEST_HASH}${RESPONSE_HASH}${PAYMENT_ID}${TIMESTAMP}${BUYER}${SELLER}${UPSTREAM}" | sha256sum | cut -d' ' -f1)
+COMPUTED=$(echo -n "${REQUEST_HASH}${RESPONSE_HASH}${PAYMENT_ID}${TIMESTAMP}${BUYER}${SELLER}${UPSTREAM}${RECEIPT_HASH}" | sha256sum | cut -d' ' -f1)
 
 # 3. Compare with the proof's chain hash
 EXPECTED=$(echo -n "$PROOF" | jq -r '.hashes.chain' | sed 's/sha256://')
 [ "$COMPUTED" = "$EXPECTED" ] && echo "VERIFIED" || echo "TAMPERED"
 ```
 
-If the chain hash matches, no field in the proof was altered after creation. For Pro proofs, the Stripe Payment Intent ID can be independently verified on Stripe's dashboard or API. For Free proofs, the payment_intent_id is `free_tier`.
+If the chain hash matches, no field in the proof was altered after creation. For Pro proofs, the Stripe Payment Intent ID can be independently verified on Stripe's dashboard or API. For Free proofs, the payment_intent_id is `free_tier`. For proofs with receipt evidence, the `receipt_content_hash` binds the external receipt to the proof — modifying the receipt after the fact invalidates the chain hash.
 
 To also verify the Ed25519 signature, use the public key from `GET /v1/pubkey` (or the value above) with any Ed25519 library. The signed message is the chain hash hex string.
 
@@ -258,10 +337,11 @@ Agent Client
 Trust Layer (/v1/proxy)
     |--- 1. Validate API key + rate limit
     |--- 2. Deduct 1 credit (Pro/Test) or check monthly quota (Free)
-    |--- 3. Forward request to upstream API
-    |--- 4. Hash request + response (SHA-256 chain)
-    |--- 5. Store proof, return response immediately
-    |--- 6. Background: RFC 3161 timestamp + Archive.org snapshot + email receipt
+    |--- 3. Fetch external receipt from PSP (if payment_evidence provided)
+    |--- 4. Forward request to upstream API
+    |--- 5. Hash request + response + receipt (SHA-256 chain)
+    |--- 6. Store proof, return response immediately
+    |--- 7. Background: RFC 3161 timestamp + Archive.org snapshot + email receipt
     |
     v
 Upstream API (any HTTPS endpoint)

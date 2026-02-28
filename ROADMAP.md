@@ -17,7 +17,7 @@ ArkForge works the same way:
 
 ArkForge doesn't take sides. The proof serves the truth.
 
-## Current state (v0.3)
+## Current state (v0.4)
 
 **What works today:**
 
@@ -28,13 +28,14 @@ ArkForge doesn't take sides. The proof serves the truth.
 - Archive.org snapshots (public proof persistence)
 - Stripe payment as witness (Pro plan — ArkForge processes payment directly)
 - Free tier with 3 witnesses (no credit card required)
+- **External receipt verification** — clients attach a Stripe receipt URL, ArkForge fetches, hashes, parses, and binds it to the proof (spec v2.0)
 - Open proof specification with test vectors ([ark-forge/proof-spec](https://github.com/ark-forge/proof-spec))
 
-**Current limitation:** ArkForge is both the proxy and the payment processor. Works for ArkForge's own services, but doesn't scale to third-party providers.
+**Unlocked by Phase 1:** Any client can now prove a payment made to a third-party provider. ArkForge is no longer limited to its own payment processing. Zero provider onboarding required.
 
 ---
 
-## Phase 1 — Receipt verification via public URL
+## Phase 1 — Receipt verification via public URL [IMPLEMENTED]
 
 **Goal:** Any client can call any API through ArkForge with a payment receipt. ArkForge fetches and verifies the receipt from the PSP. No provider onboarding required. Zero friction — one curl, nothing else.
 
@@ -54,22 +55,25 @@ The client sends a request with a `receipt_url` — a public URL hosted by the P
 ```
 
 ArkForge:
-1. **Fetches** the `receipt_url` directly from the PSP (Stripe, block explorer, etc.)
-2. **Hashes** the raw receipt content (SHA-256 — immutable snapshot, this is the proof)
-3. **Parses** key fields (amount, status, date, currency) — deterministic parser with LLM fallback (Haiku) if parsing fails
-4. Forwards the request to the target API
-5. Hashes the response
-6. Creates the proof: `receipt_content_hash` + `request_hash` + `response_hash` + timestamp + signature
+1. **Validates** the URL (HTTPS only, whitelisted PSP domains — SSRF protection)
+2. **Fetches** the `receipt_url` directly from the PSP (Stripe, block explorer, etc.)
+3. **Hashes** the raw receipt content (SHA-256 — immutable snapshot, this is the proof)
+4. **Parses** key fields (amount, status, date, currency) — deterministic regex parser
+5. Forwards the request to the target API
+6. Hashes the response
+7. Creates the proof: `receipt_content_hash` + `request_hash` + `response_hash` + timestamp + signature
 
 The receipt is fetched from an **independent third party** (the PSP), not from the client. ArkForge doesn't trust the client — it verifies at the source.
 
 ### Parsing resilience
 
-The raw HTML hash is always valid regardless of parsing success. Field extraction uses two layers:
-1. **Deterministic parser** (regex/BeautifulSoup) — fast, free, handles 99%+ of cases
-2. **LLM fallback** (Haiku) — activated only when the deterministic parser fails (~0.001$/call, negligible)
+The raw HTML hash is always valid regardless of parsing success. Field extraction uses:
+1. **Deterministic parser** (regex) — fast, free, handles standard Stripe receipt formats
+2. **LLM fallback** (Haiku) — planned for Phase 1+ when the deterministic parser fails
 
-Stripe rarely changes receipt formats (legal documents, not UI). Monitoring detects parsing failures in real-time.
+If parsing fails, `parsing_status: "failed"` but the `receipt_content_hash` remains valid and is included in the chain hash. The proof is still useful — the receipt content is cryptographically bound even without extracted fields.
+
+The parser architecture uses an abstract `ReceiptParser` base class with a registry. Adding a new PSP parser requires no changes to the core proxy or proof code.
 
 ### Evolution path: Stripe API (post-adoption)
 
@@ -223,8 +227,8 @@ ArkForge records, signs, and timestamps. It doesn't hold money, set prices, list
 
 | Spec version | Changes |
 |-------------|---------|
-| v1.1 (current) | Ed25519 signature, upstream_timestamp, free tier |
-| v2.0 (Phase 1) | `payment_evidence` object, `receipt_content_hash` in chain, `payment_verification` level (`fetched` / `declared`) |
+| v1.1 | Ed25519 signature, upstream_timestamp, free tier |
+| v2.0 (current) | `payment_evidence` object, `receipt_content_hash` in chain hash, `payment_verification` level (`fetched` / `failed`), extensible PSP parser architecture |
 | v2.1 (Phase 2) | `payment_verification: "witnessed"` level, Stripe Connect witness |
 | v3.0 (Phase 3) | Multi-PSP orchestrated payment witnesses |
 
