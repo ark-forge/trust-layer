@@ -38,6 +38,8 @@ from .templates import render_proof_page
 from .rate_limit import get_usage
 from .email_notify import send_welcome_email
 from .timestamps import submit_hash
+from .reputation import get_reputation, get_public_reputation
+from .disputes import create_dispute, get_agent_disputes
 
 logger = logging.getLogger("trust_layer.app")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
@@ -617,6 +619,9 @@ async def root():
             "proxy": "POST /v1/proxy",
             "credits_buy": "POST /v1/credits/buy",
             "proof": "GET /v1/proof/{proof_id}",
+            "reputation": "GET /v1/agent/{agent_id}/reputation",
+            "disputes": "POST /v1/disputes",
+            "agent_disputes": "GET /v1/agent/{agent_id}/disputes",
             "usage": "GET /v1/usage",
             "pubkey": "GET /v1/pubkey",
             "health": "GET /v1/health",
@@ -691,6 +696,80 @@ async def get_pubkey():
     if not ARKFORGE_PUBLIC_KEY:
         return _error_response("not_configured", "Signing key not configured", 503)
     return {"pubkey": ARKFORGE_PUBLIC_KEY, "algorithm": "Ed25519"}
+
+
+# --- GET /v1/agent/{agent_id}/reputation ---
+
+@app.get("/v1/agent/{agent_id}/reputation")
+async def agent_reputation(agent_id: str):
+    """Public reputation score for an agent. No auth required."""
+    rep = get_reputation(agent_id)
+    if rep is None:
+        return _error_response("not_found", f"Agent '{agent_id}' not found (no proofs)", 404)
+    return get_public_reputation(rep)
+
+
+# --- POST /v1/disputes ---
+
+@app.post("/v1/disputes")
+async def file_dispute(
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None),
+):
+    """File a dispute against a proof. Resolved instantly."""
+    api_key = _get_api_key(authorization, x_api_key)
+    if not api_key:
+        return _error_response("invalid_api_key", "API key required", 401)
+
+    key_info = validate_api_key(api_key)
+    if not key_info:
+        return _error_response("invalid_api_key", "Invalid or inactive API key", 401)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return _error_response("invalid_request", "Invalid JSON body", 400)
+
+    proof_id = body.get("proof_id", "")
+    reason = body.get("reason", "")
+
+    if not proof_id:
+        return _error_response("invalid_request", "proof_id is required", 400)
+    if not reason or not reason.strip():
+        return _error_response("invalid_request", "reason is required", 400)
+
+    result = create_dispute(api_key, proof_id, reason)
+
+    if "error" in result:
+        return _error_response(result["error"], result["message"], result["status"])
+
+    return JSONResponse(status_code=201, content={
+        "dispute_id": result["dispute_id"],
+        "proof_id": result["proof_id"],
+        "status": result["status"],
+        "resolution_details": result["resolution_details"],
+        "impact": _dispute_impact_message(result),
+        "created_at": result["created_at"],
+    })
+
+
+def _dispute_impact_message(dispute: dict) -> str:
+    """Human-readable impact description."""
+    status = dispute["status"]
+    if status == "UPHELD":
+        return f"{dispute['contestant_role'].title()} wins. Proof corrected. Loser +1 lost_dispute."
+    elif status == "DENIED":
+        return f"Dispute denied. Contestant +1 lost_dispute."
+    return "No impact."
+
+
+# --- GET /v1/agent/{agent_id}/disputes ---
+
+@app.get("/v1/agent/{agent_id}/disputes")
+async def agent_disputes(agent_id: str):
+    """Public dispute history for an agent. No auth required."""
+    return get_agent_disputes(agent_id)
 
 
 # --- Main ---

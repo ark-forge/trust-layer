@@ -93,6 +93,9 @@ pytest tests/ -v
 | `GET` | `/v1/proof/{proof_id}/tsr` | Download RFC 3161 timestamp response file |
 | `POST` | `/v1/credits/buy` | Buy prepaid credits via Stripe Checkout (returns checkout URL) |
 | `GET` | `/v1/pubkey` | ArkForge's Ed25519 public key for signature verification |
+| `GET` | `/v1/agent/{agent_id}/reputation` | Public reputation score (0-100) for an agent |
+| `POST` | `/v1/disputes` | File a dispute against a proof (authenticated) |
+| `GET` | `/v1/agent/{agent_id}/disputes` | Public dispute history for an agent |
 
 ## Core flow — POST /v1/proxy
 
@@ -327,6 +330,68 @@ EXPECTED=$(echo -n "$PROOF" | jq -r '.hashes.chain' | sed 's/sha256://')
 If the chain hash matches, no field in the proof was altered after creation. For Pro proofs, the Stripe Payment Intent ID can be independently verified on Stripe's dashboard or API. For Free proofs, the payment_intent_id is `free_tier`. For proofs with receipt evidence, the `receipt_content_hash` binds the external receipt to the proof — modifying the receipt after the fact invalidates the chain hash.
 
 To also verify the Ed25519 signature, use the public key from `GET /v1/pubkey` (or the value above) with any Ed25519 library. The signed message is the chain hash hex string.
+
+## Reputation Score
+
+Every agent gets a deterministic reputation score (0-100) based on their proof history. No ML, no reviews — only factual data from proofs.
+
+### Five dimensions
+
+| Dimension | Weight | Description |
+|-----------|--------|-------------|
+| Volume | 0.25 | Total number of proofs (cap: 100) |
+| Regularity | 0.20 | Active days in last 30 days (cap: 20) |
+| Seniority | 0.20 | Days since first proof (cap: 30) |
+| Diversity | 0.15 | Unique services used (cap: 10) |
+| Success | 0.20 | Proof success rate |
+
+### Penalties
+
+- **Identity mismatch** — 15% reduction if the agent changed its declared identity
+- **Lost disputes** — 5% per lost dispute (floor: 50% of computed score)
+
+### Get an agent's reputation
+
+```bash
+curl https://arkforge.fr/trust/v1/agent/{agent_id}/reputation
+# → {"reputation_score": 63, "scores": {...}, "signature": "ed25519:...", ...}
+```
+
+The score is signed with ArkForge's Ed25519 key — verifiable via `/v1/pubkey`. Cached for 1 hour, recomputed lazily.
+
+## Dispute System
+
+Agents can contest proofs. Disputes are resolved instantly and automatically — no human intervention.
+
+### How it works
+
+1. An agent files a dispute: `POST /v1/disputes` with `proof_id` and `reason`
+2. ArkForge re-checks the recorded upstream status code
+3. Result: **UPHELD** (proof corrected), **DENIED** (contestant penalized), or **REJECTED** (not a party)
+
+### Anti-abuse
+
+- Losing a dispute costs -5% reputation score
+- 1-hour cooldown between disputes
+- Max 5 open disputes per agent
+- 7-day dispute window after proof creation
+
+### File a dispute
+
+```bash
+curl -X POST https://arkforge.fr/trust/v1/disputes \
+  -H "X-Api-Key: mcp_pro_..." \
+  -H "Content-Type: application/json" \
+  -d '{"proof_id": "prf_...", "reason": "Service returned 500 but proof says succeeded"}'
+# → {"dispute_id": "disp_...", "status": "UPHELD", ...}
+```
+
+### View dispute history
+
+```bash
+curl https://arkforge.fr/trust/v1/agent/{agent_id}/disputes
+# → {"disputes_filed": 5, "disputes_won": 3, "disputes_lost": 2, "recent_disputes": [...]}
+```
 
 ## Architecture
 

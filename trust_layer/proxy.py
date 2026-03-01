@@ -322,6 +322,14 @@ def _update_agent_profile(api_key: str, amount: float, currency: str, target_dom
         services.append(target_domain)
     profile["services_used"] = services
     profile["last_transaction"] = datetime.now(timezone.utc).isoformat()
+    # Rolling 30-day activity index — avoids O(N) proof scan for active_days_30d
+    from datetime import timedelta
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    cutoff_date = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
+    dates = profile.get("proof_dates_30d", [])
+    if today not in dates:
+        dates.append(today)
+    profile["proof_dates_30d"] = [d for d in dates if d >= cutoff_date]
     # Track declared identity — detect mismatches (same key, different identity)
     if agent_identity:
         existing = profile.get("declared_identity")
@@ -330,7 +338,23 @@ def _update_agent_profile(api_key: str, amount: float, currency: str, target_dom
         profile["declared_identity"] = agent_identity
     if agent_version:
         profile["declared_version"] = agent_version
+    # Store buyer fingerprint for reputation/dispute lookups
+    fingerprint = sha256_hex(api_key)
+    profile["buyer_fingerprint"] = fingerprint
     save_json(path, profile)
+    # Maintain fingerprint→key_prefix index (O(1) lookup for reputation/disputes)
+    _update_fingerprint_index(fingerprint, key_prefix)
+
+
+_FINGERPRINT_INDEX_PATH = AGENTS_DIR / "_fingerprint_index.json"
+
+
+def _update_fingerprint_index(fingerprint: str, key_prefix: str):
+    """Maintain fingerprint → key_prefix mapping for reputation/dispute lookups."""
+    index = load_json(_FINGERPRINT_INDEX_PATH, {})
+    if index.get(fingerprint) != key_prefix:
+        index[fingerprint] = key_prefix
+        save_json(_FINGERPRINT_INDEX_PATH, index)
 
 
 def _update_service_profile(target_domain: str, response_time_ms: float, succeeded: bool):
@@ -542,6 +566,10 @@ async def execute_proxy(
         "timestamp_authority": {"status": "submitted", "provider": "freetsa.org", "tsr_url": f"{TRUST_LAYER_BASE_URL}/v1/proof/{proof_id}/tsr"},
         "identity_consistent": identity_consistent,
     }
+    # Store upstream status for dispute resolution
+    proof_record["transaction_success"] = service_succeeded
+    if service_status_code is not None:
+        proof_record["upstream_status_code"] = service_status_code
     if upstream_timestamp:
         proof_record["upstream_timestamp"] = upstream_timestamp
     if payment_evidence_record:
