@@ -160,5 +160,9 @@ def get_public_proof(proof: dict) -> dict:
         "identity_consistent": proof.get("identity_consistent"),
         "payment_evidence": proof.get("payment_evidence"),
         "views_count": proof.get("views_count", 0),
+        "transaction_success": proof.get("transaction_success"),
+        "upstream_status_code": proof.get("upstream_status_code"),
+        "disputed": proof.get("disputed"),
+        "dispute_id": proof.get("dispute_id"),
     }
     return result

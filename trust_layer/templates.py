@@ -55,6 +55,10 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
     arkforge_pubkey = proof.get("arkforge_pubkey")
 
     payment_evidence = proof.get("payment_evidence") or {}
+    transaction_success = proof.get("transaction_success")
+    upstream_status_code = proof.get("upstream_status_code")
+    is_disputed = proof.get("disputed", False)
+    dispute_id = proof.get("dispute_id")
 
     ots_status = ots.get("status", "unknown")
     seller = _esc(parties.get("seller", ""))
@@ -149,6 +153,16 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
         {"" if not pe_url else f'<div class="row"><span class="label">Receipt</span><span class="val"><a href="{pe_url}" style="color:#38bdf8;text-decoration:none">View original receipt &#8599;</a></span></div>'}
     </div>"""
 
+    # --- Dispute alert (conditional) ---
+    dispute_html = ""
+    if is_disputed:
+        dispute_html = f"""
+    <div class="card" style="border:1px solid #f59e0b;background:#451a03">
+        <h2 style="color:#fbbf24">Disputed proof</h2>
+        <div class="row"><span class="label">Status</span><span class="val" style="color:#fbbf24">This proof has been disputed</span></div>
+        {"" if not dispute_id else f'<div class="row"><span class="label">Dispute ID</span><span class="val" style="font-family:monospace;font-size:0.8rem">{_esc(dispute_id)}</span></div>'}
+    </div>"""
+
     # --- Identity row (conditional) ---
     identity_row = ""
     if agent_identity:
@@ -226,6 +240,7 @@ details[open] summary::before{{content:"\u25bc "}}
 {identity_row}
         <div class="row"><span class="label">Payment</span><span class="val">{amount_display}</span></div>
         <div class="row"><span class="label">Execution</span><span class="val">{_esc(execution_status)}</span></div>
+        {"" if transaction_success is None else f'<div class="row"><span class="label">Upstream</span><span class="val" style="color:{"#22c55e" if transaction_success else "#ef4444"}">{"Success" if transaction_success else "Failed"}{f" (HTTP {upstream_status_code})" if upstream_status_code else ""}</span></div>'}
         <div class="row"><span class="label">Date</span><span class="val">{human_date}</span></div>
         <div class="row"><span class="label">Proof ID</span><span class="val">{proof_id}</span></div>
     </div>
@@ -275,6 +290,9 @@ details[open] summary::before{{content:"\u25bc "}}
             <span class="desc">\u2014 {_esc(archive_desc)}</span>
         </div>
     </div>
+
+    <!-- 5a. DISPUTE ALERT -->
+{dispute_html}
 
     <!-- 5b. EXTERNAL PAYMENT EVIDENCE -->
 {payment_evidence_html}
