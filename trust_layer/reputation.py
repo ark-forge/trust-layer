@@ -1,4 +1,9 @@
-"""Reputation Score — deterministic 0-100 score based on agent proof history."""
+"""Reputation Score — deterministic 0-100 score based on agent proof history.
+
+Score is computed from 5 dimensions: volume, regularity, seniority, diversity, success.
+Penalties apply for identity mismatches and lost disputes.
+Score is signed with Ed25519 for verifiable authenticity.
+"""
 
 import math
 from datetime import datetime, timezone
@@ -9,12 +14,12 @@ from .crypto import sign_proof
 from .persistence import load_json, save_json
 
 REPUTATION_CONFIG = {
-    # Scoring caps
+    # Scoring caps (low at launch to reward early adopters, raise as volume grows)
     "volume_cap": 100,
     "regularity_cap": 20,
     "seniority_cap_days": 30,
     "diversity_cap": 10,
-    # Weights
+    # Weights (total = 1.00)
     "w_volume": 0.25,
     "w_regularity": 0.20,
     "w_seniority": 0.20,
@@ -34,28 +39,56 @@ REPUTATION_CONFIG = {
     "leaderboard_min_proofs": 10,
 }
 
-# Directory for reputation cache files
 REPUTATION_DIR: Path = AGENTS_DIR.parent / "reputation"
+_FINGERPRINT_INDEX_PATH: Path = AGENTS_DIR / "_fingerprint_index.json"
 
 
-def _ensure_reputation_dir():
-    REPUTATION_DIR.mkdir(parents=True, exist_ok=True)
+# ---------------------------------------------------------------------------
+# Agent profile resolution (fingerprint → key_prefix → profile)
+# ---------------------------------------------------------------------------
 
+def resolve_agent_profile(agent_id: str) -> tuple[Path | None, dict | None]:
+    """Resolve an agent fingerprint to its profile.
 
-def _cache_path(agent_id: str) -> Path:
-    """Return path for reputation cache file. agent_id = full fingerprint (64 hex)."""
-    prefix = agent_id.replace("sha256:", "")[:16]
-    return REPUTATION_DIR / f"{prefix}.json"
+    Agent profiles are stored by API key prefix (e.g. mcp_test_93f29be.json).
+    Public identifiers are fingerprints (SHA-256 of the API key).
+    The fingerprint index bridges the two.
 
-
-def _find_agent_profile(agent_id: str) -> dict | None:
-    """Find agent profile by fingerprint. Returns profile dict or None."""
+    Returns (path, profile) or (None, None) if agent unknown.
+    """
     clean_id = agent_id.replace("sha256:", "")
-    prefix = clean_id[:16]
-    path = AGENTS_DIR / f"{prefix}.json"
-    if path.exists():
-        return load_json(path, {})
-    return None
+    index = load_json(_FINGERPRINT_INDEX_PATH, {})
+    key_prefix = index.get(clean_id)
+    if not key_prefix:
+        return None, None
+    path = AGENTS_DIR / f"{key_prefix}.json"
+    if not path.exists():
+        return None, None
+    return path, load_json(path, {})
+
+
+# ---------------------------------------------------------------------------
+# Score computation
+# ---------------------------------------------------------------------------
+
+def _sub_score(value: float, cap: float) -> float:
+    """Compute a sub-score: linear 0-100 capped at `cap`."""
+    if cap <= 0:
+        return 0.0
+    return min(100.0, (value / cap) * 100.0)
+
+
+def _parse_timestamp(ts: str | None) -> datetime | None:
+    """Parse an ISO timestamp, returning None on failure."""
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(ts)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (ValueError, TypeError):
+        return None
 
 
 def compute_reputation(agent_id: str, profile: dict) -> dict:
@@ -63,40 +96,24 @@ def compute_reputation(agent_id: str, profile: dict) -> dict:
     cfg = REPUTATION_CONFIG
     now = datetime.now(timezone.utc)
 
-    # S_volume
     total_proofs = profile.get("transactions_total", 0)
-    s_volume = min(100, (total_proofs / cfg["volume_cap"]) * 100)
-
-    # S_regularity
-    active_days = len(profile.get("proof_dates_30d", []))
-    s_regularity = min(100, (active_days / cfg["regularity_cap"]) * 100)
-
-    # S_seniority
-    first_seen = profile.get("first_seen")
-    if first_seen:
-        try:
-            first_dt = datetime.fromisoformat(first_seen)
-            if first_dt.tzinfo is None:
-                first_dt = first_dt.replace(tzinfo=timezone.utc)
-            days_since = (now - first_dt).days
-        except (ValueError, TypeError):
-            days_since = 0
-    else:
-        days_since = 0
-    s_seniority = min(100, (days_since / cfg["seniority_cap_days"]) * 100)
-
-    # S_diversity
-    unique_services = len(profile.get("services_used", []))
-    s_diversity = min(100, (unique_services / cfg["diversity_cap"]) * 100)
-
-    # S_success
     succeeded = profile.get("transactions_succeeded", 0)
-    if total_proofs > 0:
-        s_success = (succeeded / total_proofs) * 100
-    else:
-        s_success = 0
+    active_days = len(profile.get("proof_dates_30d", []))
+    unique_services = profile.get("services_used", [])
+    lost_disputes = profile.get("lost_disputes", 0)
 
-    # Weighted score
+    # Seniority: days since first proof
+    first_dt = _parse_timestamp(profile.get("first_seen"))
+    days_since = (now - first_dt).days if first_dt else 0
+
+    # Five sub-scores (0-100 each)
+    s_volume = _sub_score(total_proofs, cfg["volume_cap"])
+    s_regularity = _sub_score(active_days, cfg["regularity_cap"])
+    s_seniority = _sub_score(days_since, cfg["seniority_cap_days"])
+    s_diversity = _sub_score(len(unique_services), cfg["diversity_cap"])
+    s_success = (succeeded / total_proofs * 100.0) if total_proofs > 0 else 0.0
+
+    # Weighted total
     score = (
         cfg["w_volume"] * s_volume
         + cfg["w_regularity"] * s_regularity
@@ -105,33 +122,32 @@ def compute_reputation(agent_id: str, profile: dict) -> dict:
         + cfg["w_success"] * s_success
     )
 
-    # Identity mismatch penalty
+    # Penalties (multiplicative)
     if profile.get("identity_mismatch"):
         score *= cfg["identity_penalty"]
-
-    # Dispute penalty
-    lost_disputes = profile.get("lost_disputes", 0)
     if lost_disputes > 0:
-        penalty = max(cfg["dispute_penalty_floor"], 1.0 - lost_disputes * cfg["dispute_penalty_per_loss"])
+        penalty = max(cfg["dispute_penalty_floor"],
+                      1.0 - lost_disputes * cfg["dispute_penalty_per_loss"])
         score *= penalty
 
     score = math.floor(score)
     computed_at = now.isoformat()
 
-    # Sign the score
-    sign_payload = f"{agent_id}:{score}:{computed_at}"
+    # Sign: "{agent_id}:{score}:{computed_at}" with Ed25519
+    canonical_id = agent_id if agent_id.startswith("sha256:") else f"sha256:{agent_id}"
+    sign_payload = f"{canonical_id}:{score}:{computed_at}"
     signing_key = get_signing_key()
     signature = sign_proof(signing_key, sign_payload) if signing_key else None
 
     return {
-        "agent_id": agent_id if agent_id.startswith("sha256:") else f"sha256:{agent_id}",
+        "agent_id": canonical_id,
         "declared_identity": profile.get("declared_identity"),
         "identity_mismatch": profile.get("identity_mismatch", False),
         "first_proof_at": profile.get("first_seen"),
         "last_proof_at": profile.get("last_transaction"),
         "total_proofs": total_proofs,
         "succeeded_proofs": succeeded,
-        "unique_services": profile.get("services_used", []),
+        "unique_services": list(unique_services),
         "active_days_30d": active_days,
         "amount_total_eur": profile.get("amount_total_eur", 0.0),
         "lost_disputes": lost_disputes,
@@ -148,33 +164,39 @@ def compute_reputation(agent_id: str, profile: dict) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Caching
+# ---------------------------------------------------------------------------
+
+def _ensure_reputation_dir():
+    REPUTATION_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _cache_path(agent_id: str) -> Path:
+    clean_id = agent_id.replace("sha256:", "")[:16]
+    return REPUTATION_DIR / f"{clean_id}.json"
+
+
 def get_reputation(agent_id: str) -> dict | None:
-    """Get reputation for an agent. Uses cache with TTL. Returns None if unknown agent."""
+    """Get reputation for an agent. Uses cache with TTL. Returns None if unknown."""
     _ensure_reputation_dir()
-    clean_id = agent_id.replace("sha256:", "")
 
     # Check cache
-    cache = _cache_path(clean_id)
+    cache = _cache_path(agent_id)
     if cache.exists():
         cached = load_json(cache)
-        computed_at = cached.get("computed_at", "")
-        if computed_at:
-            try:
-                cached_dt = datetime.fromisoformat(computed_at)
-                if cached_dt.tzinfo is None:
-                    cached_dt = cached_dt.replace(tzinfo=timezone.utc)
-                age = (datetime.now(timezone.utc) - cached_dt).total_seconds()
-                if age < REPUTATION_CONFIG["cache_ttl_seconds"]:
-                    return cached
-            except (ValueError, TypeError):
-                pass
+        cached_dt = _parse_timestamp(cached.get("computed_at"))
+        if cached_dt:
+            age = (datetime.now(timezone.utc) - cached_dt).total_seconds()
+            if age < REPUTATION_CONFIG["cache_ttl_seconds"]:
+                return cached
 
-    # Load agent profile
-    profile = _find_agent_profile(clean_id)
+    # Resolve agent profile via fingerprint index
+    _, profile = resolve_agent_profile(agent_id)
     if profile is None:
         return None
 
-    # Compute and cache
+    clean_id = agent_id.replace("sha256:", "")
     result = compute_reputation(f"sha256:{clean_id}", profile)
     save_json(cache, result)
     return result
@@ -183,11 +205,13 @@ def get_reputation(agent_id: str) -> dict | None:
 def invalidate_cache(agent_id: str):
     """Invalidate reputation cache for an agent."""
     _ensure_reputation_dir()
-    clean_id = agent_id.replace("sha256:", "")
-    cache = _cache_path(clean_id)
-    if cache.exists():
-        cache.unlink(missing_ok=True)
+    cache = _cache_path(agent_id)
+    cache.unlink(missing_ok=True)
 
+
+# ---------------------------------------------------------------------------
+# Public-safe response (strips sensitive fields)
+# ---------------------------------------------------------------------------
 
 def get_public_reputation(rep: dict) -> dict:
     """Return public-safe reputation data (no amount, no service list)."""

@@ -1,194 +1,174 @@
-"""Dispute System — automatic resolution of proof contestations."""
+"""Dispute System — automatic resolution of proof contestations.
+
+Rules:
+- Only parties to a proof (buyer or seller) can file a dispute.
+- Resolution is instant and deterministic: re-check upstream_status_code.
+- Losing a dispute costs -5% reputation (floor 50%).
+- Anti-abuse: 1h cooldown between disputes, 7-day window, one dispute per proof.
+- Sellers are services (domains), not agents — they don't have reputation profiles.
+"""
 
 import hashlib
 import secrets
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from pathlib import Path
 
-from .config import AGENTS_DIR
 from .persistence import load_json, save_json
 from .proofs import load_proof, store_proof
-from .reputation import REPUTATION_CONFIG, invalidate_cache
+from .reputation import REPUTATION_CONFIG, invalidate_cache, resolve_agent_profile
 
-# Directory for dispute files
-DISPUTES_DIR: Path = AGENTS_DIR.parent / "disputes"
+DISPUTES_DIR: Path = Path(__file__).parent.parent / "data" / "disputes"
 
 
 def _ensure_disputes_dir():
     DISPUTES_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _generate_dispute_id() -> str:
-    return f"disp_{secrets.token_hex(4)}"
+# ---------------------------------------------------------------------------
+# Resolution logic (pure function, no side effects)
+# ---------------------------------------------------------------------------
 
+def resolve_dispute(
+    proof: dict, contestant_fingerprint: str, dispute_type: str,
+) -> tuple[str, str, bool]:
+    """Resolve a dispute from proof data alone.
 
-def _get_buyer_fingerprint(api_key: str) -> str:
-    """SHA-256 of API key = buyer fingerprint."""
-    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
-
-
-def _load_agent_profile(agent_id: str) -> tuple[Path, dict]:
-    """Load agent profile by fingerprint. Returns (path, profile)."""
-    clean_id = agent_id.replace("sha256:", "")
-    prefix = clean_id[:16]
-    path = AGENTS_DIR / f"{prefix}.json"
-    return path, load_json(path, {})
-
-
-def _save_agent_profile(path: Path, profile: dict):
-    save_json(path, profile)
-
-
-def _get_open_disputes_count(agent_id: str) -> int:
-    """Count open disputes filed by this agent."""
-    _ensure_disputes_dir()
-    count = 0
-    clean_id = agent_id.replace("sha256:", "")
-    for f in DISPUTES_DIR.glob("disp_*.json"):
-        d = load_json(f, {})
-        contestant = d.get("contestant_id", "").replace("sha256:", "")
-        if contestant == clean_id and d.get("status") in ("PENDING",):
-            count += 1
-    return count
-
-
-def _get_last_dispute_time(agent_id: str) -> datetime | None:
-    """Find the most recent dispute timestamp for an agent."""
-    _ensure_disputes_dir()
-    clean_id = agent_id.replace("sha256:", "")
-    latest = None
-    for f in DISPUTES_DIR.glob("disp_*.json"):
-        d = load_json(f, {})
-        contestant = d.get("contestant_id", "").replace("sha256:", "")
-        if contestant == clean_id:
-            created = d.get("created_at", "")
-            if created:
-                try:
-                    dt = datetime.fromisoformat(created)
-                    if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=timezone.utc)
-                    if latest is None or dt > latest:
-                        latest = dt
-                except (ValueError, TypeError):
-                    pass
-    return latest
-
-
-def _check_already_disputed(proof_id: str) -> bool:
-    """Check if a proof has already been disputed."""
-    _ensure_disputes_dir()
-    for f in DISPUTES_DIR.glob("disp_*.json"):
-        d = load_json(f, {})
-        if d.get("proof_id") == proof_id:
-            return True
-    return False
-
-
-def resolve_dispute(proof: dict, contestant_id: str, contestant_role: str, dispute_type: str) -> tuple[str, str, bool]:
-    """Resolve a dispute. Returns (status, details, proof_corrected).
-
-    status: UPHELD, DENIED, REJECTED
+    Returns (status, details, proof_corrected):
+        UPHELD  — contestant is right, proof will be corrected
+        DENIED  — proof data contradicts the claim
+        REJECTED — contestant is not a party to this proof
     """
     buyer = proof.get("parties", {}).get("buyer_fingerprint", "")
     seller = proof.get("parties", {}).get("seller", "")
 
-    clean_contestant = contestant_id.replace("sha256:", "")
-
-    # Check contestant is a party
-    if clean_contestant != buyer and clean_contestant != seller:
+    if contestant_fingerprint != buyer and contestant_fingerprint != seller:
         return "REJECTED", "Contestant is not a party to this proof", False
 
-    recorded_status = proof.get("upstream_status_code")
-    if recorded_status is None:
-        return "DENIED", "Proof does not contain upstream status code; cannot verify", False
+    status_code = proof.get("upstream_status_code")
+    if status_code is None:
+        return "DENIED", "Proof lacks upstream_status_code; cannot verify", False
 
     if dispute_type == "buyer_contests_success":
-        if recorded_status >= 400:
-            return "UPHELD", f"upstream_status_code={recorded_status} confirms failure", True
-        else:
-            return "DENIED", f"upstream_status_code={recorded_status} contradicts claim", False
-    elif dispute_type == "seller_contests_failure":
-        if recorded_status < 400:
-            return "UPHELD", f"upstream_status_code={recorded_status} confirms success", True
-        else:
-            return "DENIED", f"upstream_status_code={recorded_status} contradicts claim", False
+        if status_code >= 400:
+            return "UPHELD", f"upstream_status_code={status_code} confirms failure", True
+        return "DENIED", f"upstream_status_code={status_code} contradicts claim", False
+
+    if dispute_type == "seller_contests_failure":
+        if status_code < 400:
+            return "UPHELD", f"upstream_status_code={status_code} confirms success", True
+        return "DENIED", f"upstream_status_code={status_code} contradicts claim", False
 
     return "DENIED", "Unknown dispute type", False
 
 
+# ---------------------------------------------------------------------------
+# Dispute creation (validation → resolution → consequences)
+# ---------------------------------------------------------------------------
+
 def create_dispute(api_key: str, proof_id: str, reason: str) -> dict:
-    """Create and resolve a dispute. Returns dispute record or error dict."""
+    """Create and instantly resolve a dispute.
+
+    Returns dispute record on success, or {"error": ..., "status": ...} on failure.
+    """
     _ensure_disputes_dir()
     cfg = REPUTATION_CONFIG
     now = datetime.now(timezone.utc)
 
-    contestant_id = f"sha256:{_get_buyer_fingerprint(api_key)}"
+    contestant_fp = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
 
-    # Validate reason
+    # --- Validation ---
+
     if not reason or not reason.strip():
         return {"error": "reason_required", "message": "Reason cannot be empty", "status": 400}
 
-    # Load proof
     proof = load_proof(proof_id)
     if proof is None:
         return {"error": "proof_not_found", "message": f"Proof '{proof_id}' not found", "status": 404}
 
-    # Check contestant is a party to the proof
-    buyer = proof.get("parties", {}).get("buyer_fingerprint", "")
-    seller = proof.get("parties", {}).get("seller", "")
-    clean_contestant = contestant_id.replace("sha256:", "")
+    # Already disputed? (O(1) check via proof field, no file scan)
+    if proof.get("disputed"):
+        return {"error": "already_disputed", "message": "This proof has already been disputed", "status": 409}
 
-    if clean_contestant != buyer and clean_contestant != seller:
+    # Contestant must be a party
+    buyer_fp = proof.get("parties", {}).get("buyer_fingerprint", "")
+    seller_domain = proof.get("parties", {}).get("seller", "")
+    if contestant_fp != buyer_fp and contestant_fp != seller_domain:
         return {"error": "not_party", "message": "You are not a party to this proof", "status": 403}
 
-    # Check dispute window (7 days)
+    # Dispute window (7 days from proof creation)
     proof_ts = proof.get("timestamp", "")
     if proof_ts:
         try:
             proof_dt = datetime.fromisoformat(proof_ts.replace("Z", "+00:00"))
             if (now - proof_dt).days > cfg["dispute_window_days"]:
-                return {"error": "window_expired", "message": f"Dispute window expired (>{cfg['dispute_window_days']} days)", "status": 409}
+                return {
+                    "error": "window_expired",
+                    "message": f"Dispute window expired (>{cfg['dispute_window_days']} days)",
+                    "status": 409,
+                }
         except (ValueError, TypeError):
             pass
 
-    # Check already disputed
-    if _check_already_disputed(proof_id):
-        return {"error": "already_disputed", "message": "This proof has already been disputed", "status": 409}
+    # Cooldown (O(1) check via agent profile, no file scan)
+    profile_path, profile = resolve_agent_profile(f"sha256:{contestant_fp}")
+    if profile:
+        last_dispute = profile.get("last_dispute_at")
+        if last_dispute:
+            try:
+                last_dt = datetime.fromisoformat(last_dispute)
+                if last_dt.tzinfo is None:
+                    last_dt = last_dt.replace(tzinfo=timezone.utc)
+                elapsed = (now - last_dt).total_seconds()
+                if elapsed < cfg["dispute_cooldown_seconds"]:
+                    remaining = int(cfg["dispute_cooldown_seconds"] - elapsed)
+                    return {
+                        "error": "cooldown",
+                        "message": f"Cooldown active ({remaining}s remaining)",
+                        "status": 429,
+                    }
+            except (ValueError, TypeError):
+                pass
 
-    # Check cooldown
-    last_time = _get_last_dispute_time(contestant_id)
-    if last_time:
-        elapsed = (now - last_time).total_seconds()
-        if elapsed < cfg["dispute_cooldown_seconds"]:
-            return {"error": "cooldown", "message": f"Cooldown active ({int(cfg['dispute_cooldown_seconds'] - elapsed)}s remaining)", "status": 429}
-
-    # Check max open disputes
-    open_count = _get_open_disputes_count(contestant_id)
-    if open_count >= cfg["max_open_disputes_per_agent"]:
-        return {"error": "too_many_disputes", "message": f"Max {cfg['max_open_disputes_per_agent']} open disputes", "status": 429}
-
-    # Check proof has upstream_status_code (proofs created before dispute system don't)
+    # Legacy proofs without upstream_status_code can't be disputed
     if proof.get("upstream_status_code") is None:
-        return {"error": "legacy_proof", "message": "This proof predates the dispute system and lacks verification data (no upstream_status_code)", "status": 422}
+        return {
+            "error": "legacy_proof",
+            "message": "This proof predates the dispute system and lacks verification data",
+            "status": 422,
+        }
 
-    # Determine contestant role and dispute type
-    if clean_contestant == buyer:
+    # Determine dispute type — contestant can only contest the current status
+    tx_success = proof.get("transaction_success", True)
+    if contestant_fp == buyer_fp:
         contestant_role = "buyer"
-        transaction_success = proof.get("transaction_success", True)
-        dispute_type = "buyer_contests_success" if transaction_success else "seller_contests_failure"
+        if not tx_success:
+            return {
+                "error": "nothing_to_contest",
+                "message": "Transaction already marked as failed",
+                "status": 400,
+            }
+        dispute_type = "buyer_contests_success"
     else:
         contestant_role = "seller"
-        transaction_success = proof.get("transaction_success", True)
-        dispute_type = "seller_contests_failure" if not transaction_success else "buyer_contests_success"
+        if tx_success:
+            return {
+                "error": "nothing_to_contest",
+                "message": "Transaction already marked as successful",
+                "status": 400,
+            }
+        dispute_type = "seller_contests_failure"
 
-    # Resolve instantly
-    resolution, details, proof_corrected = resolve_dispute(proof, contestant_id, contestant_role, dispute_type)
+    # --- Resolution (instant, deterministic) ---
 
-    dispute_id = _generate_dispute_id()
+    resolution, details, proof_corrected = resolve_dispute(
+        proof, contestant_fp, dispute_type,
+    )
+
+    dispute_id = f"disp_{secrets.token_hex(4)}"
     dispute_record = {
         "dispute_id": dispute_id,
         "proof_id": proof_id,
-        "contestant_id": contestant_id,
+        "contestant_id": f"sha256:{contestant_fp}",
         "contestant_role": contestant_role,
         "type": dispute_type,
         "reason": reason,
@@ -198,70 +178,81 @@ def create_dispute(api_key: str, proof_id: str, reason: str) -> dict:
         "resolved_at": now.isoformat(),
         "proof_corrected": proof_corrected,
     }
-
-    # Save dispute
     save_json(DISPUTES_DIR / f"{dispute_id}.json", dispute_record)
 
-    # Apply consequences
-    if resolution == "UPHELD":
-        # Correct the proof
-        if proof_corrected:
-            current_success = proof.get("transaction_success", True)
-            proof["transaction_success"] = not current_success
-            store_proof(proof_id, proof)
+    # --- Consequences ---
 
-        # Loser = the other party
-        if contestant_role == "buyer":
-            loser_id = f"sha256:{seller}"
-        else:
-            loser_id = contestant_id
+    # Mark proof as disputed (prevents duplicate disputes, O(1) check)
+    proof["disputed"] = True
+    proof["dispute_id"] = dispute_id
 
-        _increment_lost_disputes(loser_id)
-        invalidate_cache(contestant_id)
-        invalidate_cache(loser_id)
+    if resolution == "UPHELD" and proof_corrected:
+        # Flip the transaction status
+        proof["transaction_success"] = not tx_success
+        # Loser is the other party.
+        # If buyer won → loser is seller. Sellers are services (domains), not agents.
+        # They don't have reputation profiles, so no penalty to apply.
+        if contestant_role == "seller":
+            # Seller won → buyer loses
+            _increment_lost_disputes(f"sha256:{buyer_fp}")
+        # Invalidate both caches
+        invalidate_cache(f"sha256:{contestant_fp}")
+        invalidate_cache(f"sha256:{buyer_fp}")
 
     elif resolution == "DENIED":
-        # Contestant loses
-        _increment_lost_disputes(contestant_id)
-        invalidate_cache(contestant_id)
+        # Contestant filed a bad dispute → they pay the cost
+        _increment_lost_disputes(f"sha256:{contestant_fp}")
+        invalidate_cache(f"sha256:{contestant_fp}")
 
-    # Update contestant dispute stats
-    _update_dispute_stats(contestant_id, resolution)
+    # Save updated proof (disputed flag + optional status correction)
+    store_proof(proof_id, proof)
+
+    # Update contestant stats
+    _update_dispute_stats(f"sha256:{contestant_fp}", resolution, now)
 
     return dispute_record
 
 
+# ---------------------------------------------------------------------------
+# Agent profile updates (O(1), no file scans)
+# ---------------------------------------------------------------------------
+
 def _increment_lost_disputes(agent_id: str):
     """Increment lost_disputes counter in agent profile."""
-    path, profile = _load_agent_profile(agent_id)
-    if profile:
+    path, profile = resolve_agent_profile(agent_id)
+    if path and profile:
         profile["lost_disputes"] = profile.get("lost_disputes", 0) + 1
-        _save_agent_profile(path, profile)
+        save_json(path, profile)
 
 
-def _update_dispute_stats(agent_id: str, resolution: str):
-    """Update disputes_filed, disputes_won, disputes_lost in agent profile."""
-    path, profile = _load_agent_profile(agent_id)
-    if profile:
+def _update_dispute_stats(agent_id: str, resolution: str, timestamp: datetime):
+    """Update dispute stats in agent profile."""
+    path, profile = resolve_agent_profile(agent_id)
+    if path and profile:
         profile["disputes_filed"] = profile.get("disputes_filed", 0) + 1
         if resolution == "UPHELD":
             profile["disputes_won"] = profile.get("disputes_won", 0) + 1
         elif resolution == "DENIED":
             profile["disputes_lost"] = profile.get("disputes_lost", 0) + 1
-        _save_agent_profile(path, profile)
+        profile["last_dispute_at"] = timestamp.isoformat()
+        save_json(path, profile)
 
+
+# ---------------------------------------------------------------------------
+# Public dispute history
+# ---------------------------------------------------------------------------
 
 def get_agent_disputes(agent_id: str) -> dict:
-    """Get dispute summary for an agent."""
+    """Get dispute summary for an agent (public, no reason text exposed)."""
     _ensure_disputes_dir()
     clean_id = agent_id.replace("sha256:", "")
 
-    path, profile = _load_agent_profile(agent_id)
+    _, profile = resolve_agent_profile(agent_id)
     disputes_filed = profile.get("disputes_filed", 0) if profile else 0
     disputes_won = profile.get("disputes_won", 0) if profile else 0
     disputes_lost = profile.get("disputes_lost", 0) if profile else 0
 
-    # Collect recent disputes
+    # Collect recent disputes (sorted by file name = chronological)
     recent = []
     for f in sorted(DISPUTES_DIR.glob("disp_*.json"), reverse=True):
         d = load_json(f, {})

@@ -1,20 +1,31 @@
-"""Tests for reputation score computation and caching."""
+"""Tests for reputation score computation, caching, and agent resolution."""
 
+import hashlib
 import math
 from datetime import datetime, timezone, timedelta
-from pathlib import Path
 
 import pytest
 
 from trust_layer.reputation import (
     REPUTATION_CONFIG,
+    REPUTATION_DIR,
+    _FINGERPRINT_INDEX_PATH,
     compute_reputation,
     get_reputation,
     invalidate_cache,
     get_public_reputation,
-    REPUTATION_DIR,
+    resolve_agent_profile,
 )
 from trust_layer.persistence import save_json
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+API_KEY = "mcp_test_" + "a" * 48
+KEY_PREFIX = API_KEY[:16]
+FINGERPRINT = hashlib.sha256(API_KEY.encode()).hexdigest()
 
 
 def _make_profile(
@@ -34,11 +45,37 @@ def _make_profile(
         "proof_dates_30d": dates,
         "identity_mismatch": identity_mismatch,
         "lost_disputes": lost_disputes,
+        "buyer_fingerprint": FINGERPRINT,
     }
 
 
+def _setup_agent(tmp_path, monkeypatch, profile=None, fingerprint=FINGERPRINT, key_prefix=KEY_PREFIX):
+    """Create agent profile + fingerprint index in tmp dirs (matching production layout)."""
+    import trust_layer.reputation as rep_mod
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir(exist_ok=True)
+    rep_dir = tmp_path / "reputation"
+    rep_dir.mkdir(exist_ok=True)
+    index_path = agents_dir / "_fingerprint_index.json"
+
+    monkeypatch.setattr(rep_mod, "AGENTS_DIR", agents_dir)
+    monkeypatch.setattr(rep_mod, "REPUTATION_DIR", rep_dir)
+    monkeypatch.setattr(rep_mod, "_FINGERPRINT_INDEX_PATH", index_path)
+
+    if profile is not None:
+        # Save profile by key_prefix (like production)
+        save_json(agents_dir / f"{key_prefix}.json", profile)
+        # Save fingerprint index (like production)
+        save_json(index_path, {fingerprint: key_prefix})
+
+    return agents_dir, rep_dir, index_path
+
+
+# ---------------------------------------------------------------------------
+# Score computation (pure logic, no I/O)
+# ---------------------------------------------------------------------------
+
 class TestComputeReputation:
-    """Unit tests for the score formula."""
 
     def test_empty_profile(self):
         profile = _make_profile(total=0, succeeded=0, services=[], days_ago=0, active_days=0)
@@ -48,179 +85,180 @@ class TestComputeReputation:
         assert rep["scores"]["success"] == 0
 
     def test_full_score_agent(self):
-        """Agent with max stats should score close to 100."""
+        """Agent exceeding all caps → score 100."""
         profile = _make_profile(
-            total=200, succeeded=200, services=[f"s{i}.com" for i in range(15)],
+            total=200, succeeded=200,
+            services=[f"s{i}.com" for i in range(15)],
             days_ago=60, active_days=25,
         )
         rep = compute_reputation("sha256:abc123", profile)
         assert rep["reputation_score"] == 100
 
     def test_spec_example(self):
-        """Verify the example from the spec: 40 proofs, 15 active days, 20 days old, 4 services, 96% success."""
+        """Verify the spec example: 40 proofs, 15 active/30, 20 days, 4 services, 95% success."""
         profile = _make_profile(
-            total=40, succeeded=38, services=["a.com", "b.com", "c.com", "d.com"],
+            total=40, succeeded=38,
+            services=["a.com", "b.com", "c.com", "d.com"],
             days_ago=20, active_days=15,
         )
-        # Expected: floor(0.25*40 + 0.20*75 + 0.20*66.7 + 0.15*40 + 0.20*95) = floor(63.3)
         rep = compute_reputation("sha256:abc123", profile)
-        # 38/40 = 95%, not 96% as in spec text (spec rounds differently)
-        # floor(10 + 15 + 13.3 + 6 + 19.0) = floor(63.3) = 63
+        # 38/40 = 95%, floor(0.25*40 + 0.20*75 + 0.20*66.7 + 0.15*40 + 0.20*95) = 63
         assert rep["reputation_score"] == 63
 
     def test_volume_cap(self):
-        """Volume caps at 100 proofs."""
-        profile = _make_profile(total=50, succeeded=50, services=[], days_ago=0, active_days=0)
-        rep = compute_reputation("sha256:abc123", profile)
-        s_vol = rep["scores"]["volume"]
-        assert s_vol == 50.0
+        """Volume caps at VOLUME_CAP proofs."""
+        p50 = _make_profile(total=50, succeeded=50, services=[], days_ago=0, active_days=0)
+        assert compute_reputation("sha256:x", p50)["scores"]["volume"] == 50.0
 
-        profile2 = _make_profile(total=150, succeeded=150, services=[], days_ago=0, active_days=0)
-        rep2 = compute_reputation("sha256:abc123", profile2)
-        assert rep2["scores"]["volume"] == 100.0
+        p150 = _make_profile(total=150, succeeded=150, services=[], days_ago=0, active_days=0)
+        assert compute_reputation("sha256:x", p150)["scores"]["volume"] == 100.0
 
     def test_seniority_cap(self):
-        """Seniority caps at 30 days."""
+        """Seniority caps at SENIORITY_CAP days."""
         profile = _make_profile(total=0, succeeded=0, services=[], days_ago=60, active_days=0)
-        rep = compute_reputation("sha256:abc123", profile)
-        assert rep["scores"]["seniority"] == 100.0
+        assert compute_reputation("sha256:x", profile)["scores"]["seniority"] == 100.0
 
     def test_diversity_score(self):
-        """Diversity = unique services / 10 * 100."""
-        profile = _make_profile(total=5, succeeded=5, services=["a.com", "b.com", "c.com"], days_ago=1, active_days=1)
-        rep = compute_reputation("sha256:abc123", profile)
-        assert rep["scores"]["diversity"] == 30.0
+        profile = _make_profile(total=5, succeeded=5, services=["a.com", "b.com", "c.com"])
+        assert compute_reputation("sha256:x", profile)["scores"]["diversity"] == 30.0
 
     def test_identity_mismatch_penalty(self):
         """Identity mismatch applies 0.85 multiplier."""
-        profile_ok = _make_profile(total=100, succeeded=100, services=[f"s{i}.com" for i in range(10)], days_ago=30, active_days=20)
-        profile_bad = _make_profile(total=100, succeeded=100, services=[f"s{i}.com" for i in range(10)], days_ago=30, active_days=20, identity_mismatch=True)
+        base = _make_profile(total=100, succeeded=100, services=[f"s{i}.com" for i in range(10)], days_ago=30, active_days=20)
+        bad = _make_profile(total=100, succeeded=100, services=[f"s{i}.com" for i in range(10)], days_ago=30, active_days=20, identity_mismatch=True)
 
-        rep_ok = compute_reputation("sha256:abc123", profile_ok)
-        rep_bad = compute_reputation("sha256:abc123", profile_bad)
-
-        assert rep_bad["reputation_score"] == math.floor(rep_ok["reputation_score"] * 0.85)
+        score_ok = compute_reputation("sha256:x", base)["reputation_score"]
+        score_bad = compute_reputation("sha256:x", bad)["reputation_score"]
+        assert score_bad == math.floor(score_ok * 0.85)
 
     def test_dispute_penalty(self):
         """Lost disputes reduce score with floor at 50%."""
-        profile_base = _make_profile(total=100, succeeded=100, services=[f"s{i}.com" for i in range(10)], days_ago=30, active_days=20)
-        profile_1loss = _make_profile(total=100, succeeded=100, services=[f"s{i}.com" for i in range(10)], days_ago=30, active_days=20, lost_disputes=1)
-        profile_10loss = _make_profile(total=100, succeeded=100, services=[f"s{i}.com" for i in range(10)], days_ago=30, active_days=20, lost_disputes=10)
+        base = _make_profile(total=100, succeeded=100, services=[f"s{i}.com" for i in range(10)], days_ago=30, active_days=20)
+        p1 = _make_profile(total=100, succeeded=100, services=[f"s{i}.com" for i in range(10)], days_ago=30, active_days=20, lost_disputes=1)
+        p10 = _make_profile(total=100, succeeded=100, services=[f"s{i}.com" for i in range(10)], days_ago=30, active_days=20, lost_disputes=10)
 
-        rep_base = compute_reputation("sha256:abc123", profile_base)
-        rep_1 = compute_reputation("sha256:abc123", profile_1loss)
-        rep_10 = compute_reputation("sha256:abc123", profile_10loss)
+        s_base = compute_reputation("sha256:x", base)["reputation_score"]
+        s_1 = compute_reputation("sha256:x", p1)["reputation_score"]
+        s_10 = compute_reputation("sha256:x", p10)["reputation_score"]
 
-        assert rep_1["reputation_score"] == math.floor(rep_base["reputation_score"] * 0.95)
-        # 10 losses = 50% penalty (floor)
-        assert rep_10["reputation_score"] == math.floor(rep_base["reputation_score"] * 0.50)
+        assert s_1 == math.floor(s_base * 0.95)
+        assert s_10 == math.floor(s_base * 0.50)  # floor
 
     def test_signature_present(self):
-        """Score should be signed with Ed25519."""
         profile = _make_profile(total=10, succeeded=10)
         rep = compute_reputation("sha256:abc123", profile)
         assert rep["signature"] is not None
         assert rep["signature"].startswith("ed25519:")
 
-    def test_agent_id_prefix(self):
-        """Agent ID should always start with sha256:."""
+    def test_agent_id_normalized(self):
+        """Agent ID always starts with sha256: in output."""
         profile = _make_profile()
-        rep = compute_reputation("abc123", profile)
-        assert rep["agent_id"].startswith("sha256:")
-
-        rep2 = compute_reputation("sha256:abc123", profile)
-        assert rep2["agent_id"] == "sha256:abc123"
+        assert compute_reputation("abc123", profile)["agent_id"] == "sha256:abc123"
+        assert compute_reputation("sha256:abc123", profile)["agent_id"] == "sha256:abc123"
 
 
-class TestGetReputation:
-    """Integration tests for caching and lookup."""
+# ---------------------------------------------------------------------------
+# Agent resolution (fingerprint → key_prefix)
+# ---------------------------------------------------------------------------
 
-    def test_unknown_agent_returns_none(self, tmp_path, monkeypatch):
-        import trust_layer.reputation as rep_mod
-        monkeypatch.setattr(rep_mod, "AGENTS_DIR", tmp_path / "agents")
-        monkeypatch.setattr(rep_mod, "REPUTATION_DIR", tmp_path / "reputation")
-        (tmp_path / "agents").mkdir(exist_ok=True)
+class TestResolveAgentProfile:
 
-        result = get_reputation("sha256:0000000000000000")
-        assert result is None
+    def test_unknown_agent(self, tmp_path, monkeypatch):
+        _setup_agent(tmp_path, monkeypatch)
+        path, profile = resolve_agent_profile("sha256:0000000000000000")
+        assert path is None
+        assert profile is None
 
-    def test_known_agent_returns_score(self, tmp_path, monkeypatch):
+    def test_known_agent_via_index(self, tmp_path, monkeypatch):
+        """Profile stored by key_prefix, found via fingerprint index."""
+        prof = _make_profile(total=5, succeeded=5)
+        _setup_agent(tmp_path, monkeypatch, profile=prof)
+
+        path, profile = resolve_agent_profile(f"sha256:{FINGERPRINT}")
+        assert profile is not None
+        assert profile["transactions_total"] == 5
+        assert path.name == f"{KEY_PREFIX}.json"
+
+    def test_without_index_returns_none(self, tmp_path, monkeypatch):
+        """No index entry → agent not found (even if profile file exists)."""
         import trust_layer.reputation as rep_mod
         agents_dir = tmp_path / "agents"
         agents_dir.mkdir(exist_ok=True)
         monkeypatch.setattr(rep_mod, "AGENTS_DIR", agents_dir)
-        monkeypatch.setattr(rep_mod, "REPUTATION_DIR", tmp_path / "reputation")
+        monkeypatch.setattr(rep_mod, "_FINGERPRINT_INDEX_PATH", agents_dir / "_fingerprint_index.json")
 
-        agent_id = "a1b2c3d4e5f60000" + "0" * 48
-        profile = _make_profile(total=5, succeeded=5)
-        save_json(agents_dir / f"{agent_id[:16]}.json", profile)
+        # Profile exists but no index
+        save_json(agents_dir / f"{KEY_PREFIX}.json", _make_profile())
+        path, profile = resolve_agent_profile(f"sha256:{FINGERPRINT}")
+        assert profile is None
 
-        result = get_reputation(f"sha256:{agent_id}")
+
+# ---------------------------------------------------------------------------
+# Caching
+# ---------------------------------------------------------------------------
+
+class TestGetReputation:
+
+    def test_unknown_agent_returns_none(self, tmp_path, monkeypatch):
+        _setup_agent(tmp_path, monkeypatch)
+        assert get_reputation("sha256:0000000000000000") is None
+
+    def test_known_agent_returns_score(self, tmp_path, monkeypatch):
+        prof = _make_profile(total=5, succeeded=5)
+        _setup_agent(tmp_path, monkeypatch, profile=prof)
+
+        result = get_reputation(f"sha256:{FINGERPRINT}")
         assert result is not None
         assert result["reputation_score"] >= 0
         assert result["total_proofs"] == 5
 
     def test_cache_ttl(self, tmp_path, monkeypatch):
-        """Cached score should be returned within TTL."""
-        import trust_layer.reputation as rep_mod
-        agents_dir = tmp_path / "agents"
-        agents_dir.mkdir(exist_ok=True)
-        monkeypatch.setattr(rep_mod, "AGENTS_DIR", agents_dir)
-        monkeypatch.setattr(rep_mod, "REPUTATION_DIR", tmp_path / "reputation")
+        """Cached score returned within TTL even if profile changes."""
+        prof = _make_profile(total=5, succeeded=5)
+        agents_dir, _, index_path = _setup_agent(tmp_path, monkeypatch, profile=prof)
 
-        agent_id = "b1b2c3d4e5f60000" + "0" * 48
-        profile = _make_profile(total=5, succeeded=5)
-        save_json(agents_dir / f"{agent_id[:16]}.json", profile)
+        r1 = get_reputation(f"sha256:{FINGERPRINT}")
+        assert r1["total_proofs"] == 5
 
-        r1 = get_reputation(f"sha256:{agent_id}")
-        # Update profile but don't invalidate cache
-        profile["transactions_total"] = 50
-        save_json(agents_dir / f"{agent_id[:16]}.json", profile)
+        # Update profile (simulating new transactions)
+        prof["transactions_total"] = 50
+        save_json(agents_dir / f"{KEY_PREFIX}.json", prof)
 
-        r2 = get_reputation(f"sha256:{agent_id}")
-        # Should still return cached value
-        assert r2["total_proofs"] == 5
+        r2 = get_reputation(f"sha256:{FINGERPRINT}")
+        assert r2["total_proofs"] == 5  # still cached
 
     def test_invalidate_cache(self, tmp_path, monkeypatch):
-        """Invalidated cache should trigger recomputation."""
-        import trust_layer.reputation as rep_mod
-        agents_dir = tmp_path / "agents"
-        agents_dir.mkdir(exist_ok=True)
-        monkeypatch.setattr(rep_mod, "AGENTS_DIR", agents_dir)
-        monkeypatch.setattr(rep_mod, "REPUTATION_DIR", tmp_path / "reputation")
+        """After invalidation, score is recomputed from fresh profile."""
+        prof = _make_profile(total=5, succeeded=5)
+        agents_dir, _, _ = _setup_agent(tmp_path, monkeypatch, profile=prof)
 
-        agent_id = "c1b2c3d4e5f60000" + "0" * 48
-        profile = _make_profile(total=5, succeeded=5)
-        save_json(agents_dir / f"{agent_id[:16]}.json", profile)
+        get_reputation(f"sha256:{FINGERPRINT}")
 
-        get_reputation(f"sha256:{agent_id}")
-        profile["transactions_total"] = 50
-        profile["transactions_succeeded"] = 50
-        save_json(agents_dir / f"{agent_id[:16]}.json", profile)
-        invalidate_cache(f"sha256:{agent_id}")
+        prof["transactions_total"] = 50
+        prof["transactions_succeeded"] = 50
+        save_json(agents_dir / f"{KEY_PREFIX}.json", prof)
+        invalidate_cache(f"sha256:{FINGERPRINT}")
 
-        r = get_reputation(f"sha256:{agent_id}")
+        r = get_reputation(f"sha256:{FINGERPRINT}")
         assert r["total_proofs"] == 50
 
 
+# ---------------------------------------------------------------------------
+# Public response
+# ---------------------------------------------------------------------------
+
 class TestPublicReputation:
-    """Tests for the public-safe response."""
 
     def test_excludes_sensitive_fields(self):
-        profile = _make_profile(total=10, succeeded=10, services=["a.com", "b.com"])
-        rep = compute_reputation("sha256:abc123", profile)
+        rep = compute_reputation("sha256:abc", _make_profile(services=["a.com", "b.com"]))
         public = get_public_reputation(rep)
-
-        assert "unique_services_count" in public
         assert public["unique_services_count"] == 2
         assert "unique_services" not in public
         assert "amount_total_eur" not in public
 
     def test_includes_required_fields(self):
-        profile = _make_profile(total=10, succeeded=10)
-        rep = compute_reputation("sha256:abc123", profile)
+        rep = compute_reputation("sha256:abc", _make_profile())
         public = get_public_reputation(rep)
-
         for field in ["agent_id", "reputation_score", "scores", "total_proofs",
-                       "first_proof_at", "last_proof_at", "lost_disputes", "signature", "computed_at"]:
-            assert field in public
+                      "first_proof_at", "last_proof_at", "lost_disputes", "signature", "computed_at"]:
+            assert field in public, f"Missing field: {field}"
