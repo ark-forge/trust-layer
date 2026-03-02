@@ -72,21 +72,26 @@ response = requests.post(
 
 #### Mode B (transaction + payment)
 
+ArkForge does not handle money. The agent pays the provider **directly**
+via Stripe, then attaches that receipt as proof.
+
 ```python
-# 1. Pay provider via Stripe
+# 1. Agent pays provider directly via Stripe (your Stripe account)
 payment = stripe.PaymentIntent.create(amount=500, ..., expand=["charges"])
 receipt_url = payment.charges.data[0].receipt_url
+# ↑ This is the receipt of payment TO the provider — NOT to ArkForge
 
-# 2. Certification with payment proof
+# 2. Certification: attach payment evidence to proxy call
+# Free key is sufficient for Mode B (no credit deduction)
 response = requests.post(
     "https://arkforge.fr/trust/v1/proxy",
-    headers={"X-Api-Key": "mcp_xxx..."},  # Free key is sufficient
+    headers={"X-Api-Key": "mcp_xxx..."},
     json={
         "target": "https://provider.com/api",
         "payload": {...},
         "payment_evidence": {           # ← 3 extra lines
             "type": "stripe",
-            "receipt_url": receipt_url
+            "receipt_url": receipt_url  # ← direct provider payment receipt
         }
     }
 )
