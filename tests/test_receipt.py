@@ -366,12 +366,12 @@ class TestChainHashWithReceipt:
         """verify_proof_integrity must work with receipt-bearing proofs."""
         args = self._make_proof_args()
         receipt_hash = hashlib.sha256(b"<html>receipt</html>").hexdigest()
-        payment_evidence = {
+        provider_payment = {
             "type": "stripe",
             "receipt_content_hash": f"sha256:{receipt_hash}",
             "receipt_fetch_status": "fetched",
         }
-        proof = generate_proof(**args, receipt_content_hash=receipt_hash, payment_evidence=payment_evidence)
+        proof = generate_proof(**args, receipt_content_hash=receipt_hash, provider_payment=provider_payment)
 
         # Simulate stored proof structure
         proof_record = {
@@ -381,13 +381,13 @@ class TestChainHashWithReceipt:
             "parties": proof["parties"],
             "payment": proof["payment"],
             "timestamp": proof["timestamp"],
-            "payment_evidence": proof.get("payment_evidence"),
+            "provider_payment": proof.get("provider_payment"),
         }
 
         assert verify_proof_integrity(proof_record) is True
 
     def test_verify_integrity_old_proofs_still_work(self):
-        """v1.1 proofs without payment_evidence must still verify."""
+        """v1.1 proofs without provider_payment must still verify."""
         args = self._make_proof_args()
         proof = generate_proof(**args)
         proof_record = {
@@ -400,18 +400,18 @@ class TestChainHashWithReceipt:
         }
         assert verify_proof_integrity(proof_record) is True
 
-    def test_payment_evidence_in_proof(self):
-        """payment_evidence dict must be stored in the proof."""
+    def test_provider_payment_in_proof(self):
+        """provider_payment dict must be stored in the proof."""
         args = self._make_proof_args()
         pe = {"type": "stripe", "receipt_url": "https://pay.stripe.com/receipts/test"}
-        proof = generate_proof(**args, payment_evidence=pe)
-        assert proof["payment_evidence"] == pe
+        proof = generate_proof(**args, provider_payment=pe)
+        assert proof["provider_payment"] == pe
 
-    def test_no_payment_evidence_not_in_proof(self):
-        """Without payment_evidence, key must not be in the proof."""
+    def test_no_provider_payment_not_in_proof(self):
+        """Without provider_payment, key must not be in the proof."""
         args = self._make_proof_args()
         proof = generate_proof(**args)
-        assert "payment_evidence" not in proof
+        assert "provider_payment" not in proof
 
 
 # ═══════════════════════════════════════════════════════════
@@ -419,7 +419,7 @@ class TestChainHashWithReceipt:
 # ═══════════════════════════════════════════════════════════
 
 class TestPublicProofWithReceipt:
-    def test_public_proof_includes_payment_evidence(self):
+    def test_public_proof_includes_provider_payment(self):
         pe = {"type": "stripe", "receipt_url": "https://pay.stripe.com/receipts/test", "receipt_content_hash": "sha256:abc123"}
         proof = {
             "proof_id": "prf_test",
@@ -428,12 +428,12 @@ class TestPublicProofWithReceipt:
             "parties": {"buyer_fingerprint": "x", "seller": "y"},
             "payment": {"transaction_id": "t", "amount": 0.10, "currency": "eur", "status": "succeeded"},
             "timestamp": "2026-02-28T12:00:00Z",
-            "payment_evidence": pe,
+            "provider_payment": pe,
         }
         public = get_public_proof(proof)
-        assert public["payment_evidence"] == pe
+        assert public["provider_payment"] == pe
 
-    def test_public_proof_without_payment_evidence(self):
+    def test_public_proof_without_provider_payment(self):
         proof = {
             "proof_id": "prf_test",
             "spec_version": "1.1",
@@ -443,11 +443,11 @@ class TestPublicProofWithReceipt:
             "timestamp": "2026-02-28T12:00:00Z",
         }
         public = get_public_proof(proof)
-        assert public["payment_evidence"] is None
+        assert public["provider_payment"] is None
 
 
 # ═══════════════════════════════════════════════════════════
-# Integration: proxy endpoint with payment_evidence
+# Integration: proxy endpoint with provider_payment
 # ═══════════════════════════════════════════════════════════
 
 class TestProxyIntegration:
@@ -459,7 +459,7 @@ class TestProxyIntegration:
         assert resp.status_code == 200
         return resp.json()["api_key"]
 
-    def test_proxy_with_payment_evidence(self, client):
+    def test_proxy_with_provider_payment(self, client):
         api_key = self._setup_free_key(client)
 
         mock_target_response = httpx.Response(
@@ -493,7 +493,7 @@ class TestProxyIntegration:
                 json={
                     "target": "https://api.example.com/endpoint",
                     "payload": {"key": "value"},
-                    "payment_evidence": {
+                    "provider_payment": {
                         "type": "stripe",
                         "receipt_url": "https://pay.stripe.com/receipts/payment/test123",
                     },
@@ -504,16 +504,16 @@ class TestProxyIntegration:
         assert resp.status_code == 200
         data = resp.json()
         proof = data.get("proof", {})
-        assert proof.get("payment_evidence") is not None
-        pe = proof["payment_evidence"]
+        assert proof.get("provider_payment") is not None
+        pe = proof["provider_payment"]
         assert pe["type"] == "stripe"
         assert pe["receipt_fetch_status"] == "fetched"
         assert pe["receipt_content_hash"] is not None
         assert pe["receipt_content_hash"].startswith("sha256:")
-        assert pe["payment_verification"] == "fetched"
+        assert pe["verification_status"] == "fetched"
         assert proof["spec_version"] == "2.0"
 
-    def test_proxy_without_payment_evidence_unchanged(self, client):
+    def test_proxy_without_provider_payment_unchanged(self, client):
         api_key = self._setup_free_key(client)
 
         mock_response = httpx.Response(
@@ -540,11 +540,11 @@ class TestProxyIntegration:
         assert resp.status_code == 200
         data = resp.json()
         proof = data.get("proof", {})
-        assert proof.get("payment_evidence") is None
+        assert proof.get("provider_payment") is None
         assert proof["spec_version"] == "1.1"
 
-    def test_public_proof_endpoint_includes_payment_evidence(self, client):
-        """Verify that GET /v1/proof/{proof_id} returns payment_evidence."""
+    def test_public_proof_endpoint_includes_provider_payment(self, client):
+        """Verify that GET /v1/proof/{proof_id} returns provider_payment."""
         api_key = self._setup_free_key(client)
 
         mock_target = httpx.Response(status_code=200, json={"ok": True})
@@ -572,7 +572,7 @@ class TestProxyIntegration:
                 json={
                     "target": "https://api.example.com/test",
                     "payload": {},
-                    "payment_evidence": {
+                    "provider_payment": {
                         "type": "stripe",
                         "receipt_url": "https://pay.stripe.com/receipts/payment/xyz",
                     },
@@ -587,6 +587,6 @@ class TestProxyIntegration:
         public_resp = client.get(f"/v1/proof/{proof_id}")
         assert public_resp.status_code == 200
         public_data = public_resp.json()
-        assert public_data.get("payment_evidence") is not None
-        assert public_data["payment_evidence"]["type"] == "stripe"
+        assert public_data.get("provider_payment") is not None
+        assert public_data["provider_payment"]["type"] == "stripe"
         assert public_data["integrity_verified"] is True

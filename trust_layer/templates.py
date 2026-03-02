@@ -60,7 +60,7 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
     arkforge_signature = proof.get("arkforge_signature")
     arkforge_pubkey = proof.get("arkforge_pubkey")
 
-    payment_evidence = proof.get("payment_evidence") or {}
+    provider_payment = proof.get("provider_payment") or {}
     transaction_success = proof.get("transaction_success")
     upstream_status_code = proof.get("upstream_status_code")
     is_disputed = proof.get("disputed", False)
@@ -106,7 +106,7 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
         payment_color = "#22c55e"
         payment_witness = "Prepaid credits"
         payment_desc = "deducted from prepaid balance"
-        has_provider_payment = bool(payment_evidence and payment_evidence.get("receipt_url"))
+        has_provider_payment = bool(provider_payment and provider_payment.get("receipt_url"))
         payment_line = (
             "ArkForge certification fee paid via prepaid credits"
             if has_provider_payment
@@ -136,15 +136,15 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
     sig_label = "origin authenticated by Ed25519 digital signature" if has_signature else "signature not available"
 
     # --- Payment evidence section (conditional) ---
-    payment_evidence_html = ""
-    if payment_evidence and payment_evidence.get("receipt_url"):
-        pe_status = payment_evidence.get("payment_verification", "unknown")
+    provider_payment_html = ""
+    if provider_payment and provider_payment.get("receipt_url"):
+        pe_status = provider_payment.get("verification_status", "unknown")
         pe_color = "#22c55e" if pe_status == "fetched" else "#ef4444"
-        pe_label = f"Fetched from {_esc(payment_evidence.get('type', 'unknown')).capitalize()}" if pe_status == "fetched" else "Fetch failed"
-        pe_hash = _esc(payment_evidence.get("receipt_content_hash", ""))
-        pe_url = _esc(payment_evidence.get("receipt_url", ""))
-        pe_parsing = payment_evidence.get("parsing_status", "not_attempted")
-        pe_fields = payment_evidence.get("parsed_fields") or {}
+        pe_label = f"Fetched from {_esc(provider_payment.get('type', 'unknown')).capitalize()}" if pe_status == "fetched" else "Fetch failed"
+        pe_hash = _esc(provider_payment.get("receipt_content_hash", ""))
+        pe_url = _esc(provider_payment.get("receipt_url", ""))
+        pe_parsing = provider_payment.get("parsing_status", "not_attempted")
+        pe_fields = provider_payment.get("parsed_fields") or {}
 
         pe_parsed_rows = ""
         if pe_fields.get("amount") is not None:
@@ -155,7 +155,7 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
         if pe_fields.get("date"):
             pe_parsed_rows += f'<div class="row"><span class="label">Date</span><span class="val">{_esc(pe_fields["date"])}</span></div>'
 
-        payment_evidence_html = f"""
+        provider_payment_html = f"""
     <div class="card">
         <h2>Provider payment</h2>
         <p style="color:#94a3b8;font-size:0.8rem;margin-bottom:1rem">Paid directly from agent to provider \u2014 not processed by ArkForge</p>
@@ -250,7 +250,7 @@ details[open] summary::before{{content:"\u25bc "}}
         <h2>Transaction receipt</h2>
         <div class="row"><span class="label">Service</span><span class="val">{seller}</span></div>
 {identity_row}
-        <div class="row"><span class="label">{"Certification fee" if payment_evidence and payment_evidence.get("receipt_url") else "Payment"}</span><span class="val">{amount_display}</span></div>
+        <div class="row"><span class="label">{"Certification fee" if provider_payment and provider_payment.get("receipt_url") else "Payment"}</span><span class="val">{amount_display}</span></div>
         <div class="row"><span class="label">Execution</span><span class="val">{_esc(execution_status)}</span></div>
         {"" if transaction_success is None else f'<div class="row"><span class="label">Upstream</span><span class="val" style="color:{"#22c55e" if transaction_success else "#ef4444"}">{"Success" if transaction_success else "Failed"}{f" (HTTP {upstream_status_code})" if upstream_status_code else ""}</span></div>'}
         <div class="row"><span class="label">Date</span><span class="val">{human_date}</span></div>
@@ -307,7 +307,7 @@ details[open] summary::before{{content:"\u25bc "}}
 {dispute_html}
 
     <!-- 5b. EXTERNAL PAYMENT EVIDENCE -->
-{payment_evidence_html}
+{provider_payment_html}
 
     <!-- 6. STANDALONE TRUST STATEMENT -->
     <p class="standalone">You do not need to trust ArkForge to verify this proof.</p>
@@ -334,8 +334,8 @@ details[open] summary::before{{content:"\u25bc "}}
             {"" if not arkforge_signature else f'<div class="tech-row"><span class="tech-label">Signature</span><span class="tech-val">{_esc(arkforge_signature)}</span></div>'}
             {"" if not arkforge_pubkey else f'<div class="tech-row"><span class="tech-label">Public key</span><span class="tech-val">{_esc(arkforge_pubkey)}</span></div>'}
             {"" if not spec_version else f'<div class="tech-row"><span class="tech-label">Spec version</span><span class="tech-val">{_esc(spec_version)}</span></div>'}
-            {"" if not payment_evidence.get("receipt_content_hash") else f'<div class="tech-row"><span class="tech-label">Receipt hash</span><span class="tech-val">{_esc(payment_evidence.get("receipt_content_hash", ""))}</span></div>'}
-            <div class="tech-row"><span class="tech-label">Algorithm</span><span class="tech-val">SHA-256(request + response + payment_id + timestamp + buyer + seller{" + upstream_timestamp" if upstream_timestamp else ""}{" + receipt_hash" if payment_evidence.get("receipt_content_hash") else ""})</span></div>
+            {"" if not provider_payment.get("receipt_content_hash") else f'<div class="tech-row"><span class="tech-label">Receipt hash</span><span class="tech-val">{_esc(provider_payment.get("receipt_content_hash", ""))}</span></div>'}
+            <div class="tech-row"><span class="tech-label">Algorithm</span><span class="tech-val">SHA-256(request + response + payment_id + timestamp + buyer + seller{" + upstream_timestamp" if upstream_timestamp else ""}{" + receipt_hash" if provider_payment.get("receipt_content_hash") else ""})</span></div>
         </div>
     </details>
 

@@ -225,7 +225,7 @@ async def proxy_endpoint(
     payload = body.get("payload", {})
     method = body.get("method", "POST")
     description = body.get("description", "")
-    payment_evidence = body.get("payment_evidence")
+    provider_payment = body.get("provider_payment")
 
     if not target:
         return _error_response("invalid_target", "Missing 'target' field", 400)
@@ -250,7 +250,7 @@ async def proxy_endpoint(
             idempotency_key=x_idempotency_key,
             agent_identity=x_agent_identity,
             agent_version=x_agent_version,
-            payment_evidence=payment_evidence,
+            provider_payment=provider_payment,
         )
     except ProxyError as e:
         return JSONResponse(status_code=e.status, content=e.to_dict())

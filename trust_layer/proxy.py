@@ -470,7 +470,7 @@ async def execute_proxy(
     idempotency_key: Optional[str] = None,
     agent_identity: Optional[str] = None,
     agent_version: Optional[str] = None,
-    payment_evidence: Optional[dict] = None,
+    provider_payment: Optional[dict] = None,
 ) -> dict:
     """Execute the full proxy flow: validate → charge → forward → prove."""
 
@@ -554,26 +554,26 @@ async def execute_proxy(
         "receipt_url": charge_result.receipt_url,
     }
 
-    # 6b. Fetch external receipt if payment_evidence provided
+    # 6b. Fetch provider receipt if provider_payment provided
     receipt_content_hash = None
-    payment_evidence_record = None
+    provider_payment_record = None
 
-    if payment_evidence and isinstance(payment_evidence, dict):
-        pe_receipt_url = payment_evidence.get("receipt_url", "")
+    if provider_payment and isinstance(provider_payment, dict):
+        pe_receipt_url = provider_payment.get("receipt_url", "")
         if pe_receipt_url:
             receipt_result = await fetch_receipt(pe_receipt_url)
             receipt_content_hash = receipt_result.receipt_content_hash
-            payment_evidence_record = {
-                "type": payment_evidence.get("type", receipt_result.receipt_type),
+            provider_payment_record = {
+                "type": provider_payment.get("type", receipt_result.receipt_type),
                 "receipt_url": pe_receipt_url,
                 "receipt_fetch_status": receipt_result.receipt_fetch_status,
                 "receipt_content_hash": f"sha256:{receipt_content_hash}" if receipt_content_hash else None,
                 "parsing_status": receipt_result.parsing_status,
                 "parsed_fields": receipt_result.parsed_fields or None,
-                "payment_verification": "fetched" if receipt_result.receipt_fetch_status == "fetched" else "failed",
+                "verification_status": "fetched" if receipt_result.receipt_fetch_status == "fetched" else "failed",
             }
             if receipt_result.receipt_fetch_error:
-                payment_evidence_record["receipt_fetch_error"] = receipt_result.receipt_fetch_error
+                provider_payment_record["receipt_fetch_error"] = receipt_result.receipt_fetch_error
 
     # 7. Forward to target service
     import time
@@ -618,7 +618,7 @@ async def execute_proxy(
                            agent_identity=agent_identity, agent_version=agent_version,
                            upstream_timestamp=upstream_timestamp,
                            receipt_content_hash=receipt_content_hash,
-                           payment_evidence=payment_evidence_record)
+                           provider_payment=provider_payment_record)
 
     # Compute identity_consistent flag
     identity_consistent = None
@@ -652,8 +652,8 @@ async def execute_proxy(
         proof_record["upstream_status_code"] = service_status_code
     if upstream_timestamp:
         proof_record["upstream_timestamp"] = upstream_timestamp
-    if payment_evidence_record:
-        proof_record["payment_evidence"] = payment_evidence_record
+    if provider_payment_record:
+        proof_record["provider_payment"] = provider_payment_record
 
     # Ed25519 signature: sign the chain hash to prove ArkForge origin
     chain_hash = proof["_raw_chain_hash"]

@@ -122,14 +122,14 @@ pytest tests/ -v
 {
   "target": "https://provider.com/api/endpoint",
   "payload": {"task": "analyze"},
-  "payment_evidence": {
+  "provider_payment": {
     "type": "stripe",
     "receipt_url": "https://pay.stripe.com/receipts/payment/CAcaFwo..."
   }
 }
 ```
 
-When `payment_evidence.receipt_url` is provided, ArkForge fetches the receipt directly from the PSP, hashes the raw content (SHA-256), parses key fields (amount, currency, status, date), and includes the `receipt_content_hash` in the proof's chain hash. The receipt hash is the proof — it remains valid even if parsing fails.
+When `provider_payment.receipt_url` is provided, ArkForge fetches the receipt directly from the PSP, hashes the raw content (SHA-256), parses key fields (amount, currency, status, date), and includes the `receipt_content_hash` in the proof's chain hash. The receipt hash is the proof — it remains valid even if parsing fails.
 
 Currently supported PSPs: **Stripe** (`pay.stripe.com`, `receipt.stripe.com`). The parser architecture is extensible — adding a new PSP requires implementing a single `ReceiptParser` subclass.
 
@@ -149,7 +149,7 @@ These are stored in the proof and shadow profile. If the same API key sends a di
 - `proof.arkforge_signature` — Ed25519 signature of the chain hash (format: `ed25519:<base64url>`)
 - `proof.arkforge_pubkey` — ArkForge's Ed25519 public key used for signing
 - `proof.upstream_timestamp` — upstream service's `Date` header (if present)
-- `proof.payment_evidence` — external receipt verification (if `payment_evidence` was provided in request, see below)
+- `proof.provider_payment` — external receipt verification (if `provider_payment` was provided in request, see below)
 - `proof.parties.agent_identity` / `agent_version` — declared identity (if provided)
 - `proof.identity_consistent` — `true` / `false` / `null` (consistency check)
 - `proof.verification_url` — public URL to verify the proof
@@ -215,32 +215,32 @@ All proofs (Free and Pro) have 3 witnesses. Pro proofs additionally record the S
 
 ## Provider payment (Mode B)
 
-When an agent pays a provider directly — outside ArkForge, agent-to-provider — it can attach the Stripe receipt URL as `payment_evidence` to the proxy call. ArkForge fetches the receipt, hashes the raw content, and binds it to the proof. **ArkForge does not process or intermediate this payment.**
+When an agent pays a provider directly — outside ArkForge, agent-to-provider — it can attach the Stripe receipt URL as `provider_payment` to the proxy call. ArkForge fetches the receipt, hashes the raw content, and binds it to the proof. **ArkForge does not process or intermediate this payment.**
 
 The proof page labels this section "Provider payment" with the note *"Paid directly from agent to provider — not processed by ArkForge"* to distinguish it from the ArkForge certification fee (0.10 EUR).
 
 ### How it works
 
-1. Client includes `payment_evidence.receipt_url` in `POST /v1/proxy`
+1. Client includes `provider_payment.receipt_url` in `POST /v1/proxy`
 2. ArkForge validates the URL (HTTPS only, whitelisted PSP domains)
 3. ArkForge fetches the receipt page directly from the PSP
 4. Raw content is hashed (SHA-256) — this is the immutable proof
 5. Key fields are parsed (amount, currency, status, date)
 6. `receipt_content_hash` is included in the chain hash formula
-7. The `payment_evidence` object is stored in the proof
+7. The `provider_payment` object is stored in the proof
 
 ### Provider payment in the proof JSON
 
 ```json
 {
-  "payment_evidence": {
+  "provider_payment": {
     "type": "stripe",
     "receipt_url": "https://pay.stripe.com/receipts/payment/...",
     "receipt_fetch_status": "fetched",
     "receipt_content_hash": "sha256:a1b2c3...",
     "parsing_status": "success",
     "parsed_fields": {"amount": 49.99, "currency": "usd", "status": "paid", "date": "February 28, 2026"},
-    "payment_verification": "fetched"
+    "verification_status": "fetched"
   }
 }
 ```
@@ -253,7 +253,7 @@ The proof page labels this section "Provider payment" with the note *"Paid direc
 | `receipt_content_hash` | SHA-256 of the raw receipt bytes — included in chain hash |
 | `parsing_status` | `success`, `failed`, or `not_attempted` |
 | `parsed_fields` | Extracted fields (amount, currency, status, date) — null if parsing failed |
-| `payment_verification` | `fetched` (independently verified) or `failed` |
+| `verification_status` | `fetched` (independently verified) or `failed` |
 | `receipt_fetch_error` | Error details (only present on failure) |
 
 ### Supported PSPs
@@ -287,11 +287,11 @@ Where:
 - `buyer_fingerprint` = SHA-256 of the API key
 - `seller` = target domain (e.g. `example.com`)
 - `upstream_timestamp` = upstream service's `Date` header (included **only** when present in the proof JSON)
-- `receipt_content_hash` = SHA-256 of the raw receipt bytes (included **only** when `payment_evidence.receipt_content_hash` is present — strip the `sha256:` prefix before concatenation)
+- `receipt_content_hash` = SHA-256 of the raw receipt bytes (included **only** when `provider_payment.receipt_content_hash` is present — strip the `sha256:` prefix before concatenation)
 
 All values are concatenated as raw strings (no separator) before hashing. Canonical JSON uses `json.dumps(data, sort_keys=True, separators=(",", ":"))`.
 
-**Spec versions:** proofs without `payment_evidence` use spec version `1.1`. Proofs with a `receipt_content_hash` use spec version `2.0`.
+**Spec versions:** proofs without `provider_payment` use spec version `1.1`. Proofs with a `receipt_content_hash` use spec version `2.0`.
 
 **Backward compatibility:** optional fields (`upstream_timestamp`, `receipt_content_hash`) are only included in the chain input when present in the proof JSON. Older proofs (v1.1) verify with the same formula by omitting those fields.
 
@@ -327,7 +327,7 @@ TIMESTAMP=$(echo -n "$PROOF" | jq -r '.timestamp')
 BUYER=$(echo -n "$PROOF" | jq -r '.parties.buyer_fingerprint')
 SELLER=$(echo -n "$PROOF" | jq -r '.parties.seller')
 UPSTREAM=$(echo -n "$PROOF" | jq -r '.upstream_timestamp // empty')
-RECEIPT_HASH=$(echo -n "$PROOF" | jq -r '.payment_evidence.receipt_content_hash // empty' | sed 's/sha256://')
+RECEIPT_HASH=$(echo -n "$PROOF" | jq -r '.provider_payment.receipt_content_hash // empty' | sed 's/sha256://')
 
 # 2. Recompute the chain hash
 COMPUTED=$(echo -n "${REQUEST_HASH}${RESPONSE_HASH}${PAYMENT_ID}${TIMESTAMP}${BUYER}${SELLER}${UPSTREAM}${RECEIPT_HASH}" | sha256sum | cut -d' ' -f1)
@@ -412,7 +412,7 @@ Agent Client
 Trust Layer (/v1/proxy)
     |--- 1. Validate API key + rate limit
     |--- 2. Deduct 1 credit (Pro/Test) or check monthly quota (Free)
-    |--- 3. Fetch external receipt from PSP (if payment_evidence provided)
+    |--- 3. Fetch external receipt from PSP (if provider_payment provided)
     |--- 4. Forward request to upstream API
     |--- 5. Hash request + response + receipt (SHA-256 chain)
     |--- 6. Store proof, return response immediately

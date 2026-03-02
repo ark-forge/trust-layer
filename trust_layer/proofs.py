@@ -43,7 +43,7 @@ def generate_proof(
     agent_version: Optional[str] = None,
     upstream_timestamp: Optional[str] = None,
     receipt_content_hash: Optional[str] = None,
-    payment_evidence: Optional[dict] = None,
+    provider_payment: Optional[dict] = None,
 ) -> dict:
     """Generate a proof with request/response/chain hashes + party identities."""
     request_hash = sha256_hex(canonical_json(request_data))
@@ -82,8 +82,8 @@ def generate_proof(
     }
     if upstream_timestamp:
         result["upstream_timestamp"] = upstream_timestamp
-    if payment_evidence:
-        result["payment_evidence"] = payment_evidence
+    if provider_payment:
+        result["provider_payment"] = provider_payment
     return result
 
 
@@ -127,7 +127,7 @@ def verify_proof_integrity(proof: dict) -> bool:
         chain_input += upstream_timestamp
 
     # Receipt content hash (spec v2.0+)
-    pe = proof.get("payment_evidence") or {}
+    pe = proof.get("provider_payment") or {}
     receipt_content_hash = pe.get("receipt_content_hash", "")
     if receipt_content_hash:
         # Strip "sha256:" prefix if present
@@ -158,7 +158,7 @@ def get_public_proof(proof: dict) -> dict:
         "arkforge_signature": proof.get("arkforge_signature"),
         "arkforge_pubkey": proof.get("arkforge_pubkey"),
         "identity_consistent": proof.get("identity_consistent"),
-        "payment_evidence": proof.get("payment_evidence"),
+        "provider_payment": proof.get("provider_payment"),
         "views_count": proof.get("views_count", 0),
         "transaction_success": proof.get("transaction_success"),
         "upstream_status_code": proof.get("upstream_status_code"),
