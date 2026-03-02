@@ -153,6 +153,26 @@ async def _post_proof_background(proof_id: str, proof_record: dict, chain_hash: 
             _log_background_task(proof_id, "email", "failure", str(e))
 
 
+def _scrub_internal_secret(body: object) -> object:
+    """Remove X-Internal-Secret from service response body (recursive).
+
+    The secret is injected in forward headers only. If the upstream service
+    echoes request headers back (e.g. httpbin /anything), the secret would
+    appear in the response body. This scrubber removes it before we return
+    the body to the client. The chain hash is computed BEFORE this call so
+    integrity is not affected.
+    """
+    if isinstance(body, dict):
+        return {
+            k: _scrub_internal_secret(v)
+            for k, v in body.items()
+            if k.lower() != "x-internal-secret"
+        }
+    if isinstance(body, list):
+        return [_scrub_internal_secret(item) for item in body]
+    return body
+
+
 def _inject_digital_stamp(result: dict, proof_record: dict) -> None:
     """Level 1 — Digital Stamp: inject _arkforge_attestation into successful response body.
 
@@ -594,6 +614,11 @@ async def execute_proxy(
     _update_agent_profile(api_key, amount, currency, target_domain, service_succeeded,
                           agent_identity, agent_version)
     _update_service_profile(target_domain, response_time_ms, service_succeeded)
+
+    # Scrub X-Internal-Secret from service response BEFORE returning to client.
+    # Hash was already computed above (line generate_proof), so chain integrity is preserved.
+    if service_response is not None:
+        service_response = _scrub_internal_secret(service_response)
 
     # 14. Build response
     if service_error == "proxy_timeout":

@@ -9,6 +9,7 @@ from trust_layer.proxy import (
     validate_amount,
     execute_proxy,
     ProxyError,
+    _scrub_internal_secret,
 )
 from trust_layer.config import PROOF_PRICE
 from trust_layer.credits import add_credits
@@ -287,3 +288,95 @@ async def test_execute_proxy_idempotency(test_api_key):
     assert result1 == result2
     # Only one HTTP call should have been made
     assert mock_client.post.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Security: X-Internal-Secret scrubbing (A5)
+# ---------------------------------------------------------------------------
+
+def test_scrub_internal_secret_flat_dict():
+    """X-Internal-Secret key is removed from a flat dict."""
+    body = {"result": "ok", "X-Internal-Secret": "supersecret", "score": 42}
+    cleaned = _scrub_internal_secret(body)
+    assert "X-Internal-Secret" not in cleaned
+    assert cleaned["result"] == "ok"
+    assert cleaned["score"] == 42
+
+
+def test_scrub_internal_secret_case_insensitive():
+    """Key matching is case-insensitive."""
+    body = {"x-internal-secret": "s3cr3t", "data": "safe"}
+    cleaned = _scrub_internal_secret(body)
+    assert "x-internal-secret" not in cleaned
+    assert cleaned["data"] == "safe"
+
+
+def test_scrub_internal_secret_nested():
+    """X-Internal-Secret is removed from nested structures (echo-header pattern)."""
+    body = {
+        "url": "https://example.com",
+        "headers": {
+            "Content-Type": "application/json",
+            "X-Internal-Secret": "supersecret",
+            "X-Api-Key": "user_key",
+        },
+    }
+    cleaned = _scrub_internal_secret(body)
+    assert "X-Internal-Secret" not in cleaned["headers"]
+    assert cleaned["headers"]["Content-Type"] == "application/json"
+    assert cleaned["headers"]["X-Api-Key"] == "user_key"
+
+
+def test_scrub_internal_secret_list():
+    """_scrub_internal_secret handles lists recursively."""
+    body = [
+        {"X-Internal-Secret": "leak", "ok": True},
+        "plain string",
+        42,
+    ]
+    cleaned = _scrub_internal_secret(body)
+    assert isinstance(cleaned, list)
+    assert "X-Internal-Secret" not in cleaned[0]
+    assert cleaned[0]["ok"] is True
+    assert cleaned[1] == "plain string"
+
+
+def test_scrub_does_not_affect_other_keys():
+    """Non-secret keys and values are untouched."""
+    body = {"a": 1, "b": {"c": "hello"}}
+    cleaned = _scrub_internal_secret(body)
+    assert cleaned == body
+
+
+@pytest.mark.asyncio
+async def test_execute_proxy_scrubs_secret_from_response(test_api_key):
+    """X-Internal-Secret never appears in the response returned to the client,
+    even when the upstream service echoes all request headers (httpbin /anything pattern)."""
+    add_credits(test_api_key, 10.00, "pi_test_scrub")
+
+    # Simulate an echo-headers service that mirrors X-Internal-Secret back
+    echo_body = {
+        "url": "https://example.com/anything",
+        "headers": {
+            "Content-Type": "application/json",
+            "X-Internal-Secret": "THIS_MUST_NOT_LEAK",
+        },
+    }
+    mock_client = _mock_http_client(echo_body)
+
+    with patch("httpx.AsyncClient", return_value=mock_client), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+
+        result = await execute_proxy(
+            target="https://example.com/anything",
+            method="POST",
+            payload={},
+            amount=PROOF_PRICE,
+            currency="eur",
+            api_key=test_api_key,
+        )
+
+    response_body = result["service_response"]["body"]
+    assert "X-Internal-Secret" not in response_body.get("headers", {})
+    # Chain hash still present — integrity not broken
+    assert result["proof"]["hashes"]["chain"]
