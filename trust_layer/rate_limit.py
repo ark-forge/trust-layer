@@ -4,10 +4,12 @@ import logging
 from datetime import datetime, timezone, timedelta
 
 from .config import RATE_LIMITS_FILE, RATE_LIMIT_PER_KEY_PER_DAY, FREE_TIER_MONTHLY_LIMIT
-from .keys import is_free_key, get_key_plan
+from .keys import is_free_key, get_key_plan, validate_api_key
 from .persistence import load_json, save_json
 
 logger = logging.getLogger("trust_layer.rate_limit")
+
+_ALERT_THRESHOLD = 0.80  # send alert when usage crosses this fraction
 
 
 def check_rate_limit(api_key: str, limit: int = RATE_LIMIT_PER_KEY_PER_DAY) -> tuple[bool, int]:
@@ -63,7 +65,42 @@ def check_rate_limit(api_key: str, limit: int = RATE_LIMIT_PER_KEY_PER_DAY) -> t
     else:
         remaining = daily_remaining - 1
 
+    # Quota alert: fire once when usage crosses 80% threshold
+    _maybe_send_quota_alert(api_key, entry, limit, today, month)
+
     return True, max(0, remaining)
+
+
+def _maybe_send_quota_alert(api_key: str, entry: dict, daily_limit: int, today: str, month: str):
+    """Send a one-time quota alert email when usage first crosses 80%."""
+    try:
+        from .email_notify import send_quota_alert_email
+
+        key_info = validate_api_key(api_key)
+        email = (key_info or {}).get("email", "")
+        if not email:
+            return
+
+        if is_free_key(api_key):
+            # Monthly quota alert for free keys
+            month_count = entry.get("month_count", 0)
+            alert_key = f"alert_monthly_{month}"
+            if (month_count >= FREE_TIER_MONTHLY_LIMIT * _ALERT_THRESHOLD
+                    and not entry.get(alert_key)):
+                entry[alert_key] = True
+                send_quota_alert_email(email, api_key, month_count, FREE_TIER_MONTHLY_LIMIT, "monthly")
+                logger.info("Monthly quota alert sent to %s (%d/%d)", email, month_count, FREE_TIER_MONTHLY_LIMIT)
+        else:
+            # Daily quota alert for pro/test keys
+            daily_count = entry.get("count", 0)
+            alert_key = f"alert_daily_{today}"
+            if (daily_count >= daily_limit * _ALERT_THRESHOLD
+                    and not entry.get(alert_key)):
+                entry[alert_key] = True
+                send_quota_alert_email(email, api_key, daily_count, daily_limit, "daily")
+                logger.info("Daily quota alert sent to %s (%d/%d)", email, daily_count, daily_limit)
+    except Exception as e:
+        logger.warning("Quota alert skipped: %s", e)
 
 
 def get_usage(api_key: str, limit: int = RATE_LIMIT_PER_KEY_PER_DAY) -> dict:

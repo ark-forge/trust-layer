@@ -68,6 +68,51 @@ Support: contact@arkforge.fr
         logger.warning("Welcome email failed: %s", e)
 
 
+def send_quota_alert_email(email: str, api_key: str, used: int, limit: int, period: str):
+    """Send a quota warning email when a key reaches 80% of its limit.
+
+    period: 'monthly' (free tier) or 'daily' (pro tier)
+    """
+    remaining = limit - used
+    pct = round(used / limit * 100)
+    if period == "monthly":
+        period_label = "monthly"
+        upgrade_hint = (
+            "Upgrade to Pro for 100 proofs/day and no monthly cap:\n"
+            "  https://arkforge.fr/en/pricing.html"
+        )
+    else:
+        period_label = "daily"
+        upgrade_hint = (
+            "Buy more credits to keep your agent running:\n"
+            "  curl -X POST https://arkforge.fr/trust/v1/credits/buy \\\n"
+            f"    -H 'Authorization: Bearer {api_key}' \\\n"
+            "    -H 'Content-Type: application/json' \\\n"
+            "    -d '{\"amount\": 10}'"
+        )
+
+    subject = f"[ArkForge] Quota alert — {pct}% of {period_label} limit used"
+    body = f"""ArkForge Trust Layer — Quota Warning
+{'=' * 50}
+
+Your API key has used {used}/{limit} proofs ({pct}%) of your {period_label} quota.
+{remaining} proof(s) remaining.
+
+{upgrade_hint}
+
+Check your usage anytime:
+  curl https://arkforge.fr/trust/v1/usage \\
+    -H "Authorization: Bearer {api_key}"
+
+{'=' * 50}
+ArkForge Trust Layer — https://arkforge.fr/trust
+"""
+    try:
+        _send_email(email, subject, body)
+    except Exception as e:
+        logger.warning("Quota alert email failed: %s", e)
+
+
 def send_proof_email(email: str, proof_id: str, proof_data: dict):
     """Send transaction proof email after a proxy call."""
     payment = proof_data.get("payment", {})

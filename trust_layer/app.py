@@ -451,8 +451,16 @@ async def setup_key(request: Request):
 # --- POST /v1/keys/portal ---
 
 @app.post("/v1/keys/portal")
-async def billing_portal(request: Request):
+async def billing_portal(
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None),
+):
     """Create a Stripe Billing Portal session for card/billing management.
+
+    Accepts either:
+    - Body field `customer_id` (explicit)
+    - API key via Authorization or X-Api-Key header (Trust Layer resolves customer_id automatically)
 
     Returns a portal_url the client should redirect to. The portal lets users
     update their payment method, view invoices, and manage billing details.
@@ -461,16 +469,32 @@ async def billing_portal(request: Request):
     try:
         body = await request.json()
     except Exception:
-        return _error_response("invalid_request", "Invalid JSON body", 400)
-
-    customer_id = body.get("customer_id", "")
-    if not customer_id:
-        return _error_response("invalid_request", "customer_id is required", 400)
+        body = {}
 
     req_mode = body.get("mode", "live")
     lang = body.get("lang", "fr")
     if lang not in ("en", "fr"):
         lang = "fr"
+
+    # Resolve customer_id: explicit body field OR from API key
+    customer_id = body.get("customer_id", "")
+    if not customer_id:
+        api_key = _get_api_key(authorization, x_api_key)
+        if api_key:
+            key_info = validate_api_key(api_key)
+            if key_info:
+                customer_id = key_info.get("stripe_customer_id", "")
+                # Infer mode from key prefix
+                if not body.get("mode"):
+                    req_mode = "test" if is_test_key(api_key) else "live"
+
+    if not customer_id:
+        return _error_response(
+            "invalid_request",
+            "Provide customer_id in body or authenticate with your API key",
+            400,
+        )
+
     sk = STRIPE_TEST_KEY if req_mode == "test" else STRIPE_LIVE_KEY
     if not sk:
         return _error_response("internal_error", f"Stripe {req_mode} key not configured", 500)

@@ -85,7 +85,8 @@ pytest tests/ -v
 | `GET` | `/v1/health` | Health check |
 | `GET` | `/v1/pricing` | Pricing and limits |
 | `POST` | `/v1/proxy` | Proxied API call (charge + forward + proof) |
-| `POST` | `/v1/keys/setup` | Save a card via Stripe Checkout |
+| `POST` | `/v1/keys/setup` | Buy initial credits + save card via Stripe Checkout (min 10 EUR) |
+| `POST` | `/v1/keys/portal` | Open Stripe Billing Portal (update card, view invoices) |
 | `POST` | `/v1/webhooks/stripe` | Stripe webhook receiver |
 | `GET` | `/v1/usage` | Usage stats for a key |
 | `GET` | `/v1/proof/{proof_id}` | Retrieve and verify proof (JSON or HTML — see content negotiation) |
@@ -416,30 +417,44 @@ Upstream API (any HTTPS endpoint)
 
 ## New client onboarding
 
-### 1. Save a card and get an API key
+### 1. Buy initial credits and get an API key
 
 ```bash
 curl -X POST https://arkforge.fr/trust/v1/keys/setup \
   -H "Content-Type: application/json" \
-  -d '{"email": "client@example.com"}'
-# Returns: {"checkout_url": "https://checkout.stripe.com/...", ...}
+  -d '{"email": "client@example.com", "amount": 10}'
+# Returns: {"checkout_url": "https://checkout.stripe.com/...", "proofs_included": 100, ...}
 ```
 
-Open `checkout_url` in a browser — enter a card. No charge yet. Stripe webhook fires automatically and the Trust Layer creates an API key (`mcp_pro_...`) and emails it to the client. Free keys (`mcp_free_...`) are created without payment.
+Open `checkout_url` in a browser — enter a card. The first purchase (minimum 10 EUR = 100 proofs) is charged immediately and the card is saved for future off-session charges. Stripe webhook fires automatically: Trust Layer creates an API key (`mcp_pro_...`), credits the account, and emails the key to the client.
+
+Free keys (`mcp_free_...`) are created without payment via `/v1/keys/free-signup`.
 
 For test mode, add `"mode": "test"` and use Stripe test card `4242 4242 4242 4242`.
 
-### 2. Buy credits
+### 2. Buy more credits (off-session, no browser required)
 
 ```bash
 curl -X POST https://arkforge.fr/trust/v1/credits/buy \
   -H "X-Api-Key: mcp_pro_..." \
   -H "Content-Type: application/json" \
-  -d '{"amount": 5.00}'
-# Returns: {"checkout_url": "https://checkout.stripe.com/...", "credits": 50, ...}
+  -d '{"amount": 10.00}'
+# Returns: {"credits_added": 10.0, "balance": 12.5, "proofs_available": 125, ...}
 ```
 
-Complete payment in browser. Credits (0.10 EUR each) are added to the key automatically.
+The saved card is charged directly — no browser redirect. Credits are added immediately.
+
+### 2b. Manage card / view invoices
+
+```bash
+curl -X POST https://arkforge.fr/trust/v1/keys/portal \
+  -H "X-Api-Key: mcp_pro_..." \
+  -H "Content-Type: application/json" \
+  -d '{}'
+# Returns: {"portal_url": "https://billing.stripe.com/...", ...}
+```
+
+Open `portal_url` to update your payment method, download invoices, or cancel.
 
 ### 3. Use the proxy
 
@@ -467,11 +482,11 @@ Pro and Test keys use prepaid credits. Each proof costs **0.10 EUR** (1 credit).
 curl -X POST https://arkforge.fr/trust/v1/credits/buy \
   -H "X-Api-Key: mcp_pro_..." \
   -H "Content-Type: application/json" \
-  -d '{"amount": 5.00}'
-# Returns: {"checkout_url": "https://checkout.stripe.com/...", "credits": 50, ...}
+  -d '{"amount": 10.00}'
+# Returns: {"credits_added": 10.0, "balance": 10.0, "proofs_available": 100, ...}
 ```
 
-Open `checkout_url` in a browser to complete payment. Credits are added to the key once Stripe confirms the payment (via webhook). Minimum purchase: 1.00 EUR (10 credits).
+The saved card is charged off-session — no browser required. Credits are added immediately. Minimum purchase: 1.00 EUR (10 credits).
 
 ### Check balance
 
@@ -483,10 +498,10 @@ curl https://arkforge.fr/trust/v1/usage \
 
 ### How credits work
 
-1. **Buy** — `POST /v1/credits/buy` with desired EUR amount. Stripe Checkout session is created.
-2. **Pay** — complete payment in browser. Webhook adds credits to the key.
+1. **Setup** — `POST /v1/keys/setup` (10 EUR minimum): Stripe Checkout charges the card, saves it for future use, and credits the account.
+2. **Top up** — `POST /v1/credits/buy`: off-session charge, no browser required. Credits never expire.
 3. **Use** — each `POST /v1/proxy` call deducts 1 credit (0.10 EUR). If balance is 0, the call is rejected with `402 Payment Required`.
-4. **Top up** — buy more credits anytime. Credits never expire.
+4. **Alert** — email notification when 80% of quota is consumed (monthly for free keys, daily for pro keys).
 
 Free keys (`mcp_free_*`) do not use credits — they have a monthly quota of 100 proofs at no cost.
 
