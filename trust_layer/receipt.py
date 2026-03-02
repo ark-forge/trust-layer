@@ -152,14 +152,20 @@ class StripeReceiptParser(ReceiptParser):
         if status_match:
             result["status"] = "paid"
 
-        # Date
-        date_match = (
-            self._RE_DATE.search(html)
-            or self._RE_DATE_ISO.search(html)
-            or self._RE_DATE_SLASH.search(html)
-        )
+        # Date — named month format first (most readable)
+        date_match = self._RE_DATE.search(html)
         if date_match:
             result["date"] = date_match.group(0)
+        else:
+            # ISO dates: take most recent >= 2020 to skip static asset dates
+            # (e.g. stripe.js?v=2017-08-21 embedded in receipt HTML)
+            iso_candidates = [d for d in self._RE_DATE_ISO.findall(html) if d[:4] >= "2020"]
+            if iso_candidates:
+                result["date"] = max(iso_candidates)
+            else:
+                slash_match = self._RE_DATE_SLASH.search(html)
+                if slash_match:
+                    result["date"] = slash_match.group(0)
 
         return result
 
