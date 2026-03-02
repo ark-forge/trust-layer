@@ -106,9 +106,10 @@ class StripeReceiptParser(ReceiptParser):
         re.IGNORECASE,
     )
 
-    # Date patterns (common Stripe formats)
+    # Date patterns (common Stripe formats — full and abbreviated month names)
     _RE_DATE = re.compile(
-        r'(?:January|February|March|April|May|June|July|August|September|October|November|December)'
+        r'(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?'
+        r'|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)'
         r'\s+\d{1,2},?\s+\d{4}',
         re.IGNORECASE,
     )
