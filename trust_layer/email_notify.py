@@ -115,7 +115,7 @@ ArkForge Trust Layer — https://arkforge.fr/trust
 
 def send_proof_email(email: str, proof_id: str, proof_data: dict):
     """Send transaction proof email after a proxy call."""
-    payment = proof_data.get("payment", {})
+    cert_fee = proof_data.get("certification_fee", {})
     hashes = proof_data.get("hashes", {})
     ts = proof_data.get("timestamp", "")
     verification_url = proof_data.get("verification_url", "")
@@ -123,6 +123,27 @@ def send_proof_email(email: str, proof_id: str, proof_data: dict):
     parties = proof_data.get("parties", {})
     buyer_fp = parties.get("buyer_fingerprint", "N/A")
     seller_domain = parties.get("seller", "N/A")
+
+    provider_payment = proof_data.get("provider_payment") or {}
+    pp_section = ""
+    if provider_payment:
+        pp_fields = provider_payment.get("parsed_fields") or {}
+        pp_amount = pp_fields.get("amount", "N/A")
+        pp_currency = (pp_fields.get("currency") or "").upper() or "EUR"
+        pp_status = pp_fields.get("status", "N/A")
+        pp_receipt = provider_payment.get("receipt_url", "N/A")
+        pp_verify = provider_payment.get("verification_status", "N/A")
+        pp_section = f"""
+PROVIDER PAYMENT (direct, not via ArkForge)
+  Amount:         {pp_amount} {pp_currency}
+  Status:         {pp_status}
+  Receipt:        {pp_receipt}
+  Verified:       {pp_verify}
+"""
+
+    receipt_line = ""
+    if cert_fee.get("receipt_url"):
+        receipt_line = f"\n  Receipt:        {cert_fee['receipt_url']}"
 
     subject = f"[PROOF] ArkForge Transaction — {proof_id}"
     body = f"""ARKFORGE TRUST LAYER — PROOF OF TRANSACTION
@@ -135,13 +156,12 @@ PARTIES
   Buyer:          {buyer_fp[:16]}...
   Seller:         {seller_domain}
 
-PAYMENT
-  Provider:       {payment.get('provider', 'stripe')}
-  Transaction:    {payment.get('transaction_id', 'N/A')}
-  Amount:         {payment.get('amount', 'N/A')} {payment.get('currency', 'EUR').upper()}
-  Status:         {payment.get('status', 'N/A')}
-  Receipt:        {payment.get('receipt_url', 'N/A')}
-
+CERTIFICATION FEE (ArkForge proof — 0.10 EUR)
+  Method:         {cert_fee.get('method', 'N/A')}
+  Transaction:    {cert_fee.get('transaction_id', 'N/A')}
+  Amount:         {cert_fee.get('amount', 'N/A')} {(cert_fee.get('currency') or 'EUR').upper()}
+  Status:         {cert_fee.get('status', 'N/A')}{receipt_line}
+{pp_section}
 CRYPTOGRAPHIC PROOF
   Request hash:   {hashes.get('request', 'N/A')}
   Response hash:  {hashes.get('response', 'N/A')}
