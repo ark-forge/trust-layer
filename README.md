@@ -2,6 +2,11 @@
 
 Add verifiable execution to any API call. One signup, one curl.
 
+## Documentation
+
+- **[User Guide](docs/user-guide.md)** — integration walkthrough, Mode A vs Mode B, code examples, credit management
+- **[Quick Reference](docs/quick-reference.md)** — endpoints, chain hash formulas, checklists
+
 ## Get started in 30 seconds
 
 ### Step 1 — Get a free API key
