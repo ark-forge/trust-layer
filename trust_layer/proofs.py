@@ -74,7 +74,7 @@ def generate_proof(
             "agent_identity": agent_identity,
             "agent_version": agent_version,
         },
-        "payment": payment_data,
+        "certification_fee": payment_data,
         "timestamp": timestamp,
         "_raw_request_hash": request_hash,
         "_raw_response_hash": response_hash,
@@ -109,7 +109,7 @@ def verify_proof_integrity(proof: dict) -> bool:
     include it in the chain hash. Otherwise use the original formula.
     """
     hashes = proof.get("hashes", {})
-    payment = proof.get("payment", {})
+    payment = proof.get("certification_fee", {})
     parties = proof.get("parties", {})
     timestamp = proof.get("timestamp", "")
 
@@ -146,9 +146,9 @@ def get_public_proof(proof: dict) -> dict:
         "spec_version": proof.get("spec_version"),
         "hashes": proof.get("hashes"),
         "parties": proof.get("parties"),
-        "payment": {
-            k: v for k, v in proof.get("payment", {}).items()
-            if k in ("transaction_id", "amount", "currency", "status", "receipt_url", "provider")
+        "certification_fee": {
+            k: v for k, v in proof.get("certification_fee", {}).items()
+            if k in ("transaction_id", "amount", "currency", "status", "method")
         },
         "timestamp_authority": proof.get("timestamp_authority"),
         "archive_org": proof.get("archive_org"),

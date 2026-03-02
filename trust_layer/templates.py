@@ -44,7 +44,7 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
     human_date = _esc(_format_date(timestamp))
     hashes = proof.get("hashes") or {}
     parties = proof.get("parties") or {}
-    payment = proof.get("payment") or {}
+    payment = proof.get("certification_fee") or {}
     ots = proof.get("timestamp_authority") or {}
     tsr_url = _esc(ots.get("tsr_url", ""))
     # Pre-compute to avoid backslash-in-fstring-expression (Python < 3.12 restriction)
@@ -95,8 +95,8 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
         verdict_sub = "This action was executed and paid by a software agent. Cryptographically certified by ArkForge."
 
     # --- Witnesses ---
-    is_free_tier = payment.get("provider") == "none" or payment.get("status") == "free_tier"
-    is_prepaid = payment.get("provider") == "prepaid_credit"
+    is_free_tier = payment.get("method") == "none" or payment.get("status") == "free_tier"
+    is_prepaid = payment.get("method") == "prepaid_credit"
     if is_free_tier:
         payment_color = "#475569"
         payment_witness = "Stripe"

@@ -379,7 +379,7 @@ class TestChainHashWithReceipt:
             "spec_version": proof["spec_version"],
             "hashes": proof["hashes"],
             "parties": proof["parties"],
-            "payment": proof["payment"],
+            "certification_fee": proof["certification_fee"],
             "timestamp": proof["timestamp"],
             "provider_payment": proof.get("provider_payment"),
         }
@@ -395,7 +395,7 @@ class TestChainHashWithReceipt:
             "spec_version": "1.1",
             "hashes": proof["hashes"],
             "parties": proof["parties"],
-            "payment": proof["payment"],
+            "certification_fee": proof["certification_fee"],
             "timestamp": proof["timestamp"],
         }
         assert verify_proof_integrity(proof_record) is True
@@ -426,7 +426,7 @@ class TestPublicProofWithReceipt:
             "spec_version": "2.0",
             "hashes": {"request": "sha256:a", "response": "sha256:b", "chain": "sha256:c"},
             "parties": {"buyer_fingerprint": "x", "seller": "y"},
-            "payment": {"transaction_id": "t", "amount": 0.10, "currency": "eur", "status": "succeeded"},
+            "certification_fee": {"transaction_id": "t", "amount": 0.10, "currency": "eur", "status": "succeeded"},
             "timestamp": "2026-02-28T12:00:00Z",
             "provider_payment": pe,
         }
@@ -439,7 +439,7 @@ class TestPublicProofWithReceipt:
             "spec_version": "1.1",
             "hashes": {"request": "sha256:a", "response": "sha256:b", "chain": "sha256:c"},
             "parties": {"buyer_fingerprint": "x", "seller": "y"},
-            "payment": {"transaction_id": "t", "amount": 0.10, "currency": "eur", "status": "succeeded"},
+            "certification_fee": {"transaction_id": "t", "amount": 0.10, "currency": "eur", "status": "succeeded"},
             "timestamp": "2026-02-28T12:00:00Z",
         }
         public = get_public_proof(proof)

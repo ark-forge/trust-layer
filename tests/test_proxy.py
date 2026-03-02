@@ -148,7 +148,7 @@ async def test_execute_proxy_full_flow(test_api_key):
     assert result["proof"]["proof_id"].startswith("prf_")
     assert "verification_url" in result["proof"]
     assert result["proof"]["hashes"]["chain"].startswith("sha256:")
-    assert result["proof"]["payment"]["provider"] == "prepaid_credit"
+    assert result["proof"]["certification_fee"]["method"] == "prepaid_credit"
 
 
 @pytest.mark.asyncio
@@ -174,7 +174,7 @@ async def test_execute_proxy_service_error(test_api_key):
     assert "error" in result
     assert result["error"]["code"] == "service_error"
     assert "proof" in result
-    assert result["proof"]["payment"]["status"] == "succeeded"
+    assert result["proof"]["certification_fee"]["status"] == "succeeded"
 
 
 @pytest.mark.asyncio

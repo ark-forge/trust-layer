@@ -52,11 +52,11 @@ async def test_free_tier_skips_stripe(free_api_key):
     assert "proof" in result
     proof = result["proof"]
     assert proof["proof_id"].startswith("prf_")
-    assert proof["payment"]["provider"] == "free_tier"
-    assert proof["payment"]["status"] == "free_tier"
-    assert proof["payment"]["amount"] == 0.0
-    assert proof["payment"]["transaction_id"] == "free_tier"
-    assert proof["payment"]["receipt_url"] is None
+    assert proof["certification_fee"]["method"] == "free_tier"
+    assert proof["certification_fee"]["status"] == "free_tier"
+    assert proof["certification_fee"]["amount"] == 0.0
+    assert proof["certification_fee"]["transaction_id"] == "free_tier"
+    assert "receipt_url" not in proof["certification_fee"]
 
 
 @pytest.mark.asyncio
@@ -157,7 +157,7 @@ def test_free_tier_template_greys_out_stripe():
         "timestamp": "2026-02-27T15:00:00Z",
         "hashes": {"chain": "sha256:abc", "request": "sha256:def", "response": "sha256:ghi"},
         "parties": {"buyer_fingerprint": "sha256:buyer", "seller": "example.com"},
-        "payment": {"provider": "free_tier", "transaction_id": "free_tier", "amount": 0.0, "currency": "EUR", "status": "free_tier"},
+        "certification_fee": {"method": "free_tier", "transaction_id": "free_tier", "amount": 0.0, "currency": "EUR", "status": "free_tier"},
         "timestamp_authority": {"status": "submitted"},
         "verification_url": "https://test.arkforge.fr/v1/proof/prf_test_free",
     }
@@ -181,7 +181,7 @@ def test_pro_tier_template_shows_stripe():
         "timestamp": "2026-02-27T15:00:00Z",
         "hashes": {"chain": "sha256:abc", "request": "sha256:def", "response": "sha256:ghi"},
         "parties": {"buyer_fingerprint": "sha256:buyer", "seller": "example.com"},
-        "payment": {"provider": "stripe", "transaction_id": "pi_test", "amount": 0.50, "currency": "EUR", "status": "succeeded", "receipt_url": "https://pay.stripe.com/receipts/test"},
+        "certification_fee": {"method": "stripe", "transaction_id": "pi_test", "amount": 0.50, "currency": "EUR", "status": "succeeded", "receipt_url": "https://pay.stripe.com/receipts/test"},
         "timestamp_authority": {"status": "verified"},
         "verification_url": "https://test.arkforge.fr/v1/proof/prf_test_pro",
     }
@@ -202,7 +202,7 @@ def test_prepaid_credit_template():
         "timestamp": "2026-02-27T15:00:00Z",
         "hashes": {"chain": "sha256:abc", "request": "sha256:def", "response": "sha256:ghi"},
         "parties": {"buyer_fingerprint": "sha256:buyer", "seller": "example.com"},
-        "payment": {"provider": "prepaid_credit", "transaction_id": "crd_test", "amount": 0.10, "currency": "EUR", "status": "succeeded", "receipt_url": None},
+        "certification_fee": {"method": "prepaid_credit", "transaction_id": "crd_test", "amount": 0.10, "currency": "EUR", "status": "succeeded", "receipt_url": None},
         "timestamp_authority": {"status": "verified"},
         "verification_url": "https://test.arkforge.fr/v1/proof/prf_test_prepaid",
     }

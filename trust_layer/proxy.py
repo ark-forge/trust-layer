@@ -546,13 +546,14 @@ async def execute_proxy(
 
     # Payment OK — from here, always return proof even on service error
     payment_data = {
-        "provider": charge_result.provider,
+        "method": charge_result.provider,
         "transaction_id": charge_result.transaction_id,
         "amount": charge_result.amount,
         "currency": charge_result.currency,
         "status": charge_result.status,
-        "receipt_url": charge_result.receipt_url,
     }
+    if charge_result.receipt_url:
+        payment_data["receipt_url"] = charge_result.receipt_url
 
     # 6b. Fetch provider receipt if provider_payment provided
     receipt_content_hash = None
@@ -641,7 +642,7 @@ async def execute_proxy(
         "verification_algorithm": "https://github.com/ark-forge/proof-spec/blob/main/SPEC.md#2-chain-hash-algorithm",
         "hashes": proof["hashes"],
         "parties": proof["parties"],
-        "payment": payment_data,
+        "certification_fee": payment_data,
         "timestamp": timestamp,
         "timestamp_authority": {"status": "submitted", "provider": "freetsa.org", "tsr_url": f"{TRUST_LAYER_BASE_URL}/v1/proof/{proof_id}/tsr"},
         "identity_consistent": identity_consistent,

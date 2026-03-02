@@ -127,10 +127,10 @@ async def test_proxy_with_credits(pro_api_key):
         )
 
     assert "proof" in result
-    assert result["proof"]["payment"]["provider"] == "prepaid_credit"
-    assert result["proof"]["payment"]["amount"] == PROOF_PRICE
-    assert result["proof"]["payment"]["status"] == "succeeded"
-    assert result["proof"]["payment"]["transaction_id"].startswith("crd_")
+    assert result["proof"]["certification_fee"]["method"] == "prepaid_credit"
+    assert result["proof"]["certification_fee"]["amount"] == PROOF_PRICE
+    assert result["proof"]["certification_fee"]["status"] == "succeeded"
+    assert result["proof"]["certification_fee"]["transaction_id"].startswith("crd_")
     assert get_balance(pro_api_key) == pytest.approx(0.90)
 
 

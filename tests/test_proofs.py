@@ -94,21 +94,21 @@ def test_get_public_proof_strips_sensitive():
         "proof_id": "prf_test",
         "spec_version": "1.0",
         "hashes": {"request": "sha256:aaa", "response": "sha256:bbb", "chain": "sha256:ccc"},
-        "payment": {
+        "certification_fee": {
             "transaction_id": "pi_test",
             "amount": 0.50,
             "currency": "eur",
             "status": "succeeded",
             "receipt_url": "https://stripe.com/receipt",
-            "provider": "stripe",
+            "method": "stripe",
             "raw": {"should_not_appear": True},
         },
         "timestamp": "2026-02-25T15:00:00Z",
         "timestamp_authority": {"status": "verified", "provider": "freetsa.org"},
     }
     public = get_public_proof(proof)
-    assert "raw" not in public.get("payment", {})
-    assert public["payment"]["transaction_id"] == "pi_test"
+    assert "raw" not in public.get("certification_fee", {})
+    assert public["certification_fee"]["transaction_id"] == "pi_test"
 
 
 # --- New tests for spec_version, upstream_timestamp, signature fields ---
@@ -179,7 +179,7 @@ def test_verify_proof_integrity_old_format_still_works():
             "response": f"sha256:{resp_hash}",
             "chain": f"sha256:{chain_hash}",
         },
-        "payment": {"transaction_id": "pi_legacy"},
+        "certification_fee": {"transaction_id": "pi_legacy"},
         "parties": {"buyer_fingerprint": "", "seller": ""},
         "timestamp": timestamp,
         # No spec_version, no upstream_timestamp
@@ -193,8 +193,8 @@ def test_get_public_proof_includes_new_fields():
         "proof_id": "prf_new",
         "spec_version": "1.0",
         "hashes": {"request": "sha256:a", "response": "sha256:b", "chain": "sha256:c"},
-        "payment": {"transaction_id": "pi_x", "amount": 1, "currency": "eur", "status": "succeeded",
-                     "receipt_url": "url", "provider": "stripe"},
+        "certification_fee": {"transaction_id": "pi_x", "amount": 1, "currency": "eur", "status": "succeeded",
+                     "receipt_url": "url", "method": "stripe"},
         "timestamp": "2026-02-26T10:00:00Z",
         "upstream_timestamp": "Thu, 26 Feb 2026 10:00:01 GMT",
         "arkforge_signature": "ed25519:fakesig",

@@ -29,8 +29,8 @@ def _make_proof_record(proof_id="prf_20260225_120000_abc123"):
             "agent_identity": None,
             "agent_version": None,
         },
-        "payment": {
-            "provider": "prepaid_credit",
+        "certification_fee": {
+            "method": "prepaid_credit",
             "transaction_id": "crd_test_triptyque",
             "amount": PROOF_PRICE,
             "currency": "eur",

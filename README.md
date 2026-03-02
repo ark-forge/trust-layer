@@ -144,7 +144,7 @@ These are stored in the proof and shadow profile. If the same API key sends a di
 
 **Response includes:**
 - `proof.spec_version` — proof format version (`1.1` without receipt, `2.0` with receipt — see [proof-spec](https://github.com/ark-forge/proof-spec))
-- `proof.payment` — Stripe transaction ID, credit deduction, receipt URL
+- `proof.certification_fee` — Stripe transaction ID, credit deduction, receipt URL
 - `proof.hashes` — SHA-256 of request, response, and chain
 - `proof.arkforge_signature` — Ed25519 signature of the chain hash (format: `ed25519:<base64url>`)
 - `proof.arkforge_pubkey` — ArkForge's Ed25519 public key used for signing
@@ -322,7 +322,7 @@ You can verify any proof without ArkForge's code. Given a proof JSON:
 # 1. Extract the components
 REQUEST_HASH=$(echo -n "$PROOF" | jq -r '.hashes.request' | sed 's/sha256://')
 RESPONSE_HASH=$(echo -n "$PROOF" | jq -r '.hashes.response' | sed 's/sha256://')
-PAYMENT_ID=$(echo -n "$PROOF" | jq -r '.payment.transaction_id')
+PAYMENT_ID=$(echo -n "$PROOF" | jq -r '.certification_fee.transaction_id')
 TIMESTAMP=$(echo -n "$PROOF" | jq -r '.timestamp')
 BUYER=$(echo -n "$PROOF" | jq -r '.parties.buyer_fingerprint')
 SELLER=$(echo -n "$PROOF" | jq -r '.parties.seller')

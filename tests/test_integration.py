@@ -153,7 +153,7 @@ def test_proxy_full_success(client, api_key):
     assert "proof" in data
     assert "service_response" in data
     assert data["proof"]["proof_id"].startswith("prf_")
-    assert data["proof"]["payment"]["provider"] == "prepaid_credit"
+    assert data["proof"]["certification_fee"]["method"] == "prepaid_credit"
     assert data["service_response"]["status_code"] == 200
 
     # Check X-ArkForge-Proof header
