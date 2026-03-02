@@ -35,7 +35,7 @@ from .receipt import fetch_receipt
 from .persistence import load_json, save_json
 from .rate_limit import check_rate_limit
 from .timestamps import submit_hash
-from .email_notify import send_proof_email
+from .email_notify import send_proof_email, send_low_credits_email, send_credits_exhausted_email
 from .crypto import sign_proof
 
 logger = logging.getLogger("trust_layer.proxy")
@@ -409,6 +409,56 @@ def _update_service_profile(target_domain: str, response_time_ms: float, succeed
     save_json(path, profile)
 
 
+def _notify_credits_exhausted(api_key: str, key_info: dict):
+    """Send exhausted email once per 24h to avoid spamming."""
+    from datetime import timedelta
+    from .keys import load_api_keys, save_api_keys
+    email = key_info.get("email")
+    if not email:
+        return
+    keys = load_api_keys()
+    info = keys.get(api_key, {})
+    last = info.get("credits_exhausted_alert_sent_at")
+    if last:
+        try:
+            last_dt = datetime.fromisoformat(last)
+            if datetime.now(timezone.utc) - last_dt < timedelta(hours=24):
+                return  # Already notified in the last 24h
+        except Exception:
+            pass
+    send_credits_exhausted_email(email, api_key)
+    info["credits_exhausted_alert_sent_at"] = datetime.now(timezone.utc).isoformat()
+    keys[api_key] = info
+    save_api_keys(keys)
+
+
+def _notify_low_credits_if_needed(api_key: str, key_info: dict, balance: float):
+    """Send low-credits warning when balance drops below 10 proofs. Once per 24h."""
+    from datetime import timedelta
+    from .keys import load_api_keys, save_api_keys
+    low_threshold = round(PROOF_PRICE * 10, 2)  # 1.00 EUR = 10 proofs
+    if balance > low_threshold:
+        return
+    email = key_info.get("email")
+    if not email:
+        return
+    keys = load_api_keys()
+    info = keys.get(api_key, {})
+    last = info.get("low_credits_alert_sent_at")
+    if last:
+        try:
+            last_dt = datetime.fromisoformat(last)
+            if datetime.now(timezone.utc) - last_dt < timedelta(hours=24):
+                return
+        except Exception:
+            pass
+    proofs_remaining = max(0, int(balance / PROOF_PRICE))
+    send_low_credits_email(email, api_key, balance, proofs_remaining)
+    info["low_credits_alert_sent_at"] = datetime.now(timezone.utc).isoformat()
+    keys[api_key] = info
+    save_api_keys(keys)
+
+
 async def execute_proxy(
     target: str,
     method: str,
@@ -474,6 +524,8 @@ async def execute_proxy(
         # Prepaid credit deduction
         balance = get_balance(api_key)
         if balance < PROOF_PRICE:
+            # Notify user once per 24h that credits are exhausted
+            _notify_credits_exhausted(api_key, key_info)
             raise ProxyError(
                 "insufficient_credits",
                 f"Insufficient credits ({balance:.2f} EUR). Buy credits at /v1/credits/buy",
@@ -488,6 +540,9 @@ async def execute_proxy(
             status="succeeded",
             receipt_url=None,
         )
+        # Warn if balance is now low (< 10 proofs remaining)
+        new_balance = round(balance - PROOF_PRICE, 2)
+        _notify_low_credits_if_needed(api_key, key_info, new_balance)
 
     # Payment OK — from here, always return proof even on service error
     payment_data = {

@@ -159,3 +159,68 @@ Service: ArkForge Trust Layer (https://arkforge.fr/trust)
         _send_email(email, subject, body)
     except Exception as e:
         logger.warning("Proof email failed: %s", e)
+
+
+def send_low_credits_email(email: str, api_key: str, balance: float, proofs_remaining: int):
+    """Send a warning email when the credit balance is running low."""
+    subject = "[ArkForge] Low credits — action required"
+    body = f"""ArkForge Trust Layer — Low Credits Warning
+{'=' * 50}
+
+Your credit balance is running low.
+
+  Current balance:   {balance:.2f} EUR
+  Proofs remaining:  ~{proofs_remaining}
+
+Your agent will stop working when credits reach zero.
+
+Recharge now (no browser required):
+
+  curl -X POST https://arkforge.fr/trust/v1/credits/buy \\
+    -H "X-Api-Key: {api_key}" \\
+    -H "Content-Type: application/json" \\
+    -d '{{"amount": 10}}'
+
+Or check your balance:
+
+  curl https://arkforge.fr/trust/v1/usage \\
+    -H "X-Api-Key: {api_key}"
+
+{'=' * 50}
+ArkForge Trust Layer — https://arkforge.fr/trust
+"""
+    try:
+        _send_email(email, subject, body)
+        logger.info("Low credits alert sent to %s (balance=%.2f)", email, balance)
+    except Exception as e:
+        logger.warning("Low credits email failed: %s", e)
+
+
+def send_credits_exhausted_email(email: str, api_key: str):
+    """Send an alert email when credits are fully exhausted."""
+    subject = "[ArkForge] Credits exhausted — agent stopped"
+    body = f"""ArkForge Trust Layer — Credits Exhausted
+{'=' * 50}
+
+Your credit balance has reached zero.
+
+Your agent's API calls are currently being rejected (HTTP 402).
+
+Recharge now to resume operations:
+
+  curl -X POST https://arkforge.fr/trust/v1/credits/buy \\
+    -H "X-Api-Key: {api_key}" \\
+    -H "Content-Type: application/json" \\
+    -d '{{"amount": 10}}'
+
+This will charge the card saved during your initial setup.
+10 EUR = 100 proofs.
+
+{'=' * 50}
+ArkForge Trust Layer — https://arkforge.fr/trust
+"""
+    try:
+        _send_email(email, subject, body)
+        logger.info("Credits exhausted alert sent to %s", email)
+    except Exception as e:
+        logger.warning("Credits exhausted email failed: %s", e)
