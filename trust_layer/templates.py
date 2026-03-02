@@ -46,6 +46,7 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
     parties = proof.get("parties") or {}
     payment = proof.get("payment") or {}
     ots = proof.get("timestamp_authority") or {}
+    tsr_url = _esc(ots.get("tsr_url", ""))
     archive_org = proof.get("archive_org") or {}
     identity_consistent = proof.get("identity_consistent")
     verification_url = _esc(proof.get("verification_url", ""))
@@ -303,7 +304,7 @@ details[open] summary::before{{content:"\u25bc "}}
     <!-- 7. VERIFY BUTTON -->
     <div class="verify-link">
         <a href="{verification_url}?format=json">Verify this proof via API \u2192</a>
-        {"" if not ots.get("tsr_url") else f'<a href="{_esc(ots["tsr_url"])}" download>Download TSR (RFC\u00a03161) \u2192</a>'}
+        {"" if not tsr_url else f'<a href="{tsr_url}" download>Download TSR (RFC\u00a03161) \u2192</a>'}
     </div>
 
     <!-- 5. COLLAPSIBLE TECHNICAL DETAILS -->
