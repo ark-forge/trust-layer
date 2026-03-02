@@ -60,6 +60,8 @@ Or open it in a browser — each proof has a public HTML verification page.
 
 ## Self-hosting
 
+> **Note:** Self-hosted instances provide cryptographic integrity but carry no independent third-party attestation. For proofs verifiable by external parties, use the hosted ArkForge service at [arkforge.fr/trust](https://arkforge.fr/trust).
+
 ```bash
 # Clone & install
 git clone https://github.com/ark-forge/trust-layer.git
