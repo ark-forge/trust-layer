@@ -213,9 +213,11 @@ All proofs (Free and Pro) have 3 witnesses. Pro proofs additionally record the S
 
 **Short URL:** `GET /v/{proof_id}` → 302 redirect to the full proof endpoint. Cacheable (24h).
 
-## External payment evidence
+## Provider payment (Mode B)
 
-When a client pays a provider directly (outside ArkForge), they can attach a `payment_evidence` object to the proxy call. ArkForge fetches the receipt from the PSP, hashes it, and binds it to the proof.
+When an agent pays a provider directly — outside ArkForge, agent-to-provider — it can attach the Stripe receipt URL as `payment_evidence` to the proxy call. ArkForge fetches the receipt, hashes the raw content, and binds it to the proof. **ArkForge does not process or intermediate this payment.**
+
+The proof page labels this section "Provider payment" with the note *"Paid directly from agent to provider — not processed by ArkForge"* to distinguish it from the ArkForge certification fee (0.10 EUR).
 
 ### How it works
 
@@ -227,7 +229,7 @@ When a client pays a provider directly (outside ArkForge), they can attach a `pa
 6. `receipt_content_hash` is included in the chain hash formula
 7. The `payment_evidence` object is stored in the proof
 
-### Payment evidence in the proof
+### Provider payment in the proof JSON
 
 ```json
 {
