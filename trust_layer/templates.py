@@ -126,9 +126,9 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
 
     archive_snapshot_url = archive_org.get("snapshot_url", "")
     archive_has_snapshot = bool(archive_snapshot_url)
-    archive_color = "#22c55e" if archive_has_snapshot else "#475569"
+    archive_color = "#22c55e" if archive_has_snapshot else "#f59e0b"
     archive_name = f'<a href="{_esc(archive_snapshot_url)}" style="color:#38bdf8;text-decoration:none">Archive.org</a>' if archive_has_snapshot else "Archive.org"
-    archive_desc = "public snapshot preserved" if archive_has_snapshot else "snapshot not yet available"
+    archive_desc = "public snapshot preserved" if archive_has_snapshot else "snapshot pending — may take a few minutes"
 
     # --- Signature ---
     has_signature = bool(arkforge_signature)

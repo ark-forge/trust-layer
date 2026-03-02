@@ -413,8 +413,8 @@ class TestArchiveOrgWitness:
         resp = client.get(f"/v1/proof/{pid}", headers={"Accept": "text/html"})
         assert resp.status_code == 200
         assert "Archive.org" in resp.text
-        assert "#475569" in resp.text  # grey dot
-        assert "snapshot not yet available" in resp.text
+        assert "#f59e0b" in resp.text  # amber dot (pending)
+        assert "snapshot pending" in resp.text
 
     def test_json_includes_archive_org_field(self):
         """get_public_proof() includes archive_org field."""
