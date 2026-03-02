@@ -25,6 +25,7 @@ from .config import (
     PROOF_PRICE,
     MIN_CREDIT_PURCHASE,
     MAX_CREDIT_PURCHASE,
+    PRO_SETUP_MIN_AMOUNT,
     RATE_LIMIT_PER_KEY_PER_DAY,
     FREE_TIER_MONTHLY_LIMIT,
     PROOF_ACCESS_LOG,
@@ -353,7 +354,12 @@ async def get_proof_tsr(proof_id: str):
 
 @app.post("/v1/keys/setup")
 async def setup_key(request: Request):
-    """Create a Stripe Checkout Session in setup mode to save a card."""
+    """Create a Stripe Checkout Session (payment mode) to buy initial credits and save card.
+
+    The card is saved for future off-session charges (setup_future_usage=off_session).
+    Minimum amount: PRO_SETUP_MIN_AMOUNT EUR. This endpoint also serves as "replace card"
+    when called again with an existing customer email.
+    """
     try:
         body = await request.json()
     except Exception:
@@ -371,6 +377,20 @@ async def setup_key(request: Request):
     if not sk:
         return _error_response("internal_error", f"Stripe {req_mode} key not configured", 500)
 
+    amount = body.get("amount", PRO_SETUP_MIN_AMOUNT)
+    try:
+        amount = float(amount)
+    except (TypeError, ValueError):
+        return _error_response("invalid_amount", "amount must be a number", 400)
+    if amount < PRO_SETUP_MIN_AMOUNT:
+        return _error_response(
+            "invalid_amount",
+            f"Minimum setup amount is {PRO_SETUP_MIN_AMOUNT:.0f} EUR ({int(PRO_SETUP_MIN_AMOUNT / PROOF_PRICE)} proofs)",
+            400,
+        )
+    if amount > MAX_CREDIT_PURCHASE:
+        return _error_response("invalid_amount", f"Maximum is {MAX_CREDIT_PURCHASE:.0f} EUR", 400)
+
     try:
         customers = stripe.Customer.list(email=email, limit=1, api_key=sk)
         if customers.data:
@@ -382,13 +402,35 @@ async def setup_key(request: Request):
                 api_key=sk,
             )
 
+        proofs_count = int(amount / PROOF_PRICE)
         session = stripe.checkout.Session.create(
-            mode="setup",
+            mode="payment",
             payment_method_types=["card"],
             customer=customer.id,
+            line_items=[{
+                "price_data": {
+                    "currency": "eur",
+                    "product_data": {
+                        "name": "ArkForge Trust Layer — Pro Credits",
+                        "description": f"{proofs_count} certified proofs ({amount:.0f} EUR)",
+                    },
+                    "unit_amount": int(round(amount * 100)),
+                },
+                "quantity": 1,
+            }],
+            payment_intent_data={
+                "setup_future_usage": "off_session",
+                "description": f"ArkForge Trust Layer — {amount:.2f} EUR credits",
+                "metadata": {"product": "trust_layer_pro_setup", "email": email},
+            },
             success_url=f"https://arkforge.fr/{lang}/tl-pro-success.html?session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=f"https://arkforge.fr/{lang}/pricing.html",
-            metadata={"product": "trust_layer_setup", "email": email, "stripe_mode": req_mode},
+            metadata={
+                "product": "trust_layer_pro_setup",
+                "email": email,
+                "stripe_mode": req_mode,
+                "credit_amount": str(amount),
+            },
             api_key=sk,
         )
 
@@ -397,10 +439,54 @@ async def setup_key(request: Request):
             "session_id": session.id,
             "customer_id": customer.id,
             "mode": req_mode,
+            "amount": amount,
+            "proofs_included": proofs_count,
         }
 
     except stripe.StripeError as e:
         logger.error("Stripe setup error: %s", e)
+        return _error_response("internal_error", f"Stripe error: {str(e)}", 500)
+
+
+# --- POST /v1/keys/portal ---
+
+@app.post("/v1/keys/portal")
+async def billing_portal(request: Request):
+    """Create a Stripe Billing Portal session for card/billing management.
+
+    Returns a portal_url the client should redirect to. The portal lets users
+    update their payment method, view invoices, and manage billing details.
+    Requires the Stripe Customer Portal to be configured in the Stripe dashboard.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _error_response("invalid_request", "Invalid JSON body", 400)
+
+    customer_id = body.get("customer_id", "")
+    if not customer_id:
+        return _error_response("invalid_request", "customer_id is required", 400)
+
+    req_mode = body.get("mode", "live")
+    lang = body.get("lang", "fr")
+    if lang not in ("en", "fr"):
+        lang = "fr"
+    sk = STRIPE_TEST_KEY if req_mode == "test" else STRIPE_LIVE_KEY
+    if not sk:
+        return _error_response("internal_error", f"Stripe {req_mode} key not configured", 500)
+
+    try:
+        portal_session = stripe.billing_portal.Session.create(
+            customer=customer_id,
+            return_url=f"https://arkforge.fr/{lang}/pricing.html",
+            api_key=sk,
+        )
+        return {
+            "portal_url": portal_session.url,
+            "customer_id": customer_id,
+        }
+    except stripe.StripeError as e:
+        logger.error("Stripe portal error: %s", e)
         return _error_response("internal_error", f"Stripe error: {str(e)}", 500)
 
 
@@ -583,11 +669,26 @@ async def stripe_webhook(request: Request):
         )
         payment_intent_id = data.get("payment_intent", "")
         subscription_id = data.get("subscription", "")
+        metadata = data.get("metadata", {})
         ref_id = subscription_id or payment_intent_id or customer_id
 
         if customer_id or customer_email:
             api_key = create_api_key(customer_id, ref_id, customer_email, test_mode=is_test)
             logger.info("API key created for %s (ref=%s)", customer_email, ref_id)
+
+            # Pro setup: credit the account with the purchased amount
+            if metadata.get("product") == "trust_layer_pro_setup":
+                try:
+                    credit_amount = float(metadata.get("credit_amount", 0))
+                    if credit_amount > 0:
+                        add_credits(api_key, credit_amount, payment_intent_id or ref_id)
+                        logger.info(
+                            "Credits added: %.2f EUR for %s (pi=%s)",
+                            credit_amount, customer_email, payment_intent_id,
+                        )
+                except Exception as e:
+                    logger.error("Failed to add credits after checkout: %s", e)
+
             try:
                 send_welcome_email(customer_email, api_key)
             except Exception as e:
@@ -618,6 +719,8 @@ async def root():
         "endpoints": {
             "proxy": "POST /v1/proxy",
             "credits_buy": "POST /v1/credits/buy",
+            "setup_pro": "POST /v1/keys/setup",
+            "billing_portal": "POST /v1/keys/portal",
             "proof": "GET /v1/proof/{proof_id}",
             "reputation": "GET /v1/agent/{agent_id}/reputation",
             "disputes": "POST /v1/disputes",

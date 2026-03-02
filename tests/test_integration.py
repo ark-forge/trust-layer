@@ -278,3 +278,163 @@ def test_webhook_invalid_json(client):
         headers={"Content-Type": "application/json"},
     )
     assert r.status_code == 400
+
+
+# --- /v1/keys/setup (payment mode) ---
+
+def test_setup_key_payment_mode(client, monkeypatch):
+    """Checkout session créée en mode payment avec montant et line_items."""
+    import trust_layer.app as app_mod
+    monkeypatch.setattr(app_mod, "STRIPE_TEST_KEY", "sk_test_fake")
+
+    mock_customer = MagicMock()
+    mock_customer.id = "cus_test_setup"
+    mock_customer_list = MagicMock()
+    mock_customer_list.data = []
+
+    mock_session = MagicMock()
+    mock_session.url = "https://checkout.stripe.com/pay/cs_test_xxx"
+    mock_session.id = "cs_test_xxx"
+
+    with patch("stripe.Customer.list", return_value=mock_customer_list), \
+         patch("stripe.Customer.create", return_value=mock_customer), \
+         patch("stripe.checkout.Session.create", return_value=mock_session) as mock_create:
+
+        r = client.post("/v1/keys/setup", json={
+            "email": "pro@test.com",
+            "mode": "test",
+            "amount": 10.0,
+        })
+
+    assert r.status_code == 200
+    data = r.json()
+    assert data["checkout_url"] == "https://checkout.stripe.com/pay/cs_test_xxx"
+    assert data["amount"] == 10.0
+    assert data["proofs_included"] == 100
+
+    # Vérifier que le Checkout est en mode payment (pas setup)
+    call_kwargs = mock_create.call_args.kwargs
+    assert call_kwargs["mode"] == "payment"
+    assert call_kwargs["line_items"][0]["price_data"]["unit_amount"] == 1000
+    assert call_kwargs["payment_intent_data"]["setup_future_usage"] == "off_session"
+    assert call_kwargs["metadata"]["product"] == "trust_layer_pro_setup"
+    assert call_kwargs["metadata"]["credit_amount"] == "10.0"
+
+
+def test_setup_key_amount_too_low(client, monkeypatch):
+    """Montant inférieur au minimum rejeté (vérifié avant d'appeler Stripe)."""
+    import trust_layer.app as app_mod
+    monkeypatch.setattr(app_mod, "STRIPE_TEST_KEY", "sk_test_fake")
+    r = client.post("/v1/keys/setup", json={
+        "email": "pro@test.com",
+        "mode": "test",
+        "amount": 5.0,
+    })
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "invalid_amount"
+
+
+def test_setup_key_defaults_to_10(client, monkeypatch):
+    """Sans amount, défaut à 10€."""
+    import trust_layer.app as app_mod
+    monkeypatch.setattr(app_mod, "STRIPE_TEST_KEY", "sk_test_fake")
+
+    mock_customer = MagicMock()
+    mock_customer.id = "cus_test_default"
+    mock_customer_list = MagicMock()
+    mock_customer_list.data = []
+
+    mock_session = MagicMock()
+    mock_session.url = "https://checkout.stripe.com/pay/cs_test_yyy"
+    mock_session.id = "cs_test_yyy"
+
+    with patch("stripe.Customer.list", return_value=mock_customer_list), \
+         patch("stripe.Customer.create", return_value=mock_customer), \
+         patch("stripe.checkout.Session.create", return_value=mock_session) as mock_create:
+
+        r = client.post("/v1/keys/setup", json={"email": "pro@test.com", "mode": "test"})
+
+    assert r.status_code == 200
+    call_kwargs = mock_create.call_args.kwargs
+    assert call_kwargs["line_items"][0]["price_data"]["unit_amount"] == 1000  # 10€
+
+
+# --- Webhook checkout.session.completed — créditation Pro ---
+
+def test_webhook_pro_setup_credits_account(client):
+    """Webhook Pro setup: crée la clé ET crédite le compte."""
+    from trust_layer.credits import get_balance
+
+    event = {
+        "type": "checkout.session.completed",
+        "livemode": False,
+        "data": {
+            "object": {
+                "customer": "cus_webhook_pro_test",
+                "customer_details": {"email": "webhook_pro@test.com"},
+                "payment_intent": "pi_webhook_pro_001",
+                "subscription": None,
+                "metadata": {
+                    "product": "trust_layer_pro_setup",
+                    "email": "webhook_pro@test.com",
+                    "credit_amount": "10.0",
+                },
+            }
+        },
+    }
+
+    with patch("trust_layer.app.send_welcome_email"):
+        r = client.post(
+            "/v1/webhooks/stripe",
+            json=event,
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert r.status_code == 200
+    assert r.json()["received"] is True
+
+    # La clé a été créée — trouver via load_api_keys
+    from trust_layer.keys import load_api_keys
+    keys = load_api_keys()
+    pro_key = None
+    for key_str, info in keys.items():
+        if info.get("email") == "webhook_pro@test.com":
+            pro_key = key_str
+            break
+
+    assert pro_key is not None, "Pro API key not created by webhook"
+    balance = get_balance(pro_key)
+    assert balance == 10.0, f"Expected balance 10.0, got {balance}"
+
+
+# --- /v1/keys/portal ---
+
+def test_billing_portal(client, monkeypatch):
+    """Retourne une URL Stripe Customer Portal."""
+    import trust_layer.app as app_mod
+    monkeypatch.setattr(app_mod, "STRIPE_TEST_KEY", "sk_test_fake")
+
+    mock_portal = MagicMock()
+    mock_portal.url = "https://billing.stripe.com/session/test_portal_xxx"
+
+    with patch("stripe.billing_portal.Session.create", return_value=mock_portal) as mock_create:
+        r = client.post("/v1/keys/portal", json={
+            "customer_id": "cus_test_portal",
+            "mode": "test",
+        })
+
+    assert r.status_code == 200
+    data = r.json()
+    assert data["portal_url"] == "https://billing.stripe.com/session/test_portal_xxx"
+    assert data["customer_id"] == "cus_test_portal"
+
+    mock_create.assert_called_once()
+    call_kwargs = mock_create.call_args.kwargs
+    assert call_kwargs["customer"] == "cus_test_portal"
+
+
+def test_billing_portal_requires_customer_id(client):
+    """customer_id manquant → 400."""
+    r = client.post("/v1/keys/portal", json={"mode": "test"})
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "invalid_request"
