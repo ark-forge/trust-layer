@@ -52,7 +52,7 @@ Or open it in a browser — each proof has a public HTML verification page.
 
 - **Proxy** — forwards requests to upstream APIs, meters usage, creates proof
 - **Prepaid credits** — buy credits via Stripe Checkout, deducted per proof (0.10 EUR/proof)
-- **Proofs** — SHA-256 hash chain per call, publicly verifiable, anchored via RFC 3161 Timestamp Authority and archived on Archive.org
+- **Proofs** — SHA-256 hash chain per call, publicly verifiable, anchored via RFC 3161 Timestamp Authority
 - **Ed25519 signature** — every proof is signed by ArkForge's Ed25519 key, proving origin. Public key served at `GET /v1/pubkey`
 - **External receipt verification** — attach a Stripe receipt URL to any proxy call; ArkForge fetches, hashes, and parses it independently (see below)
 - **API keys** — `mcp_free_*` / `mcp_pro_*` / `mcp_test_*` prefixes auto-select plan and Stripe mode
@@ -154,7 +154,6 @@ These are stored in the proof and shadow profile. If the same API key sends a di
 - `proof.identity_consistent` — `true` / `false` / `null` (consistency check)
 - `proof.verification_url` — public URL to verify the proof
 - `proof.timestamp_authority` — TSA status, provider, download URL, and `tsr_base64` (after background processing)
-- `proof.archive_org` — Archive.org snapshot URL (if available)
 - `service_response` — upstream API response
 - `service_response.body._arkforge_attestation` — digital stamp (Level 1, see below)
 
@@ -204,12 +203,11 @@ Badge colors:
 - **Orange** (`#f59e0b`) — integrity verified, timestamp pending
 - **Red** (`#ef4444`) — integrity check failed
 
-The proof page shows up to 3 independent witnesses:
+The proof page shows 2 independent witnesses:
 - **Ed25519 Signature** — proves ArkForge origin (green if signed, grey if not)
 - **RFC 3161 Timestamp** — certified by FreeTSA.org (green when verified, orange when pending)
-- **Archive.org** — public snapshot of the proof page on the Wayback Machine (green if snapshot exists, grey if not yet available)
 
-All proofs (Free and Pro) have 3 witnesses. Pro proofs additionally record the Stripe credit purchase receipt for audit.
+All proofs (Free and Pro) have 2 witnesses. Pro proofs additionally record the Stripe credit purchase receipt for audit.
 
 **Short URL:** `GET /v/{proof_id}` → 302 redirect to the full proof endpoint. Cacheable (24h).
 
@@ -312,7 +310,7 @@ ed25519:ZLlGE0eN0eTNUE9vaK1tStf6AuoFUWqJBvqx7QgxfEY
 
 **What the signature guarantees:** integrity of all fields covered by the chain hash (request, response, payment, timestamp, buyer, seller, upstream_timestamp if present, receipt_content_hash if present).
 
-**What the signature does NOT cover:** `views_count`, `identity_consistent`, `archive_org`, and other informational/mutable metadata.
+**What the signature does NOT cover:** `views_count`, `identity_consistent`, and other informational/mutable metadata.
 
 ## Independent verification
 
@@ -416,7 +414,7 @@ Trust Layer (/v1/proxy)
     |--- 4. Forward request to upstream API
     |--- 5. Hash request + response + receipt (SHA-256 chain)
     |--- 6. Store proof, return response immediately
-    |--- 7. Background: RFC 3161 timestamp + Archive.org snapshot + email receipt
+    |--- 7. Background: RFC 3161 timestamp + email receipt
     |
     v
 Upstream API (any HTTPS endpoint)
@@ -521,9 +519,9 @@ Free keys (`mcp_free_*`) do not use credits — they have a monthly quota of 100
 
 | Prefix | Plan | Payment | Witnesses | Limits |
 |--------|------|---------|-----------|--------|
-| `mcp_free_*` | Free | No charge | 3 (Ed25519, RFC 3161, Archive.org) | 100 proofs/month |
-| `mcp_pro_*` | Pro | Prepaid credits (0.10 EUR/proof) | 3 (Ed25519, RFC 3161, Archive.org) | 100 proofs/day |
-| `mcp_test_*` | Test | Test credits (Stripe test mode) | 3 (Ed25519, RFC 3161, Archive.org) | 100 proofs/day |
+| `mcp_free_*` | Free | No charge | 2 (Ed25519, RFC 3161 TSA) | 100 proofs/month |
+| `mcp_pro_*` | Pro | Prepaid credits (0.10 EUR/proof) | 2 (Ed25519, RFC 3161 TSA) | 100 proofs/day |
+| `mcp_test_*` | Test | Test credits (Stripe test mode) | 2 (Ed25519, RFC 3161 TSA) | 100 proofs/day |
 
 The proxy auto-selects the right plan, witnesses, and rate limits based on the API key prefix. Free tier skips Stripe entirely (no credit card required). Pro keys require a positive credit balance — buy credits via `POST /v1/credits/buy`. Test mode uses Stripe test keys (card `4242 4242 4242 4242`).
 

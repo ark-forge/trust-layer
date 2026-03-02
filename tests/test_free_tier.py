@@ -169,7 +169,6 @@ def test_free_tier_template_greys_out_stripe():
     # Other witnesses should still be present
     assert "Ed25519" in html
     assert "RFC 3161" in html
-    assert "Archive.org" in html
     # Trust point should say "free tier"
     assert "free tier" in html.lower()
 

@@ -151,7 +151,6 @@ def get_public_proof(proof: dict) -> dict:
             if k in ("transaction_id", "amount", "currency", "status", "method")
         },
         "timestamp_authority": proof.get("timestamp_authority"),
-        "archive_org": proof.get("archive_org"),
         "timestamp": proof.get("timestamp"),
         "upstream_timestamp": proof.get("upstream_timestamp"),
         "verification_algorithm": proof.get("verification_algorithm"),

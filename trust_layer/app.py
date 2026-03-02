@@ -798,7 +798,7 @@ async def pricing():
             "free": {
                 "price": "0 EUR/month",
                 "limit": f"{FREE_TIER_MONTHLY_LIMIT} proofs/month",
-                "witnesses": "3 (Ed25519, TSA, Archive.org)",
+                "witnesses": "2 (Ed25519, RFC 3161 TSA)",
                 "setup": f"{TRUST_LAYER_BASE_URL}/v1/keys/free-signup",
                 "credit_card_required": False,
             },
@@ -806,7 +806,7 @@ async def pricing():
                 "proof_price": f"{PROOF_PRICE} EUR",
                 "credits": f"prepaid (min {MIN_CREDIT_PURCHASE} EUR, max {MAX_CREDIT_PURCHASE} EUR)",
                 "limit": f"{RATE_LIMIT_PER_KEY_PER_DAY} proofs/day",
-                "witnesses": "3 (Ed25519, TSA, Archive.org)",
+                "witnesses": "2 (Ed25519, RFC 3161 TSA)",
                 "setup": f"{TRUST_LAYER_BASE_URL}/v1/keys/setup",
                 "buy_credits": f"{TRUST_LAYER_BASE_URL}/v1/credits/buy",
             },

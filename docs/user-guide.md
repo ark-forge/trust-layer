@@ -401,10 +401,9 @@ https://arkforge.fr/trust/v/prf_20260302_135727_5b47d5
 curl https://arkforge.fr/trust/v1/proof/prf_20260302_135727_5b47d5
 ```
 
-**3 independent witnesses:**
+**2 independent witnesses:**
 - Ed25519 signature (ArkForge)
 - RFC 3161 timestamp (FreeTSA)
-- Archive.org snapshot
 
 **Independent verification (without trusting Trust Layer):**
 

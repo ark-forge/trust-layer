@@ -52,7 +52,6 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
         f'<a href="{tsr_url}" download>Download TSR (RFC\u00a03161) \u2192</a>'
         if tsr_url else ""
     )
-    archive_org = proof.get("archive_org") or {}
     identity_consistent = proof.get("identity_consistent")
     verification_url = _esc(proof.get("verification_url", ""))
     spec_version = proof.get("spec_version")
@@ -123,12 +122,6 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
         ots_label = "certified timestamp confirms date cannot be altered"
     else:
         ots_label = "timestamp not yet available"
-
-    archive_snapshot_url = archive_org.get("snapshot_url", "")
-    archive_has_snapshot = bool(archive_snapshot_url)
-    archive_color = "#22c55e" if archive_has_snapshot else "#f59e0b"
-    archive_name = f'<a href="{_esc(archive_snapshot_url)}" style="color:#38bdf8;text-decoration:none">Archive.org</a>' if archive_has_snapshot else "Archive.org"
-    archive_desc = "public snapshot preserved" if archive_has_snapshot else "snapshot pending — may take a few minutes"
 
     # --- Signature ---
     has_signature = bool(arkforge_signature)
@@ -295,11 +288,6 @@ details[open] summary::before{{content:"\u25bc "}}
             <div class="dot" style="background:{sig_color}"></div>
             <span class="name">Ed25519 Signature</span>
             <span class="desc">\u2014 {_esc(sig_label)}</span>
-        </div>
-        <div class="witness">
-            <div class="dot" style="background:{archive_color}"></div>
-            <span class="name">{archive_name}</span>
-            <span class="desc">\u2014 {_esc(archive_desc)}</span>
         </div>
     </div>
 

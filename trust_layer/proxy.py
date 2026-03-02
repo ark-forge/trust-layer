@@ -82,38 +82,9 @@ def _log_background_task(proof_id: str, task: str, status: str, detail: str = ""
         pass  # Never break proof flow for logging
 
 
-async def _submit_archive_org(proof_url: str, proof_id: str) -> Optional[dict]:
-    """Submit proof page to Archive.org Wayback Machine (best-effort, async)."""
-    try:
-        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-            resp = await client.get(
-                f"https://web.archive.org/save/{proof_url}",
-                headers={"User-Agent": "ArkForge Trust Layer (+https://arkforge.fr)"},
-            )
-        if resp.status_code < 400:
-            # With follow_redirects=True, resp.url is the final redirected URL
-            # e.g. https://web.archive.org/web/20260302084345/https://...
-            snapshot_url = str(resp.url) if "web.archive.org/web/" in str(resp.url) else None
-            if not snapshot_url:
-                # Fallback: try headers (only present on non-redirected responses)
-                snapshot_url = resp.headers.get("Content-Location") or resp.headers.get("Location")
-                if snapshot_url and not snapshot_url.startswith("http"):
-                    snapshot_url = f"https://web.archive.org{snapshot_url}"
-            return {
-                "status": "submitted",
-                "snapshot_url": snapshot_url or f"https://web.archive.org/web/{proof_url}",
-                "submitted_at": datetime.now(timezone.utc).isoformat(),
-            }
-        logger.warning("Archive.org returned %d for %s", resp.status_code, proof_id)
-        return None
-    except Exception as e:
-        logger.warning("Archive.org submit skipped for %s: %s: %s", proof_id, type(e).__name__, e)
-        return None
-
-
 async def _post_proof_background(proof_id: str, proof_record: dict, chain_hash: str,
                                   verification_url: str, email: str):
-    """Background task: TSA + Archive.org + email — none of these block the client response."""
+    """Background task: TSA + email — none of these block the client response."""
     # RFC 3161 Timestamp (sync but run in thread to avoid blocking event loop)
     try:
         import base64 as _b64
@@ -132,20 +103,6 @@ async def _post_proof_background(proof_id: str, proof_record: dict, chain_hash: 
     except Exception as e:
         logger.warning("TSA submit skipped: %s", e)
         _log_background_task(proof_id, "tsa", "failure", str(e))
-
-    # Archive.org
-    try:
-        result = await _submit_archive_org(verification_url, proof_id)
-        if result:
-            proof_record["archive_org"] = result
-            store_proof(proof_id, proof_record)
-            logger.info("Archive.org snapshot saved for %s", proof_id)
-            _log_background_task(proof_id, "archive_org", "success")
-        else:
-            _log_background_task(proof_id, "archive_org", "failure", "no result returned")
-    except Exception as e:
-        logger.warning("Archive.org background task failed for %s: %s", proof_id, e)
-        _log_background_task(proof_id, "archive_org", "failure", str(e))
 
     # Email
     if email:
