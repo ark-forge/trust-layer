@@ -106,7 +106,12 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
         payment_color = "#22c55e"
         payment_witness = "Prepaid credits"
         payment_desc = "deducted from prepaid balance"
-        payment_line = "Payment via prepaid credits"
+        has_provider_payment = bool(payment_evidence and payment_evidence.get("receipt_url"))
+        payment_line = (
+            "ArkForge certification fee paid via prepaid credits"
+            if has_provider_payment
+            else "Payment via prepaid credits"
+        )
     else:
         payment_color = "#22c55e"
         payment_witness = f'<a href="{receipt_url}" style="color:#38bdf8;text-decoration:none">Stripe</a>' if receipt_url else "Stripe"
@@ -152,7 +157,8 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
 
         payment_evidence_html = f"""
     <div class="card">
-        <h2>External payment evidence</h2>
+        <h2>Provider payment</h2>
+        <p style="color:#94a3b8;font-size:0.8rem;margin-bottom:1rem">Paid directly from agent to provider \u2014 not processed by ArkForge</p>
         <div class="row"><span class="label">Verification</span><span class="val" style="color:{pe_color}">{pe_label}</span></div>
         {"" if not pe_hash else f'<div class="row"><span class="label">Receipt hash</span><span class="val" style="font-family:monospace;font-size:0.75rem">{pe_hash}</span></div>'}
 {pe_parsed_rows}
@@ -244,7 +250,7 @@ details[open] summary::before{{content:"\u25bc "}}
         <h2>Transaction receipt</h2>
         <div class="row"><span class="label">Service</span><span class="val">{seller}</span></div>
 {identity_row}
-        <div class="row"><span class="label">Payment</span><span class="val">{amount_display}</span></div>
+        <div class="row"><span class="label">{"Certification fee" if payment_evidence and payment_evidence.get("receipt_url") else "Payment"}</span><span class="val">{amount_display}</span></div>
         <div class="row"><span class="label">Execution</span><span class="val">{_esc(execution_status)}</span></div>
         {"" if transaction_success is None else f'<div class="row"><span class="label">Upstream</span><span class="val" style="color:{"#22c55e" if transaction_success else "#ef4444"}">{"Success" if transaction_success else "Failed"}{f" (HTTP {upstream_status_code})" if upstream_status_code else ""}</span></div>'}
         <div class="row"><span class="label">Date</span><span class="val">{human_date}</span></div>
