@@ -435,6 +435,20 @@ EXPECTED=$(jq -r '.hashes.chain' proof.json | sed 's/sha256://')
 
 ## Credit management (Pro/Test only)
 
+### Email alerts
+
+ArkForge sends automatic email notifications so your agent never stops silently:
+
+| Trigger | Email | Cooldown |
+|---------|-------|---------|
+| Balance drops below **1.00 EUR** (~10 proofs) after a debit | "Low credits — action required" + recharge curl | 24h |
+| Call rejected due to **zero balance** (HTTP 402) | "Credits exhausted — agent stopped" + recharge curl | 24h |
+| **80% of daily/monthly quota** consumed | "Quota alert" + upgrade or recharge hint | Once per threshold |
+
+These emails are sent to the address used during key setup. They include a ready-to-run `curl` command to recharge immediately — no browser required.
+
+---
+
 ### Check balance
 
 ```bash

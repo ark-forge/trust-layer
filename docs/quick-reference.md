@@ -236,6 +236,14 @@ No browser required after the initial setup.
 | Recharge | Agent | `POST /v1/credits/buy` → off-session card charge |
 | Execute | Agent | `POST /v1/proxy` → 0.10 EUR/proof |
 
+**Automatic email alerts (no configuration needed):**
+
+| Balance | Email sent |
+|---------|-----------|
+| < 1.00 EUR (~10 proofs) | "Low credits — action required" (24h cooldown) |
+| 0 EUR → call rejected 402 | "Credits exhausted — agent stopped" (24h cooldown) |
+| 80% quota consumed | "Quota alert" |
+
 ---
 
 ## Verify a proof (bash)

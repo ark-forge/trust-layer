@@ -508,7 +508,10 @@ curl https://arkforge.fr/trust/v1/usage \
 1. **Setup** — `POST /v1/keys/setup` (10 EUR minimum): Stripe Checkout charges the card, saves it for future use, and credits the account.
 2. **Top up** — `POST /v1/credits/buy`: off-session charge, no browser required. Credits never expire.
 3. **Use** — each `POST /v1/proxy` call deducts 1 credit (0.10 EUR). If balance is 0, the call is rejected with `402 Payment Required`.
-4. **Alert** — email notification when 80% of quota is consumed (monthly for free keys, daily for pro keys).
+4. **Alerts** — three email notifications keep you informed:
+   - **80% quota** — when 80% of the daily/monthly quota is consumed
+   - **Low balance** — when balance drops below 1.00 EUR (~10 proofs remaining), once per 24h
+   - **Exhausted** — when a call is rejected due to zero balance (`402`), once per 24h — includes the recharge curl command
 
 Free keys (`mcp_free_*`) do not use credits — they have a monthly quota of 100 proofs at no cost.
 
