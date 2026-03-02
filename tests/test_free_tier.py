@@ -52,7 +52,7 @@ async def test_free_tier_skips_stripe(free_api_key):
     assert "proof" in result
     proof = result["proof"]
     assert proof["proof_id"].startswith("prf_")
-    assert proof["payment"]["provider"] == "none"
+    assert proof["payment"]["provider"] == "free_tier"
     assert proof["payment"]["status"] == "free_tier"
     assert proof["payment"]["amount"] == 0.0
     assert proof["payment"]["transaction_id"] == "free_tier"
@@ -157,7 +157,7 @@ def test_free_tier_template_greys_out_stripe():
         "timestamp": "2026-02-27T15:00:00Z",
         "hashes": {"chain": "sha256:abc", "request": "sha256:def", "response": "sha256:ghi"},
         "parties": {"buyer_fingerprint": "sha256:buyer", "seller": "example.com"},
-        "payment": {"provider": "none", "transaction_id": "free_tier", "amount": 0.0, "currency": "EUR", "status": "free_tier"},
+        "payment": {"provider": "free_tier", "transaction_id": "free_tier", "amount": 0.0, "currency": "EUR", "status": "free_tier"},
         "timestamp_authority": {"status": "submitted"},
         "verification_url": "https://test.arkforge.fr/v1/proof/prf_test_free",
     }

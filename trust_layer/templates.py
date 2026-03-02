@@ -303,6 +303,7 @@ details[open] summary::before{{content:"\u25bc "}}
     <!-- 7. VERIFY BUTTON -->
     <div class="verify-link">
         <a href="{verification_url}?format=json">Verify this proof via API \u2192</a>
+        {"" if not ots.get("tsr_url") else f'<a href="{_esc(ots["tsr_url"])}" download>Download TSR (RFC\u00a03161) \u2192</a>'}
     </div>
 
     <!-- 5. COLLAPSIBLE TECHNICAL DETAILS -->

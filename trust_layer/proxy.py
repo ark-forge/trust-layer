@@ -91,9 +91,14 @@ async def _submit_archive_org(proof_url: str, proof_id: str) -> Optional[dict]:
                 headers={"User-Agent": "ArkForge Trust Layer (+https://arkforge.fr)"},
             )
         if resp.status_code < 400:
-            snapshot_url = resp.headers.get("Content-Location") or resp.headers.get("Location")
-            if snapshot_url and not snapshot_url.startswith("http"):
-                snapshot_url = f"https://web.archive.org{snapshot_url}"
+            # With follow_redirects=True, resp.url is the final redirected URL
+            # e.g. https://web.archive.org/web/20260302084345/https://...
+            snapshot_url = str(resp.url) if "web.archive.org/web/" in str(resp.url) else None
+            if not snapshot_url:
+                # Fallback: try headers (only present on non-redirected responses)
+                snapshot_url = resp.headers.get("Content-Location") or resp.headers.get("Location")
+                if snapshot_url and not snapshot_url.startswith("http"):
+                    snapshot_url = f"https://web.archive.org{snapshot_url}"
             return {
                 "status": "submitted",
                 "snapshot_url": snapshot_url or f"https://web.archive.org/web/{proof_url}",
@@ -458,7 +463,7 @@ async def execute_proxy(
 
     if is_free:
         charge_result = ChargeResult(
-            provider="none",
+            provider="free_tier",
             transaction_id="free_tier",
             amount=0.0,
             currency=currency,
