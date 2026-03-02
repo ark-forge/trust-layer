@@ -25,5 +25,7 @@ jobs:
         run: pytest tests/ -v
 
       - name: Audit dependencies
-        run: pip audit
+        run: |
+          pip install pip-audit
+          pip-audit
         continue-on-error: true
