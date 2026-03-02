@@ -184,28 +184,57 @@ chain_hash = SHA256(
 
 ---
 
-## Autonomous agent (auto-recharge)
+## Autonomous agent — full lifecycle
+
+**One-time human setup → then fully autonomous**
+
+```
+Human (once)   →  Stripe Checkout  →  Card saved + key delivered
+Agent (always) →  /v1/usage        →  Check balance
+               →  /v1/credits/buy  →  Recharge if low (card charged automatically)
+               →  /v1/proxy        →  Execute + get proof (0.10 EUR deducted)
+```
 
 ```python
-class SmartAgent:
+class AutonomousAgent:
+    def __init__(self, api_key, min_balance=5.0, recharge_amount=10.0):
+        self.api_key = api_key
+        self.min_balance = min_balance
+        self.recharge_amount = recharge_amount
+        self.headers = {"X-Api-Key": api_key, "Content-Type": "application/json"}
+
     def ensure_budget(self):
         balance = requests.get(
             "https://arkforge.fr/trust/v1/usage",
-            headers={"X-Api-Key": self.api_key}
+            headers=self.headers
         ).json()['credit_balance']
 
-        if balance < 5.0:
+        if balance < self.min_balance:
             requests.post(
                 "https://arkforge.fr/trust/v1/credits/buy",
-                headers={"X-Api-Key": self.api_key},
-                json={"amount": 10.0}
+                headers=self.headers,
+                json={"amount": self.recharge_amount}
             )
 
-agent = SmartAgent("mcp_pro_xxx...")
-agent.ensure_budget()  # Recharges automatically if needed
+    def execute(self, target, payload):
+        self.ensure_budget()
+        return requests.post(
+            "https://arkforge.fr/trust/v1/proxy",
+            headers=self.headers,
+            json={"target": target, "payload": payload}
+        ).json()
+
+agent = AutonomousAgent("mcp_pro_xxx...")
+result = agent.execute("https://provider.com/api", {"task": "analyze"})
 ```
 
 No browser required after the initial setup.
+
+| Step | Who | Endpoint |
+|------|-----|----------|
+| Setup (once) | Human | `POST /v1/keys/setup` → Stripe Checkout |
+| Recharge | Agent | `POST /v1/credits/buy` → off-session card charge |
+| Execute | Agent | `POST /v1/proxy` → 0.10 EUR/proof |
 
 ---
 

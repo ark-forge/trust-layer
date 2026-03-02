@@ -26,6 +26,87 @@ response = requests.post("https://arkforge.fr/trust/v1/proxy",
 
 ---
 
+## Autonomous agents — how budget works
+
+Trust Layer is designed for agents that run without human intervention. Here is the complete flow:
+
+**Step 1 — One-time manual setup (human)**
+
+The first time, a human opens a browser, enters a card, and completes the Stripe Checkout. The card is saved in Stripe for future charges.
+
+```bash
+curl -X POST https://arkforge.fr/trust/v1/keys/setup \
+  -d '{"email": "agent@example.com", "amount": 10}'
+# → {"checkout_url": "https://checkout.stripe.com/c/pay/cs_live_..."}
+# Open the URL, enter card → key delivered by email
+```
+
+This is the **only human action required**.
+
+**Step 2 — Agent runs autonomously forever**
+
+From that point on, the agent checks its balance before each task and recharges automatically if needed — no browser, no human, no interruption.
+
+```python
+import requests
+
+class AutonomousAgent:
+    def __init__(self, api_key, min_balance=5.0, recharge_amount=10.0):
+        self.api_key = api_key
+        self.min_balance = min_balance
+        self.recharge_amount = recharge_amount
+        self.headers = {"X-Api-Key": api_key, "Content-Type": "application/json"}
+
+    def ensure_budget(self):
+        """Recharge automatically if balance is low."""
+        usage = requests.get(
+            "https://arkforge.fr/trust/v1/usage",
+            headers=self.headers
+        ).json()
+
+        balance = usage['credit_balance']
+        if balance < self.min_balance:
+            result = requests.post(
+                "https://arkforge.fr/trust/v1/credits/buy",
+                headers=self.headers,
+                json={"amount": self.recharge_amount}
+            ).json()
+            # result contains: credits_added, balance, charge_id, receipt_url
+            print(f"Recharged: +{result['credits_added']} EUR, new balance: {result['balance']} EUR")
+
+    def execute(self, target, payload):
+        self.ensure_budget()
+        return requests.post(
+            "https://arkforge.fr/trust/v1/proxy",
+            headers=self.headers,
+            json={"target": target, "payload": payload}
+        ).json()
+
+# The agent manages its own budget indefinitely
+agent = AutonomousAgent("mcp_pro_xxx...", min_balance=5.0, recharge_amount=10.0)
+
+while True:
+    result = agent.execute("https://provider.com/api", {"task": "analyze", "data": "..."})
+    proof_id = result['proof']['id']
+    # → Agent runs, pays for proofs, recharges itself — zero human input
+```
+
+**What happens under the hood:**
+- `POST /v1/credits/buy` triggers a Stripe off-session charge on the card saved during setup
+- The saved card is charged immediately — no redirect, no browser
+- Credits are added to the account instantly
+- The `receipt_url` in the response is a verifiable Stripe receipt for the recharge
+
+**Summary:**
+
+| Step | Who | Action |
+|------|-----|--------|
+| Initial setup | Human | Open Stripe Checkout, enter card once |
+| Recharge | Agent | `POST /v1/credits/buy` — automatic, programmatic |
+| Execute tasks | Agent | `POST /v1/proxy` — deducts 0.10 EUR per proof |
+
+---
+
 ## Two modes
 
 ### Mode A — Transaction proof only
