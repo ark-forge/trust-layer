@@ -52,7 +52,7 @@ Or open it in a browser — each proof has a public HTML verification page.
 
 **For regulated environments (AI Act, DORA, NIS2, eIDAS):**
 - Every proof is signed (Ed25519), timestamped (RFC 3161), and anchored in a public immutability log (Sigstore Rekor)
-- RFC 3161 timestamps from WebTrust-certified authorities; eIDAS-qualified QTSP available for legal proceedings
+- RFC 3161 timestamps via a pool of WebTrust-certified authorities; eIDAS-qualified QTSP available on Enterprise plan for legal proceedings requiring qualified timestamps
 - Open proof specification ([ark-forge/proof-spec](https://github.com/ark-forge/proof-spec)) — any third party can verify a proof without trusting ArkForge
 
 ## Features
