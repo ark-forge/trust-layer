@@ -285,13 +285,13 @@ Every proxy response includes 4 `X-ArkForge-*` headers (see table above). These 
 - `Accept: application/json` or no Accept header → JSON (backward compatible)
 
 Badge colors:
-- **Green** (`#22c55e`) — integrity verified, certified timestamp via FreeTSA
+- **Green** (`#22c55e`) — integrity verified, certified timestamp obtained
 - **Orange** (`#f59e0b`) — integrity verified, timestamp pending
 - **Red** (`#ef4444`) — integrity check failed
 
 The proof page shows 3 independent witnesses:
 - **Ed25519 Signature** — proves ArkForge origin (green if signed, grey if not)
-- **RFC 3161 Timestamp** — certified by FreeTSA.org (green when verified, orange when pending)
+- **RFC 3161 Timestamp** — issued by the first available TSA in the pool: FreeTSA → DigiCert → Sectigo (green when verified, orange when pending). The `timestamp_authority.provider` field records which TSA was used.
 - **Sigstore Rekor** — chain hash anchored in the Linux Foundation's append-only public log (green when registered, grey when pending)
 
 All proofs (Free and Pro) have 3 witnesses. Pro proofs additionally record the Stripe credit purchase receipt for audit.
@@ -501,7 +501,13 @@ Upstream API (any HTTPS endpoint)
 
 **No database.** Proofs are stored as immutable JSON files on disk — one file per transaction (`proofs/{proof_id}.json`). No SQL, no edits, no deletions. Once written, a proof can only be read. This guarantees that proofs cannot be retroactively altered.
 
-**RFC 3161 timestamps** are issued by [FreeTSA.org](https://freetsa.org), a public free TSA. FreeTSA carries no contractual SLA. If FreeTSA is unavailable, the background timestamping task retries and the proof remains valid with `tsa_status: "pending"` — the Ed25519 signature and Sigstore Rekor anchor are unaffected. A paid TSA fallback (DigiStamp, Sectigo) is on the operational roadmap for high-volume deployments.
+**RFC 3161 timestamps** use a pool of 3 public TSA servers tried in order — first success wins:
+
+1. **FreeTSA.org** (primary) — free community TSA, no contractual SLA
+2. **DigiCert** (`timestamp.digicert.com`) — WebTrust-certified CA infrastructure
+3. **Sectigo** (`timestamp.sectigo.com`) — WebTrust-certified CA infrastructure
+
+If FreeTSA is unavailable, DigiCert takes over automatically within the same background task. The `timestamp_authority.provider` field in the proof records which TSA was actually used. The pool is configured via env vars (`TSA_PRIMARY_URL`, `TSA_SECONDARY_URL`, `TSA_TERTIARY_URL`) — a QTSP eIDAS-qualified endpoint (e.g. [qtsa.eu/AlfaTrust](https://qtsa.eu), ~€0.048/timestamp) can be injected as primary for enterprise clients without code changes. If all TSA servers fail, the proof remains valid via Ed25519 + Sigstore Rekor anchoring.
 
 ## New client onboarding
 

@@ -403,7 +403,7 @@ curl https://arkforge.fr/trust/v1/proof/prf_20260302_135727_5b47d5
 
 **2 independent witnesses:**
 - Ed25519 signature (ArkForge)
-- RFC 3161 timestamp (FreeTSA)
+- RFC 3161 timestamp (FreeTSA primary, DigiCert + Sectigo fallback — `timestamp_authority.provider` records the actual issuer)
 
 **Independent verification (without trusting Trust Layer):**
 

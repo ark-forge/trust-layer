@@ -24,7 +24,7 @@ ArkForge doesn't take sides. The proof serves the truth.
 - Certifying proxy — any HTTPS API call becomes a proven transaction
 - SHA-256 hash chain binding request, response, payment, timestamp, buyer, seller
 - Ed25519 digital signature (origin authentication)
-- RFC 3161 certified timestamps (FreeTSA.org — free public TSA, no contractual SLA; paid TSA fallback planned for Phase 2)
+- RFC 3161 certified timestamps — pool failover: FreeTSA (primary) → DigiCert → Sectigo. Provider recorded per-proof. eIDAS-qualified QTSP injectable via env var for Enterprise tier.
 - **Sigstore Rekor** — chain hash registered in the Linux Foundation's append-only public transparency log (immutable external anchor, zero-trust verification)
 - Stripe payment as witness (Pro plan — ArkForge processes payment directly)
 - Free tier with 3 witnesses (Ed25519, RFC 3161, Sigstore Rekor — no credit card required)
@@ -211,9 +211,9 @@ The proof format remains universal. Only the PSP adapter changes.
 
 Proofs are currently stored as immutable JSON files on disk (one file per transaction). This is correct for immutability and simplicity at current scale. Cross-proof queries (reputation scoring, dispute history, analytics) are handled by scanning the proof directory at read time, which works up to ~50k–100k proofs. Beyond that threshold, a migration to SQLite (single-file, zero-ops) or Postgres is planned — the immutability guarantee is preserved by keeping the JSON files as the source of truth and using the database as a read index only.
 
-### TSA continuity
+### TSA continuity *(implemented)*
 
-FreeTSA.org is the current RFC 3161 provider (free, no SLA). Phase 3 adds a paid TSA fallback (DigiStamp or Sectigo at ~$50/year) configured as a secondary provider: if FreeTSA returns an error or times out, the timestamp task retries against the fallback. The proof remains valid during any TSA outage via Ed25519 + Rekor anchoring.
+RFC 3161 timestamps use a pool of 3 servers (FreeTSA → DigiCert → Sectigo). If FreeTSA is unavailable, DigiCert or Sectigo takes over automatically — no proof is left without a timestamp due to a single TSA outage. The `timestamp_authority.provider` field records which server was used per proof. For Enterprise clients requiring eIDAS-qualified timestamps, a QTSP endpoint (e.g. qtsa.eu/AlfaTrust, ~€0.048/ts) is injectable via `TSA_PRIMARY_URL` env var — no code change required, billed as a separate Enterprise tier.
 
 ---
 
