@@ -45,6 +45,11 @@ Or open it in a browser — each proof has a public HTML verification page.
 
 ## Why use it?
 
+**For humans hiring agents:**
+- Verify what your agent actually did — call by call, with cryptographic proof
+- Your agent routes its LLM and API calls through ArkForge; you get an immutable audit trail: which model was called, exact prompt, exact response, timestamp, cost
+- Internal logs are mutable. ArkForge proofs are not.
+
 **For developers and agents:**
 - Prove what your agent actually executed — not what it intended
 - Attach a verifiable receipt to every API call, automatically
@@ -70,6 +75,32 @@ Or open it in a browser — each proof has a public HTML verification page.
 - **Rate limiting** — daily cap (all keys) + monthly cap (free keys)
 - **Email** — welcome + proof receipts via SMTP
 - **Proof Specification** — open spec with test vectors for independent verification ([ark-forge/proof-spec](https://github.com/ark-forge/proof-spec))
+
+## Use cases
+
+### Use case 1 — Agent paying a provider (B2A)
+
+An autonomous agent calls a third-party API and pays for the service. ArkForge certifies the transaction from the agent's side: the exact request sent, the exact response received, the payment evidence, and the timestamp — all bound in a single cryptographic proof. The provider cannot deny delivery; the agent cannot deny the request.
+
+```
+Agent → POST /v1/proxy (with payment evidence) → ArkForge → Provider API
+                                                       ↓
+                                              Signed proof: request + response + payment + timestamp
+```
+
+### Use case 2 — Agent proving its own execution to a human client
+
+A human hires an agent to perform tasks. The agent routes its LLM and API calls through ArkForge. The human gets a verifiable audit trail: which model was called, with which exact prompt, what response was returned, at what time, and at what cost. Unlike internal logs, these proofs are cryptographically signed and anchored in a public immutability log — they cannot be altered after the fact.
+
+```
+Human client hires agent → agent routes all calls through ArkForge
+                                        ↓
+                           Immutable audit trail: model + prompt + response + timestamp + cost
+                                        ↓
+                           Human verifies: "here is exactly what my agent did"
+```
+
+This addresses the accountability gap in enterprise agent deployments: teams deploying agents in production today have only mutable internal logs. ArkForge makes agent execution auditable by design — directly relevant to DORA, NIS2, and AI Act traceability requirements.
 
 ## Self-hosting
 
