@@ -676,7 +676,7 @@ Agent Client  →  Trust Layer  →  Service (e.g. EU AI Act Scanner)
 | **Proof Spec** | Open specification + test vectors for the proof format | [ark-forge/proof-spec](https://github.com/ark-forge/proof-spec) |
 | **Agent Client** | Autonomous buyer — proof-of-concept of a non-human customer | [ark-forge/arkforge-agent-client](https://github.com/ark-forge/arkforge-agent-client) |
 
-See a live proof: [example transaction](https://arkforge.fr/trust/v/prf_20260225_222329_d17acd)
+See a live proof: [example transaction](https://arkforge.fr/trust/v/prf_20260303_161853_4d0904)
 
 Currently running with ArkForge-operated services. Third-party provider onboarding coming soon — see **[ROADMAP.md](ROADMAP.md)** for the multi-witness certification architecture.
 
