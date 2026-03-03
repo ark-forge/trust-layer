@@ -46,6 +46,7 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
     parties = proof.get("parties") or {}
     payment = proof.get("certification_fee") or {}
     ots = proof.get("timestamp_authority") or {}
+    transparency_log = proof.get("transparency_log") or {}
     tsr_url = _esc(ots.get("tsr_url", ""))
     # Pre-compute to avoid backslash-in-fstring-expression (Python < 3.12 restriction)
     tsr_download_link = (
@@ -122,6 +123,26 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
         ots_label = "certified timestamp confirms date cannot be altered"
     else:
         ots_label = "timestamp not yet available"
+
+    # --- Rekor transparency log ---
+    rekor_status = transparency_log.get("status", "")
+    rekor_color = "#22c55e" if rekor_status == "verified" else "#475569"
+    rekor_log_index = transparency_log.get("log_index")
+    rekor_verify_url = _esc(transparency_log.get("verify_url", ""))
+    if rekor_status == "verified" and rekor_log_index is not None:
+        rekor_label = f"immutably anchored in Sigstore public log (index {rekor_log_index})"
+        rekor_witness_desc = f"anchored \u2014 logIndex={rekor_log_index}"
+    elif rekor_status == "verified":
+        rekor_label = "immutably anchored in Sigstore public log"
+        rekor_witness_desc = "anchored in public log"
+    else:
+        rekor_label = "transparency log not yet available"
+        rekor_witness_desc = "not yet available"
+    # Pre-compute rekor witness name (link if URL available, plain text otherwise)
+    rekor_witness_name = (
+        f'<a href="{rekor_verify_url}" style="color:#38bdf8;text-decoration:none">Sigstore Rekor</a>'
+        if rekor_verify_url else "Sigstore Rekor"
+    )
 
     # --- Signature ---
     has_signature = bool(arkforge_signature)
@@ -286,6 +307,10 @@ details[open] summary::before{{content:"\u25bc "}}
             <p>Timestamp anchored outside ArkForge infrastructure via RFC 3161 Timestamp Authority</p>
         </div>
         <div class="trust-point">
+            <div class="dot" style="background:{rekor_color}"></div>
+            <p>Chain hash registered in Sigstore Rekor &#8212; a Linux Foundation append-only public log verifiable by anyone</p>
+        </div>
+        <div class="trust-point">
             <div class="dot" style="background:{sig_color}"></div>
             <p>Origin authenticated by ArkForge\u2019s Ed25519 digital signature</p>
         </div>
@@ -303,6 +328,11 @@ details[open] summary::before{{content:"\u25bc "}}
             <div class="dot" style="background:{ots_color}"></div>
             <span class="name">RFC 3161 Timestamp</span>
             <span class="desc">\u2014 {_esc(ots_label)}</span>
+        </div>
+        <div class="witness">
+            <div class="dot" style="background:{rekor_color}"></div>
+            <span class="name">{rekor_witness_name}</span>
+            <span class="desc">\u2014 {_esc(rekor_witness_desc)}</span>
         </div>
         <div class="witness">
             <div class="dot" style="background:{sig_color}"></div>
@@ -339,6 +369,7 @@ details[open] summary::before{{content:"\u25bc "}}
             <div class="tech-row"><span class="tech-label">Timestamp</span><span class="tech-val">{_esc(timestamp)}</span></div>
             {"" if not upstream_timestamp else f'<div class="tech-row"><span class="tech-label">Upstream time</span><span class="tech-val">{_esc(upstream_timestamp)}</span></div>'}
             <div class="tech-row"><span class="tech-label">TSA status</span><span class="tech-val">{_esc(ots_status)}</span></div>
+            {"" if rekor_status != "verified" else f'<div class="tech-row"><span class="tech-label">Rekor entry</span><span class="tech-val"><a href="{rekor_verify_url}" style="color:#38bdf8;text-decoration:none">logIndex={rekor_log_index}</a></span></div>'}
             {"" if not arkforge_signature else f'<div class="tech-row"><span class="tech-label">Signature</span><span class="tech-val">{_esc(arkforge_signature)}</span></div>'}
             {"" if not arkforge_pubkey else f'<div class="tech-row"><span class="tech-label">Public key</span><span class="tech-val">{_esc(arkforge_pubkey)}</span></div>'}
             {"" if not spec_version else f'<div class="tech-row"><span class="tech-label">Spec version</span><span class="tech-val">{_esc(spec_version)}</span></div>'}

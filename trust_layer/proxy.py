@@ -36,6 +36,7 @@ from .receipt import fetch_receipt
 from .persistence import load_json, save_json
 from .rate_limit import check_rate_limit
 from .timestamps import submit_hash
+from .rekor import submit_to_rekor
 from .email_notify import send_proof_email, send_low_credits_email, send_credits_exhausted_email
 from .crypto import sign_proof
 
@@ -104,6 +105,23 @@ async def _post_proof_background(proof_id: str, proof_record: dict, chain_hash: 
     except (OSError, ValueError, RuntimeError) as e:
         logger.warning("TSA submit skipped: %s", e)
         _log_background_task(proof_id, "tsa", "failure", str(e))
+
+    # Sigstore Rekor — transparency log (append-only public log)
+    try:
+        rekor_result = await asyncio.get_running_loop().run_in_executor(None, submit_to_rekor, chain_hash)
+        proof_record["transparency_log"] = rekor_result
+        store_proof(proof_id, proof_record)
+        status_label = rekor_result.get("status", "unknown")
+        logger.info("Rekor transparency log %s for %s", status_label, proof_id)
+        _log_background_task(proof_id, "rekor", status_label)
+    except Exception as e:
+        logger.warning("Rekor submit failed: %s", e)
+        proof_record["transparency_log"] = {"provider": "sigstore-rekor", "status": "failed", "error": str(e)[:200]}
+        try:
+            store_proof(proof_id, proof_record)
+        except Exception:
+            pass
+        _log_background_task(proof_id, "rekor", "failure", str(e))
 
     # Email
     if email:

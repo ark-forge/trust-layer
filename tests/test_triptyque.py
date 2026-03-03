@@ -377,3 +377,67 @@ class TestEscape:
 
     def test_esc_ampersand(self):
         assert _esc("a&b") == "a&amp;b"
+
+
+# ============================================================
+# Unit: Sigstore Rekor in templates
+# ============================================================
+
+class TestRekorTemplate:
+
+    def _proof_with_rekor(self, status="verified", log_index=12345678):
+        """Build a minimal proof record with transparency_log."""
+        return {
+            "proof_id": "prf_rekor_template_test",
+            "verification_url": "https://test.arkforge.fr/v1/proof/prf_rekor_template_test",
+            "hashes": {
+                "request": "sha256:aaa",
+                "response": "sha256:bbb",
+                "chain": "sha256:ccc",
+            },
+            "parties": {
+                "buyer_fingerprint": "bf_test",
+                "seller": "example.com",
+                "agent_identity": None,
+                "agent_version": None,
+            },
+            "certification_fee": {
+                "method": "prepaid_credit",
+                "transaction_id": "crd_rekor",
+                "amount": 0.10,
+                "currency": "eur",
+                "status": "succeeded",
+            },
+            "timestamp": "2026-03-03T10:00:00Z",
+            "timestamp_authority": {"status": "verified", "provider": "freetsa.org", "tsr_url": ""},
+            "transparency_log": {
+                "provider": "sigstore-rekor",
+                "status": status,
+                "log_index": log_index,
+                "verify_url": f"https://search.sigstore.dev/?logIndex={log_index}",
+            } if status == "verified" else {
+                "provider": "sigstore-rekor",
+                "status": status,
+                "error": "timeout",
+            },
+        }
+
+    def test_html_contains_sigstore_rekor(self):
+        """Rendered proof page must mention 'Sigstore Rekor'."""
+        proof = self._proof_with_rekor()
+        html = render_proof_page(proof, integrity_verified=True)
+        assert "Sigstore Rekor" in html
+
+    def test_html_contains_rekor_link(self):
+        """Rendered page must include search.sigstore.dev link when verified."""
+        proof = self._proof_with_rekor(status="verified", log_index=9876543)
+        html = render_proof_page(proof, integrity_verified=True)
+        assert "search.sigstore.dev" in html
+        assert "9876543" in html
+
+    def test_html_rekor_not_available_no_link(self):
+        """When Rekor failed, page must not include search.sigstore.dev link."""
+        proof = self._proof_with_rekor(status="failed")
+        html = render_proof_page(proof, integrity_verified=True)
+        assert "Sigstore Rekor" in html
+        assert "search.sigstore.dev" not in html

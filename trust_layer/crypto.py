@@ -94,6 +94,7 @@ def get_public_key_b64url(private_key: Ed25519PrivateKey) -> str:
     return f"ed25519:{_b64url_encode(pub_bytes)}"
 
 
+
 if __name__ == "__main__":
     import sys
     key_path = Path(__file__).parent / ".signing_key.pem"

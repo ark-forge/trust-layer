@@ -25,8 +25,9 @@ ArkForge doesn't take sides. The proof serves the truth.
 - SHA-256 hash chain binding request, response, payment, timestamp, buyer, seller
 - Ed25519 digital signature (origin authentication)
 - RFC 3161 certified timestamps (FreeTSA.org)
+- **Sigstore Rekor** — chain hash registered in the Linux Foundation's append-only public transparency log (immutable external anchor, zero-trust verification)
 - Stripe payment as witness (Pro plan — ArkForge processes payment directly)
-- Free tier with 2 witnesses (no credit card required)
+- Free tier with 3 witnesses (Ed25519, RFC 3161, Sigstore Rekor — no credit card required)
 - **External receipt verification** — clients attach a Stripe receipt URL, ArkForge fetches, hashes, parses, and binds it to the proof (spec v2.0)
 - Open proof specification with test vectors ([ark-forge/proof-spec](https://github.com/ark-forge/proof-spec))
 

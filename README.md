@@ -54,6 +54,7 @@ Or open it in a browser — each proof has a public HTML verification page.
 - **Prepaid credits** — buy credits via Stripe Checkout, deducted per proof (0.10 EUR/proof)
 - **Proofs** — SHA-256 hash chain per call, publicly verifiable, anchored via RFC 3161 Timestamp Authority
 - **Ed25519 signature** — every proof is signed by ArkForge's Ed25519 key, proving origin. Public key served at `GET /v1/pubkey`
+- **Sigstore Rekor** — chain hash registered in the Linux Foundation's append-only public transparency log, verifiable by anyone at [search.sigstore.dev](https://search.sigstore.dev)
 - **External receipt verification** — attach a Stripe receipt URL to any proxy call; ArkForge fetches, hashes, and parses it independently (see below)
 - **API keys** — `mcp_free_*` / `mcp_pro_*` / `mcp_test_*` prefixes auto-select plan and Stripe mode
 - **Free tier** — 100 proofs/month, no credit card required
@@ -288,11 +289,12 @@ Badge colors:
 - **Orange** (`#f59e0b`) — integrity verified, timestamp pending
 - **Red** (`#ef4444`) — integrity check failed
 
-The proof page shows 2 independent witnesses:
+The proof page shows 3 independent witnesses:
 - **Ed25519 Signature** — proves ArkForge origin (green if signed, grey if not)
 - **RFC 3161 Timestamp** — certified by FreeTSA.org (green when verified, orange when pending)
+- **Sigstore Rekor** — chain hash anchored in the Linux Foundation's append-only public log (green when registered, grey when pending)
 
-All proofs (Free and Pro) have 2 witnesses. Pro proofs additionally record the Stripe credit purchase receipt for audit.
+All proofs (Free and Pro) have 3 witnesses. Pro proofs additionally record the Stripe credit purchase receipt for audit.
 
 **Short URL:** `GET /v/{proof_id}` → 302 redirect to the full proof endpoint. Cacheable (24h).
 
@@ -614,9 +616,9 @@ Free keys (`mcp_free_*`) do not use credits — they have a monthly quota of 100
 
 | Prefix | Plan | Payment | Witnesses | Limits |
 |--------|------|---------|-----------|--------|
-| `mcp_free_*` | Free | No charge | 2 (Ed25519, RFC 3161 TSA) | 100 proofs/month |
-| `mcp_pro_*` | Pro | Prepaid credits (0.10 EUR/proof) | 2 (Ed25519, RFC 3161 TSA) | 100 proofs/day |
-| `mcp_test_*` | Test | Test credits (Stripe test mode) | 2 (Ed25519, RFC 3161 TSA) | 100 proofs/day |
+| `mcp_free_*` | Free | No charge | 3 (Ed25519, RFC 3161 TSA, Sigstore Rekor) | 100 proofs/month |
+| `mcp_pro_*` | Pro | Prepaid credits (0.10 EUR/proof) | 3 (Ed25519, RFC 3161 TSA, Sigstore Rekor) | 100 proofs/day |
+| `mcp_test_*` | Test | Test credits (Stripe test mode) | 3 (Ed25519, RFC 3161 TSA, Sigstore Rekor) | 100 proofs/day |
 
 The proxy auto-selects the right plan, witnesses, and rate limits based on the API key prefix. Free tier skips Stripe entirely (no credit card required). Pro keys require a positive credit balance — buy credits via `POST /v1/credits/buy`. Test mode uses Stripe test keys (card `4242 4242 4242 4242`).
 

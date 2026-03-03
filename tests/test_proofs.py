@@ -205,3 +205,31 @@ def test_get_public_proof_includes_new_fields():
     assert public["upstream_timestamp"] == "Thu, 26 Feb 2026 10:00:01 GMT"
     assert public["arkforge_signature"] == "ed25519:fakesig"
     assert public["arkforge_pubkey"] == "ed25519:fakepub"
+
+
+
+def test_get_public_proof_includes_transparency_log():
+    """get_public_proof must include transparency_log field."""
+    tlog = {
+        "provider": "sigstore-rekor",
+        "status": "verified",
+        "uuid": "abc123",
+        "log_index": 99,
+        "integrated_time": 1709500000,
+        "log_url": "https://rekor.sigstore.dev/api/v1/log/entries/abc123",
+        "verify_url": "https://search.sigstore.dev/?logIndex=99",
+    }
+    proof = {
+        "proof_id": "prf_rekor_test",
+        "hashes": {"request": "sha256:a", "response": "sha256:b", "chain": "sha256:c"},
+        "transparency_log": tlog,
+    }
+    public = get_public_proof(proof)
+    assert public["transparency_log"] == tlog
+
+
+def test_get_public_proof_transparency_log_none():
+    """get_public_proof returns transparency_log=None when field is absent."""
+    proof = {"proof_id": "prf_no_rekor", "hashes": {}}
+    public = get_public_proof(proof)
+    assert public["transparency_log"] is None

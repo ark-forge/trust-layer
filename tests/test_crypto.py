@@ -3,6 +3,8 @@
 import pytest
 from pathlib import Path
 
+import base64
+
 from trust_layer.crypto import (
     generate_keypair,
     load_signing_key,
@@ -80,3 +82,5 @@ def test_get_public_key_b64url(keypair):
     # Ed25519 public key is 32 bytes -> 43 chars base64url
     b64_part = result[len("ed25519:"):]
     assert len(b64_part) == 43
+
+

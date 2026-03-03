@@ -165,5 +165,6 @@ def get_public_proof(proof: dict) -> dict:
         "dispute_id": proof.get("dispute_id"),
         "buyer_reputation_score": proof.get("buyer_reputation_score"),
         "buyer_profile_url": proof.get("buyer_profile_url"),
+        "transparency_log": proof.get("transparency_log"),
     }
     return result
