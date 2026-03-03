@@ -29,7 +29,7 @@ from .config import (
 )
 from .keys import validate_api_key
 from .payments.base import ChargeResult
-from .credits import get_balance, debit_credits, InsufficientCredits
+from .credits import debit_credits, InsufficientCredits
 from .proofs import sha256_hex, generate_proof_id, generate_proof, store_proof
 from .receipt import fetch_receipt
 from .persistence import load_json, save_json
@@ -78,8 +78,8 @@ def _log_background_task(proof_id: str, task: str, status: str, detail: str = ""
     try:
         with open(BACKGROUND_TASKS_LOG, "a") as f:
             f.write(json.dumps(entry) + "\n")
-    except Exception:
-        pass  # Never break proof flow for logging
+    except OSError as e:
+        logger.debug("Background task log write failed: %s", e)
 
 
 async def _post_proof_background(proof_id: str, proof_record: dict, chain_hash: str,
@@ -100,7 +100,7 @@ async def _post_proof_background(proof_id: str, proof_record: dict, chain_hash: 
             _log_background_task(proof_id, "tsa", "success")
         else:
             _log_background_task(proof_id, "tsa", "failure", "submit_hash returned None")
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError) as e:
         logger.warning("TSA submit skipped: %s", e)
         _log_background_task(proof_id, "tsa", "failure", str(e))
 
@@ -110,7 +110,7 @@ async def _post_proof_background(proof_id: str, proof_record: dict, chain_hash: 
             await asyncio.get_running_loop().run_in_executor(
                 None, send_proof_email, email, proof_id, proof_record)
             _log_background_task(proof_id, "email", "success")
-        except Exception as e:
+        except (OSError, RuntimeError) as e:
             logger.warning("Proof email skipped: %s", e)
             _log_background_task(proof_id, "email", "failure", str(e))
 
@@ -478,17 +478,16 @@ async def execute_proxy(
             receipt_url=None,
         )
     else:
-        # Prepaid credit deduction
-        balance = get_balance(api_key)
-        if balance < PROOF_PRICE:
-            # Notify user once per 24h that credits are exhausted
+        # Prepaid credit deduction — atomic check+debit under per-key lock
+        try:
+            debit_id, new_balance = debit_credits(api_key, PROOF_PRICE, proof_id_for_debit)
+        except InsufficientCredits as e:
             _notify_credits_exhausted(api_key, key_info)
             raise ProxyError(
                 "insufficient_credits",
-                f"Insufficient credits ({balance:.2f} EUR). Buy credits at /v1/credits/buy",
+                f"Insufficient credits ({e.balance:.2f} EUR). Buy credits at /v1/credits/buy",
                 402,
             )
-        debit_id = debit_credits(api_key, PROOF_PRICE, proof_id_for_debit)
         charge_result = ChargeResult(
             provider="prepaid_credit",
             transaction_id=debit_id,
@@ -498,7 +497,6 @@ async def execute_proxy(
             receipt_url=None,
         )
         # Warn if balance is now low (< 10 proofs remaining)
-        new_balance = round(balance - PROOF_PRICE, 2)
         _notify_low_credits_if_needed(api_key, key_info, new_balance)
 
     # Payment OK — from here, always return proof even on service error

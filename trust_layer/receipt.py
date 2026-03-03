@@ -178,7 +178,7 @@ register_parser(StripeReceiptParser())
 # --- URL validation ---
 
 def _validate_receipt_url(url: str) -> tuple[bool, str]:
-    """Validate receipt URL: HTTPS only, whitelisted domains only.
+    """Validate receipt URL: HTTPS only, whitelisted domains only, no path traversal.
 
     Returns (is_valid, error_message).
     """
@@ -193,6 +193,10 @@ def _validate_receipt_url(url: str) -> tuple[bool, str]:
     hostname = (parsed.hostname or "").lower()
     if not hostname:
         return False, "No hostname in URL"
+
+    # Reject path traversal attempts
+    if ".." in parsed.path:
+        return False, "Path traversal not allowed"
 
     allowed_domains = get_registered_domains()
     if hostname not in allowed_domains:

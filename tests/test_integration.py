@@ -163,7 +163,8 @@ def test_proxy_full_success(client, api_key):
 # --- Proof verification ---
 
 def test_proof_not_found(client):
-    r = client.get("/v1/proof/prf_nonexistent")
+    # Use a valid format ID that doesn't exist in storage
+    r = client.get("/v1/proof/prf_20200101_000000_000000")
     assert r.status_code == 404
 
 
@@ -194,7 +195,8 @@ def test_proof_verification_after_proxy(client, api_key):
 # --- OTS ---
 
 def test_tsr_not_found(client):
-    r = client.get("/v1/proof/prf_nonexistent/tsr")
+    # Use a valid format ID that doesn't exist in storage
+    r = client.get("/v1/proof/prf_20200101_000000_000000/tsr")
     assert r.status_code == 404
 
 

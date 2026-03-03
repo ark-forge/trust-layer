@@ -274,7 +274,7 @@ class TestLevel2GhostStamp:
 
 class TestLevel3VisualStamp:
 
-    def _store_test_proof(self, proof_id="prf_test_visual"):
+    def _store_test_proof(self, proof_id="prf_20260101_000001_abcdef"):
         """Store a proof and return its ID."""
         proof_record = _make_proof_record(proof_id)
         store_proof(proof_id, proof_record)
@@ -292,7 +292,7 @@ class TestLevel3VisualStamp:
 
     def test_json_on_accept_application_json(self, client):
         """Accept: application/json returns JSON response."""
-        pid = self._store_test_proof("prf_test_json")
+        pid = self._store_test_proof("prf_20260101_000002_abcdef")
         resp = client.get(f"/v1/proof/{pid}", headers={"Accept": "application/json"})
         assert resp.status_code == 200
         data = resp.json()
@@ -300,7 +300,7 @@ class TestLevel3VisualStamp:
 
     def test_json_on_no_accept(self, client):
         """No Accept header returns JSON (backward compat)."""
-        pid = self._store_test_proof("prf_test_noaccept")
+        pid = self._store_test_proof("prf_20260101_000003_abcdef")
         resp = client.get(f"/v1/proof/{pid}")
         assert resp.status_code == 200
         data = resp.json()
@@ -308,7 +308,7 @@ class TestLevel3VisualStamp:
 
     def test_json_wins_over_html(self, client):
         """Accept: application/json, text/html — JSON wins."""
-        pid = self._store_test_proof("prf_test_both")
+        pid = self._store_test_proof("prf_20260101_000004_abcdef")
         resp = client.get(f"/v1/proof/{pid}", headers={"Accept": "application/json, text/html"})
         assert resp.status_code == 200
         data = resp.json()
@@ -316,7 +316,7 @@ class TestLevel3VisualStamp:
 
     def test_green_badge_verified(self, client):
         """Badge is green (#22c55e) on verified proof with OTS verified."""
-        pid = "prf_test_green"
+        pid = "prf_20260101_000005_abcdef"
         proof = _make_proof_record(pid)
         # Make TSA verified and set real hashes for integrity to pass
         proof["timestamp_authority"]["status"] = "verified"
@@ -342,21 +342,21 @@ class TestLevel3VisualStamp:
 
     def test_html_shows_payment_info(self, client):
         """HTML page displays payment information."""
-        pid = self._store_test_proof("prf_test_payment")
+        pid = self._store_test_proof("prf_20260101_000006_abcdef")
         resp = client.get(f"/v1/proof/{pid}", headers={"Accept": "text/html"})
         assert resp.status_code == 200
         assert "0.1" in resp.text
 
     def test_short_url_redirects(self, client):
         """GET /v/{proof_id} returns 302 redirect to full path."""
-        pid = self._store_test_proof("prf_test_redirect")
+        pid = self._store_test_proof("prf_20260101_000007_abcdef")
         resp = client.get(f"/v/{pid}", follow_redirects=False)
         assert resp.status_code == 302
         assert f"/v1/proof/{pid}" in resp.headers["location"]
 
     def test_short_url_404(self, client):
-        """GET /v/prf_nonexistent returns 404."""
-        resp = client.get("/v/prf_nonexistent")
+        """GET /v/<valid-format-but-nonexistent> returns 404."""
+        resp = client.get("/v/prf_20200101_000000_000000")
         assert resp.status_code == 404
 
 

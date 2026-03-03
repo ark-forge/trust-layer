@@ -102,6 +102,7 @@ def submit_hash(hash_hex: str) -> Optional[bytes]:
 def verify_tsr(tsr_bytes: bytes, hash_hex: str) -> dict:
     """Verify a .tsr file against the original hash. Returns {verified, details}."""
     result = {"verified": False, "details": None}
+    data_path = None
     try:
         hash_bytes = bytes.fromhex(hash_hex)
 
@@ -135,14 +136,15 @@ def verify_tsr(tsr_bytes: bytes, hash_hex: str) -> dict:
         else:
             result["details"] = (proc.stdout + proc.stderr).strip()
 
-    except Exception as e:
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
         result["details"] = str(e)
     finally:
-        for suffix in ("", ".tsq", ".tsr"):
-            try:
-                Path(data_path + suffix) if suffix else Path(data_path)
-                Path(data_path + suffix).unlink(missing_ok=True) if suffix else Path(data_path).unlink(missing_ok=True)
-            except Exception:
-                pass
+        if data_path:
+            for suffix in ("", ".tsq", ".tsr"):
+                try:
+                    p = Path(data_path + suffix if suffix else data_path)
+                    p.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     return result

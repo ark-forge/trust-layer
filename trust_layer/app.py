@@ -98,8 +98,8 @@ def _log_proof_access(proof_id: str, ip: str, user_agent: str):
     try:
         with open(PROOF_ACCESS_LOG, "a") as f:
             f.write(json.dumps(entry) + "\n")
-    except Exception:
-        pass
+    except OSError as e:
+        logger.debug("Proof access log write failed: %s", e)
 
     # Abuse detection: track per-IP access rate (sliding 1h window)
     timestamps = _proof_access_counts[ip]
@@ -229,6 +229,12 @@ async def proxy_endpoint(
 
     if not target:
         return _error_response("invalid_target", "Missing 'target' field", 400)
+    if not isinstance(payload, dict):
+        return _error_response("invalid_request", "'payload' must be a JSON object", 400)
+    if not isinstance(method, str) or method.upper() not in ("GET", "POST"):
+        return _error_response("invalid_request", "'method' must be 'GET' or 'POST'", 400)
+    if not isinstance(currency, str):
+        return _error_response("invalid_request", "'currency' must be a string", 400)
 
     # Amount is fixed for pro keys (PROOF_PRICE) and 0 for free keys
     # The body "amount" field is ignored — kept for backward compat but not used
@@ -288,6 +294,9 @@ async def get_proof(proof_id: str, request: Request):
     - Accept: text/html (without application/json) → HTML proof page
     - Otherwise → JSON (backward compat)
     """
+    if not _PROOF_ID_RE.match(proof_id):
+        return _error_response("invalid_request", "Invalid proof ID format", 400)
+
     # Log access for security monitoring
     client_ip = request.client.host if request.client else "unknown"
     user_agent = request.headers.get("user-agent", "")
@@ -301,8 +310,8 @@ async def get_proof(proof_id: str, request: Request):
     proof["views_count"] = proof.get("views_count", 0) + 1
     try:
         store_proof(proof_id, proof)
-    except Exception:
-        pass  # Don't fail the request if view tracking fails
+    except OSError as e:
+        logger.debug("Proof view tracking failed: %s", e)
 
     public = get_public_proof(proof)
     integrity_verified = verify_proof_integrity(proof)
@@ -324,6 +333,8 @@ async def get_proof(proof_id: str, request: Request):
 @app.get("/v/{proof_id}")
 async def short_proof_url(proof_id: str):
     """Short URL redirect to full proof endpoint. 302 with cache."""
+    if not _PROOF_ID_RE.match(proof_id):
+        return _error_response("invalid_request", "Invalid proof ID format", 400)
     proof = load_proof(proof_id)
     if not proof:
         return _error_response("not_found", f"Proof '{proof_id}' not found", 404)
@@ -517,6 +528,18 @@ async def billing_portal(
 # --- POST /v1/keys/free-signup ---
 
 import re as _re
+
+# RFC 5321-compatible email regex: local@domain.tld
+# - local part: alphanum + ._%+- (no consecutive dots, no leading/trailing dot)
+# - domain: alphanum + .- labels
+# - TLD: at least 2 alpha chars
+_EMAIL_RE = _re.compile(
+    r"^[a-zA-Z0-9]([a-zA-Z0-9._%+\-]*[a-zA-Z0-9])?@[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$"
+)
+
+# Valid proof ID format: prf_YYYYMMDD_HHMMSS_<6hex>
+_PROOF_ID_RE = _re.compile(r"^prf_\d{8}_\d{6}_[0-9a-f]{6}$")
+
 _FREE_SIGNUP_RATE: dict[str, list[float]] = {}  # IP -> timestamps (sliding 1h)
 _FREE_SIGNUP_MAX_PER_HOUR = 5
 
@@ -531,11 +554,16 @@ async def free_signup(request: Request):
         return _error_response("invalid_request", "Invalid JSON body", 400)
 
     email = (body.get("email") or "").strip().lower()
-    if not email or not _re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+    if not email or not _EMAIL_RE.match(email):
         return _error_response("invalid_request", "A valid email is required", 400)
 
-    # Rate limit: max 5 signups per IP per hour
-    client_ip = request.headers.get("x-forwarded-for", request.client.host or "unknown").split(",")[0].strip()
+    # Rate limit: max 5 signups per IP per hour.
+    # X-Real-IP is set by nginx from $remote_addr and cannot be forged by clients.
+    # Fall back to direct connection IP if the header is absent.
+    client_ip = (
+        request.headers.get("x-real-ip")
+        or (request.client.host if request.client else "unknown")
+    )
     now = time.time()
     timestamps = _FREE_SIGNUP_RATE.get(client_ip, [])
     timestamps = [t for t in timestamps if t > now - 3600]
@@ -640,7 +668,7 @@ async def buy_credits(
     new_balance = add_credits(api_key, amount, charge_result.transaction_id)
     proofs_available = int(new_balance / PROOF_PRICE)
 
-    logger.info("Credits purchased: %.2f EUR for %s (pi=%s)", amount, api_key[:16], charge_result.transaction_id)
+    logger.info("Credits purchased: %.2f EUR (pi=%s)", amount, charge_result.transaction_id)
 
     return {
         "credits_added": amount,

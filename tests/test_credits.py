@@ -40,8 +40,9 @@ def test_get_balance_after_purchase(pro_api_key):
 
 def test_debit_credits_success(pro_api_key):
     add_credits(pro_api_key, 10.00, "pi_test_purchase")
-    txn_id = debit_credits(pro_api_key, PROOF_PRICE, "prf_test_001")
+    txn_id, new_balance = debit_credits(pro_api_key, PROOF_PRICE, "prf_test_001")
     assert txn_id.startswith("crd_")
+    assert new_balance == pytest.approx(9.90)
     assert get_balance(pro_api_key) == pytest.approx(9.90)
 
 
@@ -56,7 +57,7 @@ def test_debit_multiple_until_empty(pro_api_key):
     add_credits(pro_api_key, 1.00, "pi_test_1eur")
     # 1.00 EUR / 0.10 = 10 proofs
     for i in range(10):
-        debit_credits(pro_api_key, PROOF_PRICE, f"prf_test_{i:03d}")
+        debit_credits(pro_api_key, PROOF_PRICE, f"prf_test_{i:03d}")  # returns (txn_id, new_balance)
     assert get_balance(pro_api_key) == pytest.approx(0.0)
     with pytest.raises(InsufficientCredits):
         debit_credits(pro_api_key, PROOF_PRICE, "prf_test_011")
@@ -79,7 +80,7 @@ def test_credit_transaction_log(pro_api_key, tmp_path):
     credits_mod.CREDIT_TRANSACTIONS_LOG = log_path
 
     add_credits(pro_api_key, 10.00, "pi_log_test")
-    debit_credits(pro_api_key, PROOF_PRICE, "prf_log_test")
+    debit_credits(pro_api_key, PROOF_PRICE, "prf_log_test")  # returns (txn_id, new_balance)
 
     lines = log_path.read_text().strip().split("\n")
     assert len(lines) == 2
