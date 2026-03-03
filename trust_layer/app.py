@@ -285,6 +285,9 @@ async def proxy_endpoint(
         if proof_id:
             headers["X-ArkForge-Proof-ID"] = proof_id
             headers["X-ArkForge-Trust-Link"] = f"{TRUST_LAYER_BASE_URL}/v/{proof_id}"
+        buyer_score = proof.get("buyer_reputation_score")
+        if buyer_score is not None:
+            headers["X-ArkForge-Buyer-Score"] = str(buyer_score)
 
     return JSONResponse(status_code=status_code, content=result, headers=headers)
 

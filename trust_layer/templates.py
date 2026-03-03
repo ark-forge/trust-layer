@@ -173,6 +173,25 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
     if agent_identity:
         identity_row = f'<div class="row"><span class="label">Initiated by</span><span class="val">{initiated_by}</span></div>'
 
+    # --- Reputation row (conditional) ---
+    reputation_row = ""
+    buyer_score = proof.get("buyer_reputation_score")
+    buyer_profile_url = _esc(proof.get("buyer_profile_url", ""))
+    if buyer_score is not None:
+        if buyer_score >= 75:
+            score_color = "#22c55e"
+        elif buyer_score >= 40:
+            score_color = "#f59e0b"
+        else:
+            score_color = "#ef4444"
+        score_link = (
+            f'<a href="{buyer_profile_url}" style="color:{score_color};text-decoration:none;font-weight:600">'
+            f'{buyer_score}/100</a>'
+            if buyer_profile_url else
+            f'<span style="color:{score_color};font-weight:600">{buyer_score}/100</span>'
+        )
+        reputation_row = f'<div class="row"><span class="label">Agent reputation</span><span class="val">{score_link}</span></div>'
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -248,6 +267,7 @@ details[open] summary::before{{content:"\u25bc "}}
         {"" if transaction_success is None else f'<div class="row"><span class="label">Upstream</span><span class="val" style="color:{"#22c55e" if transaction_success else "#ef4444"}">{"Success" if transaction_success else "Failed"}{f" (HTTP {upstream_status_code})" if upstream_status_code else ""}</span></div>'}
         <div class="row"><span class="label">Date</span><span class="val">{human_date}</span></div>
         <div class="row"><span class="label">Proof ID</span><span class="val">{proof_id}</span></div>
+{reputation_row}
     </div>
 
     <!-- 3. WHY TRUSTWORTHY -->
