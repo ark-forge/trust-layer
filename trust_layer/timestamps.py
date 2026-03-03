@@ -1,32 +1,27 @@
-"""RFC 3161 Timestamp Authority — submit and verify via FreeTSA.org."""
+"""RFC 3161 Timestamp Authority — pool failover (FreeTSA → DigiCert → Sectigo)."""
 
 import logging
 import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 import httpx
 
 logger = logging.getLogger("trust_layer.timestamps")
 
 _CERTS_DIR = Path(__file__).parent / "certs"
-_TSA_URL = "https://freetsa.org/tsr"
-_TSA_CERT = _CERTS_DIR / "tsa.crt"
-_CA_CERT = _CERTS_DIR / "cacert.pem"
-
-_MAX_RETRIES = 3
-_BACKOFF_BASE = 1.0  # seconds: 1s, 2s, 4s
+_TSA_CERT = _CERTS_DIR / "tsa.crt"   # FreeTSA cert — used by verify_tsr
+_CA_CERT  = _CERTS_DIR / "cacert.pem"  # FreeTSA CA  — used by verify_tsr
 
 
-def _submit_hash_once(hash_hex: str) -> Optional[bytes]:
-    """Single attempt to submit a hash to FreeTSA. Returns .tsr bytes or None."""
+def _submit_hash_once(hash_hex: str, tsa_url: str) -> Optional[bytes]:
+    """Single attempt to submit a hash to the given TSA URL. Returns .tsr bytes or None."""
     data_path = None
     try:
         hash_bytes = bytes.fromhex(hash_hex)
 
-        # Create timestamp query (TSQ) via openssl
         with tempfile.NamedTemporaryFile(suffix=".dat", delete=False) as f:
             f.write(hash_bytes)
             data_path = f.name
@@ -39,32 +34,29 @@ def _submit_hash_once(hash_hex: str) -> Optional[bytes]:
         )
         tsq_bytes = Path(tsq_path).read_bytes()
 
-        # Submit TSQ to FreeTSA
         resp = httpx.post(
-            _TSA_URL,
+            tsa_url,
             content=tsq_bytes,
             headers={"Content-Type": "application/timestamp-query"},
             timeout=15.0,
         )
         if resp.status_code != 200:
-            logger.warning("FreeTSA returned HTTP %d", resp.status_code)
+            logger.warning("TSA %s returned HTTP %d", tsa_url, resp.status_code)
             return None
 
-        tsr_bytes = resp.content
-        logger.info("TSA timestamp obtained for hash %s... (%d bytes)", hash_hex[:16], len(tsr_bytes))
-        return tsr_bytes
+        return resp.content
 
     except FileNotFoundError:
         logger.warning("openssl not found, skipping TSA submit")
-        raise  # non-retryable
+        raise  # non-retryable — propagates to submit_hash to abort immediately
     except subprocess.CalledProcessError as e:
         logger.warning("openssl ts -query failed: %s", e.stderr[:200] if e.stderr else e)
         return None
     except httpx.HTTPError as e:
-        logger.warning("FreeTSA request failed: %s", e)
+        logger.warning("TSA %s request failed: %s", tsa_url, e)
         return None
     except Exception as e:
-        logger.warning("TSA submit failed: %s", e)
+        logger.warning("TSA %s submit error: %s", tsa_url, e)
         return None
     finally:
         if data_path:
@@ -76,26 +68,28 @@ def _submit_hash_once(hash_hex: str) -> Optional[bytes]:
                     pass
 
 
-def submit_hash(hash_hex: str) -> Optional[bytes]:
-    """Submit a hash to FreeTSA via RFC 3161 with retry + exponential backoff.
+def submit_hash(hash_hex: str) -> Optional[Tuple[bytes, str]]:
+    """Try each TSA server in order. Returns (tsr_bytes, provider) on first success, None if all fail.
 
-    Retries up to 3 times (1s, 2s, 4s delays) on transient failures.
-    Returns .tsr bytes or None.
+    Pool order: FreeTSA → DigiCert → Sectigo (all free, WebTrust-certified for DigiCert/Sectigo).
+    Each server is tried once — no per-server retry. Fast failover.
     """
-    for attempt in range(_MAX_RETRIES):
+    from .config import TSA_SERVERS
+
+    for server in TSA_SERVERS:
         try:
-            result = _submit_hash_once(hash_hex)
-            if result is not None:
-                return result
+            tsr_bytes = _submit_hash_once(hash_hex, server["url"])
+            if tsr_bytes is not None:
+                logger.info(
+                    "TSA timestamp obtained from %s for hash %s... (%d bytes)",
+                    server["provider"], hash_hex[:16], len(tsr_bytes),
+                )
+                return (tsr_bytes, server["provider"])
         except FileNotFoundError:
-            return None  # openssl missing — no point retrying
+            return None  # openssl missing — no point trying other servers
+        logger.info("TSA %s failed, trying next server...", server["provider"])
 
-        if attempt < _MAX_RETRIES - 1:
-            delay = _BACKOFF_BASE * (2 ** attempt)
-            logger.info("TSA attempt %d/%d failed, retrying in %.0fs...", attempt + 1, _MAX_RETRIES, delay)
-            time.sleep(delay)
-
-    logger.warning("TSA submit failed after %d attempts for hash %s...", _MAX_RETRIES, hash_hex[:16])
+    logger.warning("All TSA servers failed for hash %s...", hash_hex[:16])
     return None
 
 

@@ -91,17 +91,19 @@ async def _post_proof_background(proof_id: str, proof_record: dict, chain_hash: 
     try:
         import base64 as _b64
         loop = asyncio.get_running_loop()
-        tsr_bytes = await loop.run_in_executor(None, submit_hash, chain_hash)
-        if tsr_bytes:
+        tsa_result = await loop.run_in_executor(None, submit_hash, chain_hash)
+        if tsa_result:
+            tsr_bytes, tsa_provider = tsa_result
             from .config import PROOFS_DIR
             (PROOFS_DIR / f"{proof_id}.tsr").write_bytes(tsr_bytes)
             proof_record["timestamp_authority"]["status"] = "verified"
+            proof_record["timestamp_authority"]["provider"] = tsa_provider
             proof_record["timestamp_authority"]["tsr_base64"] = _b64.b64encode(tsr_bytes).decode("ascii")
             store_proof(proof_id, proof_record)
-            logger.info("TSA timestamp verified for %s", proof_id)
+            logger.info("TSA timestamp verified for %s via %s", proof_id, tsa_provider)
             _log_background_task(proof_id, "tsa", "success")
         else:
-            _log_background_task(proof_id, "tsa", "failure", "submit_hash returned None")
+            _log_background_task(proof_id, "tsa", "failure", "all TSA servers failed")
     except (OSError, ValueError, RuntimeError) as e:
         logger.warning("TSA submit skipped: %s", e)
         _log_background_task(proof_id, "tsa", "failure", str(e))
