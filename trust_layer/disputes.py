@@ -1,11 +1,12 @@
-"""Dispute System — automatic resolution of proof contestations.
+"""Dispute System — flagging and recording of contested proofs.
 
 Rules:
 - Only parties to a proof (buyer or seller) can file a dispute.
-- Resolution is instant and deterministic: re-check upstream_status_code.
-- Losing a dispute costs -5% reputation (floor 50%).
+- Resolution logic is under redesign — current implementation records the dispute
+  but does not arbitrate (auto-resolution on upstream_status_code is unreliable).
 - Anti-abuse: 1h cooldown between disputes, 7-day window, one dispute per proof.
 - Sellers are services (domains), not agents — they don't have reputation profiles.
+- No reputation impact from disputes (pending proper arbitration design).
 """
 
 import hashlib
@@ -15,7 +16,13 @@ from pathlib import Path
 
 from .persistence import load_json, save_json
 from .proofs import load_proof, store_proof
-from .reputation import REPUTATION_CONFIG, invalidate_cache, resolve_agent_profile
+from .reputation import invalidate_cache, resolve_agent_profile
+
+DISPUTE_CONFIG = {
+    "dispute_window_days": 7,
+    "max_open_disputes_per_agent": 5,
+    "dispute_cooldown_seconds": 3600,
+}
 
 DISPUTES_DIR: Path = Path(__file__).parent.parent / "data" / "disputes"
 
@@ -71,7 +78,7 @@ def create_dispute(api_key: str, proof_id: str, reason: str) -> dict:
     Returns dispute record on success, or {"error": ..., "status": ...} on failure.
     """
     _ensure_disputes_dir()
-    cfg = REPUTATION_CONFIG
+    cfg = DISPUTE_CONFIG
     now = datetime.now(timezone.utc)
 
     contestant_fp = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
@@ -189,19 +196,11 @@ def create_dispute(api_key: str, proof_id: str, reason: str) -> dict:
     if resolution == "UPHELD" and proof_corrected:
         # Flip the transaction status
         proof["transaction_success"] = not tx_success
-        # Loser is the other party.
-        # If buyer won → loser is seller. Sellers are services (domains), not agents.
-        # They don't have reputation profiles, so no penalty to apply.
-        if contestant_role == "seller":
-            # Seller won → buyer loses
-            _increment_lost_disputes(f"sha256:{buyer_fp}")
-        # Invalidate both caches
+        # Invalidate reputation caches (success rate changes)
         invalidate_cache(f"sha256:{contestant_fp}")
         invalidate_cache(f"sha256:{buyer_fp}")
 
     elif resolution == "DENIED":
-        # Contestant filed a bad dispute → they pay the cost
-        _increment_lost_disputes(f"sha256:{contestant_fp}")
         invalidate_cache(f"sha256:{contestant_fp}")
 
     # Save updated proof (disputed flag + optional status correction)
@@ -216,14 +215,6 @@ def create_dispute(api_key: str, proof_id: str, reason: str) -> dict:
 # ---------------------------------------------------------------------------
 # Agent profile updates (O(1), no file scans)
 # ---------------------------------------------------------------------------
-
-def _increment_lost_disputes(agent_id: str):
-    """Increment lost_disputes counter in agent profile."""
-    path, profile = resolve_agent_profile(agent_id)
-    if path and profile:
-        profile["lost_disputes"] = profile.get("lost_disputes", 0) + 1
-        save_json(path, profile)
-
 
 def _update_dispute_stats(agent_id: str, resolution: str, timestamp: datetime):
     """Update dispute stats in agent profile."""

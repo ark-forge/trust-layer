@@ -208,6 +208,44 @@ The proof format remains universal. Only the PSP adapter changes.
 
 ---
 
+## Dispute Protocol [UNDER DESIGN]
+
+**Goal:** Allow parties to formally contest a proof and have the dispute recorded on the proof itself, with fair and independent resolution.
+
+### Current state
+
+The dispute endpoints (`POST /v1/disputes`, `GET /v1/agent/{agent_id}/disputes`) exist and allow flagging a proof as contested. The proof record stores `disputed: true` and a `dispute_id`. However, the resolution logic currently re-checks `upstream_status_code` — a field that the provider controls. This is not a reliable basis for arbitration: the provider can return any status code, independently of whether the service was actually delivered.
+
+Consequence: the dispute system is in place as **infrastructure** (flagging, history, proof markers) but the **resolution logic** is not yet implemented. No reputation impact from disputes currently.
+
+### What proper arbitration requires
+
+A fair resolution must be based on **evidence independent of both parties**:
+
+| Evidence type | What it proves | Status |
+|---------------|---------------|--------|
+| Chain hash | Exact request + response + payment at time T | Already in proof |
+| RFC 3161 timestamp | ArkForge recorded it at a specific time | Already in proof |
+| Receipt content hash | Payment receipt content at time T | Already in proof (v2.0) |
+| Response content | What the provider actually returned | Hashed in proof, raw content stored server-side |
+| Arbitrator signature | Independent third party reviewed and decided | **Not yet implemented** |
+
+### Design options being considered
+
+1. **Timed evidence window** — both parties submit additional evidence within N days; a human reviewer from ArkForge decides, signs the resolution, and it is appended to the proof
+2. **Cryptographic challenge-response** — provider must sign a "delivery confirmed" message with their key within N hours, or the dispute is upheld by default
+3. **On-chain anchoring** — dispute and resolution hashed into a public ledger for immutability beyond ArkForge
+
+### Proof spec impact
+
+The current proof format is ready for disputes:
+- `disputed` and `dispute_id` fields exist in the proof record (post-hoc metadata, not in chain hash)
+- Chain hash is unaffected by a dispute — the proof itself remains valid
+
+A future spec version (v3.x) could add a `dispute_resolution` object with an arbitrator signature, making the resolution itself cryptographically provable.
+
+---
+
 ## What ArkForge is and isn't
 
 | ArkForge IS | ArkForge IS NOT |
@@ -230,6 +268,7 @@ ArkForge records, signs, and timestamps. It doesn't hold money, set prices, list
 | v2.0 (current) | `payment_evidence` object, `receipt_content_hash` in chain hash, `payment_verification` level (`fetched` / `failed`), extensible PSP parser architecture |
 | v2.1 (Phase 2) | `payment_verification: "witnessed"` level, Stripe Connect witness |
 | v3.0 (Phase 3) | Multi-PSP orchestrated payment witnesses |
+| v3.x (Dispute Protocol) | `dispute_resolution` object with arbitrator signature — resolution becomes cryptographically provable |
 
 Spec changes follow [semver](https://semver.org/). Breaking changes (chain hash formula) = major version. New optional fields = minor version.
 

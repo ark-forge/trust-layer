@@ -426,64 +426,74 @@ To also verify the Ed25519 signature, use the public key from `GET /v1/pubkey` (
 
 ## Reputation Score
 
-Every agent gets a deterministic reputation score (0-100) based on their proof history. No ML, no reviews — only factual data from proofs.
+Every agent gets a deterministic reputation score (0-100) based on their proof history. No ML, no reviews — only factual data from proofs. The formula is public and auditable by any third party from the proof history alone.
 
-### Five dimensions
+### Formula
 
-| Dimension | Weight | Description |
-|-----------|--------|-------------|
-| Volume | 0.25 | Total number of proofs (cap: 100) |
-| Regularity | 0.20 | Active days in last 30 days (cap: 20) |
-| Seniority | 0.20 | Days since first proof (cap: 30) |
-| Diversity | 0.15 | Unique services used (cap: 10) |
-| Success | 0.20 | Proof success rate |
+```
+score = floor(success_rate × confidence) − penalties
+```
 
-### Penalties
+| Volume | Confidence factor | Example (100% success) |
+|--------|------------------|------------------------|
+| 0–1 proofs | 0.60 (provisional) | → 60 |
+| 2–4 proofs | 0.75 | → 75 |
+| 5–19 proofs | 0.85 | → 85 |
+| 20+ proofs | 1.00 (full confidence) | → 100 |
 
-- **Identity mismatch** — 15% reduction if the agent changed its declared identity
-- **Lost disputes** — 5% per lost dispute (floor: 50% of computed score)
+`success_rate = succeeded_proofs / total_proofs × 100`
+
+### Penalty
+
+- **Identity mismatch** — −15 points if the agent changed its declared identity (`X-Agent-Identity` header)
 
 ### Get an agent's reputation
 
 ```bash
 curl https://arkforge.fr/trust/v1/agent/{agent_id}/reputation
-# → {"reputation_score": 63, "scores": {...}, "signature": "ed25519:...", ...}
+# → {
+#     "reputation_score": 85,
+#     "scoring": {
+#       "success_rate": 100.0,
+#       "confidence": 0.85,
+#       "formula": "floor(success_rate × confidence) − penalties"
+#     },
+#     "signature": "ed25519:...",
+#     ...
+#   }
 ```
 
 The score is signed with ArkForge's Ed25519 key — verifiable via `/v1/pubkey`. Cached for 1 hour, recomputed lazily.
 
-## Dispute System
+## Dispute System *(under design)*
 
-Agents can contest proofs. Disputes are resolved instantly and automatically — no human intervention.
+ArkForge records what happened. The proof is the primary evidence in any dispute — it cannot be altered after creation (any modification invalidates the chain hash).
 
-### How it works
+The dispute endpoints (`POST /v1/disputes`, `GET /v1/agent/{agent_id}/disputes`) are available to flag a proof as contested, but **ArkForge does not arbitrate** — consistent with its role as a neutral recorder, not a judge. A proper dispute resolution protocol is on the roadmap.
 
-1. An agent files a dispute: `POST /v1/disputes` with `proof_id` and `reason`
-2. ArkForge re-checks the recorded upstream status code
-3. Result: **UPHELD** (proof corrected), **DENIED** (contestant penalized), or **REJECTED** (not a party)
+### Use the proof as evidence
 
-### Anti-abuse
+In case of a dispute between a buyer and a provider:
+- The **chain hash** proves the exact request, response, payment, and timestamp — none can be altered
+- The **upstream status code** recorded in the proof shows what the provider actually returned
+- The **receipt content hash** (if present) proves the payment receipt content at the time of the call
+- The **Ed25519 signature** proves ArkForge recorded it, not one of the parties
 
-- Losing a dispute costs -5% reputation score
-- 1-hour cooldown between disputes
-- Max 5 open disputes per agent
-- 7-day dispute window after proof creation
-
-### File a dispute
+### Flag a proof as contested
 
 ```bash
 curl -X POST https://arkforge.fr/trust/v1/disputes \
   -H "X-Api-Key: mcp_pro_..." \
   -H "Content-Type: application/json" \
-  -d '{"proof_id": "prf_...", "reason": "Service returned 500 but proof says succeeded"}'
-# → {"dispute_id": "disp_...", "status": "UPHELD", ...}
+  -d '{"proof_id": "prf_...", "reason": "Service returned 500 but I was charged"}'
+# → {"dispute_id": "disp_...", "proof_id": "prf_...", "status": "open"}
 ```
 
-### View dispute history
+### View dispute history for an agent
 
 ```bash
 curl https://arkforge.fr/trust/v1/agent/{agent_id}/disputes
-# → {"disputes_filed": 5, "disputes_won": 3, "disputes_lost": 2, "recent_disputes": [...]}
+# → {"disputes_filed": 2, "recent_disputes": [...]}
 ```
 
 ## Architecture

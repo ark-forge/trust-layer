@@ -267,7 +267,8 @@ class TestCreateDispute:
         # Buyer won → no lost_disputes for buyer
         assert profile.get("lost_disputes", 0) == 0
 
-    def test_denied_increments_contestant_lost(self, tmp_path, monkeypatch):
+    def test_denied_increments_contestant_stats(self, tmp_path, monkeypatch):
+        """DENIED dispute increments disputes_lost in agent stats (no reputation impact)."""
         agents_dir = _setup_test_env(tmp_path, monkeypatch)
         _make_proof("prf_test_008", status_code=200, success=True)
 
@@ -275,7 +276,7 @@ class TestCreateDispute:
         assert result["status"] == "DENIED"
 
         profile = load_json(agents_dir / f"{KEY_PREFIX}.json")
-        assert profile.get("lost_disputes", 0) >= 1
+        assert profile.get("disputes_lost", 0) >= 1
 
     def test_upheld_flips_proof_success(self, tmp_path, monkeypatch):
         """UPHELD dispute flips transaction_success in the proof."""
