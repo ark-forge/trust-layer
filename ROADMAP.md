@@ -149,7 +149,7 @@ Two billing relationships, but **one runtime flow** (one API call through ArkFor
 
 ---
 
-## Phase 2 — Registered providers (Stripe Connect)
+## Phase 2 — Registered providers (Stripe Connect) [PLANNED]
 
 **Goal:** Providers who want the simplest experience for their agent clients can register with ArkForge. One payment, one call, complete proof.
 
@@ -194,7 +194,7 @@ All three produce a valid, signed, timestamped proof. The difference is clearly 
 
 ---
 
-## Phase 3 — Multi-PSP orchestration
+## Phase 3 — Multi-PSP orchestration [PLANNED]
 
 **Goal:** Registered providers can accept payments through any supported PSP, not just Stripe.
 

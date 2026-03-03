@@ -1,6 +1,7 @@
 """Per-API-key rate limiting — daily counter + monthly free tier."""
 
 import logging
+import threading
 from datetime import datetime, timezone, timedelta
 
 from .config import RATE_LIMITS_FILE, RATE_LIMIT_PER_KEY_PER_DAY, FREE_TIER_MONTHLY_LIMIT
@@ -11,6 +12,10 @@ logger = logging.getLogger("trust_layer.rate_limit")
 
 _ALERT_THRESHOLD = 0.80  # send alert when usage crosses this fraction
 
+# Global lock — serialises all rate_limits.json write operations.
+# Prevents TOCTOU races when concurrent threads call check_rate_limit simultaneously.
+_RATE_LIMIT_LOCK = threading.Lock()
+
 
 def check_rate_limit(api_key: str, limit: int = RATE_LIMIT_PER_KEY_PER_DAY) -> tuple[bool, int]:
     """Check if API key is within limits. Returns (allowed, remaining).
@@ -18,54 +23,56 @@ def check_rate_limit(api_key: str, limit: int = RATE_LIMIT_PER_KEY_PER_DAY) -> t
     - All keys: daily limit (default 100/day, safety cap)
     - Free keys: additional monthly limit (100/month)
     """
-    limits = load_json(RATE_LIMITS_FILE, {})
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     month = datetime.now(timezone.utc).strftime("%Y-%m")
-
     key_id = api_key[:16]
-    entry = limits.get(key_id, {"date": today, "count": 0, "month": month, "month_count": 0})
+    remaining = 0
 
-    # Reset daily counter
-    if entry.get("date") != today:
-        entry["date"] = today
-        entry["count"] = 0
+    with _RATE_LIMIT_LOCK:
+        limits = load_json(RATE_LIMITS_FILE, {})
+        entry = limits.get(key_id, {"date": today, "count": 0, "month": month, "month_count": 0})
 
-    # Reset monthly counter
-    if entry.get("month") != month:
-        entry["month"] = month
-        entry["month_count"] = 0
+        # Reset daily counter
+        if entry.get("date") != today:
+            entry["date"] = today
+            entry["count"] = 0
 
-    # Check daily limit (all keys)
-    daily_remaining = max(0, limit - entry["count"])
-    if daily_remaining <= 0:
-        limits[key_id] = entry
-        save_json(RATE_LIMITS_FILE, limits)
-        return False, 0
+        # Reset monthly counter
+        if entry.get("month") != month:
+            entry["month"] = month
+            entry["month_count"] = 0
 
-    # Check monthly limit (free keys only)
-    if is_free_key(api_key):
-        monthly_remaining = max(0, FREE_TIER_MONTHLY_LIMIT - entry.get("month_count", 0))
-        if monthly_remaining <= 0:
+        # Check daily limit (all keys)
+        daily_remaining = max(0, limit - entry["count"])
+        if daily_remaining <= 0:
             limits[key_id] = entry
             save_json(RATE_LIMITS_FILE, limits)
             return False, 0
 
-    # Allowed — increment both counters
-    entry["count"] += 1
-    entry["month_count"] = entry.get("month_count", 0) + 1
-    limits[key_id] = entry
+        # Check monthly limit (free keys only)
+        if is_free_key(api_key):
+            monthly_remaining = max(0, FREE_TIER_MONTHLY_LIMIT - entry.get("month_count", 0))
+            if monthly_remaining <= 0:
+                limits[key_id] = entry
+                save_json(RATE_LIMITS_FILE, limits)
+                return False, 0
 
-    # Clean stale entries (different day AND different month)
-    limits = {k: v for k, v in limits.items()
-              if v.get("date") == today or v.get("month") == month}
-    save_json(RATE_LIMITS_FILE, limits)
+        # Allowed — increment both counters
+        entry["count"] += 1
+        entry["month_count"] = entry.get("month_count", 0) + 1
 
-    if is_free_key(api_key):
-        remaining = min(daily_remaining - 1, FREE_TIER_MONTHLY_LIMIT - entry["month_count"])
-    else:
-        remaining = daily_remaining - 1
+        if is_free_key(api_key):
+            remaining = min(daily_remaining - 1, FREE_TIER_MONTHLY_LIMIT - entry["month_count"])
+        else:
+            remaining = daily_remaining - 1
 
-    # Quota alert: fire once when usage crosses 80% threshold
+        limits[key_id] = entry
+        # Clean stale entries (different day AND different month)
+        limits = {k: v for k, v in limits.items()
+                  if v.get("date") == today or v.get("month") == month}
+        save_json(RATE_LIMITS_FILE, limits)
+
+    # Quota alert: fire once when usage crosses 80% threshold (outside lock — I/O)
     _maybe_send_quota_alert(api_key, entry, limit, today, month)
 
     return True, max(0, remaining)

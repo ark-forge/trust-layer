@@ -85,6 +85,92 @@ uvicorn trust_layer.app:app --host 0.0.0.0 --port 8100
 pytest tests/ -v
 ```
 
+## Production Deployment
+
+### Environment variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `TRUST_LAYER_BASE_URL` | Yes | — | Public base URL (e.g. `https://arkforge.fr/trust`) |
+| `STRIPE_LIVE_KEY` | Yes | — | Stripe live secret key (`sk_live_...`) |
+| `STRIPE_TEST_KEY` | No | — | Stripe test secret key (`sk_test_...`) |
+| `STRIPE_WEBHOOK_SECRET_LIVE` | Yes | — | Stripe webhook signing secret for live events |
+| `STRIPE_WEBHOOK_SECRET_TEST` | No | — | Stripe webhook signing secret for test events |
+| `SMTP_HOST` | No | — | SMTP server for email notifications |
+| `SMTP_PORT` | No | `587` | SMTP port |
+| `SMTP_USER` | No | — | SMTP username |
+| `SMTP_PASSWORD` | No | — | SMTP password |
+| `SMTP_FROM` | No | — | Sender address for outgoing emails |
+| `TRUST_LAYER_INTERNAL_SECRET` | No | — | Secret forwarded to upstream as `X-Internal-Secret` header |
+| `CORS_ALLOWED_ORIGINS` | No | `https://arkforge.fr,https://www.arkforge.fr` | Comma-separated CORS allowed origins |
+
+### Signing key
+
+An Ed25519 signing key is auto-generated at `.signing_key.pem` on first run. To generate manually:
+
+```bash
+python3 -c "from trust_layer.crypto import generate_keypair; print(generate_keypair('.signing_key.pem'))"
+```
+
+The public key is served at `GET /v1/pubkey`. **Back up `.signing_key.pem` — losing it means existing proofs cannot be signature-verified.**
+
+### File permissions
+
+```bash
+chmod 600 .signing_key.pem .env
+chmod 750 data/ proofs/
+```
+
+### nginx
+
+```nginx
+location /trust/ {
+    proxy_pass http://127.0.0.1:8100/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+}
+```
+
+### systemd
+
+```ini
+[Unit]
+Description=ArkForge Trust Layer
+After=network.target
+
+[Service]
+User=arkforge
+WorkingDirectory=/opt/trust-layer
+EnvironmentFile=/opt/trust-layer/.env
+ExecStart=/opt/trust-layer/.venv/bin/uvicorn trust_layer.app:app --host 127.0.0.1 --port 8100
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+## Error codes
+
+All error responses use the format `{"error": {"code": "...", "message": "...", "status": N}}`.
+
+| Code | HTTP | Description |
+|------|------|-------------|
+| `invalid_api_key` | 401 | Missing, invalid, or inactive API key |
+| `invalid_target` | 400 | Target URL is not HTTPS, is a private IP, or hostname resolves to a private range |
+| `invalid_currency` | 400 | Unsupported currency (only `eur` supported) |
+| `invalid_amount` | 400 | Amount below minimum or above maximum |
+| `invalid_request` | 400 | Missing required field, invalid JSON, or malformed input |
+| `invalid_plan` | 403 | Operation not available on this plan (e.g. free key trying to buy credits) |
+| `rate_limited` | 429 | Daily or monthly quota exceeded |
+| `insufficient_credits` | 402 | Credit balance too low — recharge at `/v1/credits/buy` |
+| `already_exists` | 409 | A free API key already exists for this email |
+| `no_payment_method` | 400 | No payment method linked — use `/v1/keys/setup` first |
+| `payment_failed` | 402 | Stripe payment failed |
+| `proxy_timeout` | 504 | Target service timed out |
+| `service_error` | 502 | Target service returned an error (proof still generated) |
+| `not_found` | 404 | Proof or resource not found |
+| `internal_error` | 500 | Internal server error |
+
 ## API endpoints
 
 | Method | Path | Description |

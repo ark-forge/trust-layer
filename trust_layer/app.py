@@ -157,6 +157,8 @@ async def _recover_pending_tsa():
 @asynccontextmanager
 async def lifespan(app):
     """Startup: recover pending TSA, restore abuse counters. Shutdown: drain background tasks."""
+    # Startup — prune stale webhook idempotency entries (>7 days old)
+    _prune_webhook_idempotency()
     # Startup — restore abuse detection sliding window from JSONL
     _restore_abuse_counters()
     # Startup — fire TSA recovery in background (non-blocking)
@@ -379,9 +381,12 @@ async def setup_key(request: Request):
     except Exception:
         return _error_response("invalid_request", "Invalid JSON body", 400)
 
-    email = body.get("email", "")
-    if not email:
-        return _error_response("invalid_request", "email is required", 400)
+    email = (body.get("email") or "").strip().lower()
+    if not email or not _EMAIL_RE.match(email):
+        return _error_response("invalid_request", "A valid email is required", 400)
+    local_part = email.split("@")[0]
+    if len(email) > 320 or len(local_part) > 64:
+        return _error_response("invalid_request", "Email address exceeds maximum allowed length", 400)
 
     req_mode = body.get("mode", "live")
     lang = body.get("lang", "fr")
@@ -559,6 +564,10 @@ async def free_signup(request: Request):
     email = (body.get("email") or "").strip().lower()
     if not email or not _EMAIL_RE.match(email):
         return _error_response("invalid_request", "A valid email is required", 400)
+    # RFC 5321: total ≤ 320 chars, local part ≤ 64 chars
+    local_part = email.split("@")[0]
+    if len(email) > 320 or len(local_part) > 64:
+        return _error_response("invalid_request", "Email address exceeds maximum allowed length", 400)
 
     # Rate limit: max 5 signups per IP per hour.
     # X-Real-IP is set by nginx from $remote_addr and cannot be forged by clients.
@@ -594,7 +603,7 @@ async def free_signup(request: Request):
 
     try:
         send_welcome_email(email, api_key)
-    except Exception as e:
+    except (OSError, RuntimeError) as e:
         logger.warning("Welcome email failed for free signup %s: %s", email, e)
 
     return {
@@ -660,7 +669,7 @@ async def buy_credits(
                 "api_key_prefix": api_key[:12],
             },
         )
-    except Exception as e:
+    except (stripe.StripeError, OSError, RuntimeError) as e:
         logger.error("Credit purchase payment failed: %s", e)
         return _error_response("payment_failed", f"Payment failed: {str(e)}", 402)
 
@@ -683,6 +692,52 @@ async def buy_credits(
 
 
 # --- Webhook idempotency helpers ---
+
+def _prune_webhook_idempotency(max_age_days: int = 7) -> int:
+    """Remove entries older than max_age_days from the webhook idempotency log.
+
+    Prevents unbounded growth of WEBHOOK_IDEMPOTENCY_FILE. Called at startup.
+    Returns number of entries pruned.
+    """
+    if not WEBHOOK_IDEMPOTENCY_FILE.exists():
+        return 0
+    cutoff = datetime.now(timezone.utc)
+    kept = []
+    removed = 0
+    try:
+        with open(WEBHOOK_IDEMPOTENCY_FILE, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                try:
+                    ts = datetime.fromisoformat(entry["processed_at"])
+                    age_days = (cutoff - ts).total_seconds() / 86400
+                    if age_days < max_age_days:
+                        kept.append(line)
+                    else:
+                        removed += 1
+                except (KeyError, ValueError):
+                    kept.append(line)  # keep entries with invalid timestamps
+    except FileNotFoundError:
+        return 0
+    except OSError as e:
+        logger.warning("Webhook idempotency prune read failed: %s", e)
+        return 0
+    if removed:
+        try:
+            with open(WEBHOOK_IDEMPOTENCY_FILE, "w") as f:
+                for line in kept:
+                    f.write(line + "\n")
+            logger.info("Webhook idempotency: pruned %d stale entries (>%d days)", removed, max_age_days)
+        except OSError as e:
+            logger.warning("Webhook idempotency prune write failed: %s", e)
+    return removed
+
 
 def _is_webhook_processed(event_id: str) -> bool:
     """Return True if this Stripe event_id was already processed (7-day TTL).
@@ -791,12 +846,12 @@ async def stripe_webhook(request: Request):
                             "Credits added: %.2f EUR for %s (pi=%s)",
                             credit_amount, customer_email, payment_intent_id,
                         )
-                except Exception as e:
+                except (ValueError, TypeError) as e:
                     logger.error("Failed to add credits after checkout: %s", e)
 
             try:
                 send_welcome_email(customer_email, api_key)
-            except Exception as e:
+            except (OSError, RuntimeError) as e:
                 logger.error("Welcome email failed: %s", e)
 
     elif event_type == "customer.subscription.deleted":

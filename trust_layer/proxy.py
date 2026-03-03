@@ -28,7 +28,7 @@ from .config import (
     INTERNAL_SECRET,
     get_signing_key,
 )
-from .keys import validate_api_key
+from .keys import validate_api_key, _KEYS_LOCK
 from .payments.base import ChargeResult
 from .credits import debit_credits, InsufficientCredits
 from .proofs import sha256_hex, generate_proof_id, generate_proof, store_proof
@@ -294,9 +294,20 @@ def _check_idempotency(key: Optional[str]) -> Optional[dict]:
     return data.get("response")
 
 
+_MAX_IDEMPOTENCY_BYTES = 512 * 1024  # 512 KB
+
+
 def _cache_idempotency(key: Optional[str], response: dict):
-    """Cache response for idempotency key."""
+    """Cache response for idempotency key. Skipped if response exceeds 512 KB."""
     if not key:
+        return
+    import json as _json
+    try:
+        encoded = _json.dumps(response).encode()
+    except (TypeError, ValueError):
+        return
+    if len(encoded) > _MAX_IDEMPOTENCY_BYTES:
+        logger.debug("Idempotency cache skipped: response too large (%d bytes)", len(encoded))
         return
     path = _idempotency_path(key)
     save_json(path, {
@@ -397,20 +408,24 @@ def _notify_credits_exhausted(api_key: str, key_info: dict):
     email = key_info.get("email")
     if not email:
         return
-    keys = load_api_keys()
-    info = keys.get(api_key, {})
-    last = info.get("credits_exhausted_alert_sent_at")
-    if last:
-        try:
-            last_dt = datetime.fromisoformat(last)
-            if datetime.now(timezone.utc) - last_dt < timedelta(hours=24):
-                return  # Already notified in the last 24h
-        except Exception:
-            pass
-    send_credits_exhausted_email(email, api_key)
-    info["credits_exhausted_alert_sent_at"] = datetime.now(timezone.utc).isoformat()
-    keys[api_key] = info
-    save_api_keys(keys)
+    should_notify = False
+    with _KEYS_LOCK:
+        keys = load_api_keys()
+        info = keys.get(api_key, {})
+        last = info.get("credits_exhausted_alert_sent_at")
+        if last:
+            try:
+                last_dt = datetime.fromisoformat(last)
+                if datetime.now(timezone.utc) - last_dt < timedelta(hours=24):
+                    return  # Already notified in the last 24h
+            except (ValueError, AttributeError):
+                pass
+        should_notify = True
+        info["credits_exhausted_alert_sent_at"] = datetime.now(timezone.utc).isoformat()
+        keys[api_key] = info
+        save_api_keys(keys)
+    if should_notify:
+        send_credits_exhausted_email(email, api_key)
 
 
 def _notify_low_credits_if_needed(api_key: str, key_info: dict, balance: float):
@@ -423,21 +438,25 @@ def _notify_low_credits_if_needed(api_key: str, key_info: dict, balance: float):
     email = key_info.get("email")
     if not email:
         return
-    keys = load_api_keys()
-    info = keys.get(api_key, {})
-    last = info.get("low_credits_alert_sent_at")
-    if last:
-        try:
-            last_dt = datetime.fromisoformat(last)
-            if datetime.now(timezone.utc) - last_dt < timedelta(hours=24):
-                return
-        except Exception:
-            pass
+    should_notify = False
     proofs_remaining = max(0, int(balance / PROOF_PRICE))
-    send_low_credits_email(email, api_key, balance, proofs_remaining)
-    info["low_credits_alert_sent_at"] = datetime.now(timezone.utc).isoformat()
-    keys[api_key] = info
-    save_api_keys(keys)
+    with _KEYS_LOCK:
+        keys = load_api_keys()
+        info = keys.get(api_key, {})
+        last = info.get("low_credits_alert_sent_at")
+        if last:
+            try:
+                last_dt = datetime.fromisoformat(last)
+                if datetime.now(timezone.utc) - last_dt < timedelta(hours=24):
+                    return
+            except (ValueError, AttributeError):
+                pass
+        should_notify = True
+        info["low_credits_alert_sent_at"] = datetime.now(timezone.utc).isoformat()
+        keys[api_key] = info
+        save_api_keys(keys)
+    if should_notify:
+        send_low_credits_email(email, api_key, balance, proofs_remaining)
 
 
 async def execute_proxy(
@@ -584,13 +603,13 @@ async def execute_proxy(
             upstream_timestamp = resp.headers.get("Date")
             try:
                 service_response = resp.json()
-            except Exception:
+            except ValueError:
                 body_text = resp.text[:MAX_RESPONSE_STORE_BYTES]
                 service_response = {"_raw_text": body_text}
 
     except httpx.TimeoutException:
         service_error = "proxy_timeout"
-    except Exception as e:
+    except (httpx.RequestError, OSError) as e:
         service_error = f"service_error: {str(e)}"
 
     response_time_ms = (time.monotonic() - t0) * 1000

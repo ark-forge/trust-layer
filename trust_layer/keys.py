@@ -1,6 +1,7 @@
 """API key lifecycle — generate, validate, deactivate."""
 
 import secrets
+import threading
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -9,6 +10,11 @@ from .config import API_KEYS_FILE
 from .persistence import load_json, save_json
 
 logger = logging.getLogger("trust_layer.keys")
+
+# Global lock — serialises all api_keys.json write operations.
+# Prevents lost updates when multiple threads call create_api_key,
+# deactivate_key_by_ref, or any other function that does load+modify+save.
+_KEYS_LOCK = threading.Lock()
 
 
 def load_api_keys() -> dict:
@@ -45,33 +51,35 @@ def validate_api_key(key: str) -> Optional[dict]:
 def create_api_key(stripe_customer_id: str, ref_id: str, email: str = "",
                    test_mode: bool = False, plan: str = "pro") -> str:
     """Create and persist a new API key."""
-    keys = load_api_keys()
     key = generate_api_key(test_mode=test_mode, plan=plan)
-    keys[key] = {
-        "active": True,
-        "plan": plan,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "stripe_customer_id": stripe_customer_id,
-        "stripe_ref_id": ref_id,
-        "email": email,
-        "transactions_total": 0,
-        "credit_balance": 0.0,
-        "total_credits_purchased": 0.0,
-    }
-    save_api_keys(keys)
+    with _KEYS_LOCK:
+        keys = load_api_keys()
+        keys[key] = {
+            "active": True,
+            "plan": plan,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "stripe_customer_id": stripe_customer_id,
+            "stripe_ref_id": ref_id,
+            "email": email,
+            "transactions_total": 0,
+            "credit_balance": 0.0,
+            "total_credits_purchased": 0.0,
+        }
+        save_api_keys(keys)
     logger.info("API key created for customer %s (plan=%s)", stripe_customer_id, plan)
     return key
 
 
 def deactivate_key_by_ref(ref_id: str):
     """Deactivate all keys matching a Stripe ref (subscription/payment intent)."""
-    keys = load_api_keys()
-    for key, info in keys.items():
-        if info.get("stripe_ref_id") == ref_id:
-            info["active"] = False
-            info["deactivated_at"] = datetime.now(timezone.utc).isoformat()
-            logger.info("API key deactivated for ref %s", ref_id)
-    save_api_keys(keys)
+    with _KEYS_LOCK:
+        keys = load_api_keys()
+        for key, info in keys.items():
+            if info.get("stripe_ref_id") == ref_id:
+                info["active"] = False
+                info["deactivated_at"] = datetime.now(timezone.utc).isoformat()
+                logger.info("API key deactivated for ref %s", ref_id)
+        save_api_keys(keys)
 
 
 def find_key_by_ref(ref_id: str) -> Optional[str]:

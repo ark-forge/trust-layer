@@ -125,7 +125,7 @@ class TestLevel1DigitalStamp:
 
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.side_effect = Exception("not JSON")
+        mock_response.json.side_effect = ValueError("not JSON")
         mock_response.text = "<html>Hello</html>"
         mock_response.headers = {}
 
