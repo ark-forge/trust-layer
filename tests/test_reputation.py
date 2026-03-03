@@ -78,14 +78,15 @@ def _setup_agent(tmp_path, monkeypatch, profile=None, fingerprint=FINGERPRINT, k
 class TestComputeReputation:
 
     def test_empty_profile(self):
+        """0 proofs → score 0 (success_rate=0 regardless of confidence)."""
         profile = _make_profile(total=0, succeeded=0, services=[], days_ago=0, active_days=0)
         rep = compute_reputation("sha256:abc123", profile)
         assert rep["reputation_score"] == 0
-        assert rep["scores"]["volume"] == 0
-        assert rep["scores"]["success"] == 0
+        assert rep["scoring"]["success_rate"] == 0
+        assert rep["scoring"]["confidence"] == 0.60  # 0 proofs < threshold of 1
 
     def test_full_score_agent(self):
-        """Agent exceeding all caps → score 100."""
+        """20+ proofs, 100% success → score 100 (full confidence, no penalty)."""
         profile = _make_profile(
             total=200, succeeded=200,
             services=[f"s{i}.com" for i in range(15)],
@@ -94,55 +95,64 @@ class TestComputeReputation:
         rep = compute_reputation("sha256:abc123", profile)
         assert rep["reputation_score"] == 100
 
-    def test_spec_example(self):
-        """Verify the spec example: 40 proofs, 15 active/30, 20 days, 4 services, 95% success."""
+    def test_confidence_thresholds(self):
+        """Confidence factor steps: 1→0.60, 2-4→0.75, 5-19→0.85, 20+→1.00."""
+        # 1 proof, 100% success → floor(100 * 0.60) = 60
+        p1 = _make_profile(total=1, succeeded=1, services=[])
+        assert compute_reputation("sha256:x", p1)["reputation_score"] == 60
+        assert compute_reputation("sha256:x", p1)["scoring"]["confidence"] == 0.60
+
+        # 4 proofs, 100% success → floor(100 * 0.75) = 75
+        p4 = _make_profile(total=4, succeeded=4, services=[])
+        assert compute_reputation("sha256:x", p4)["reputation_score"] == 75
+        assert compute_reputation("sha256:x", p4)["scoring"]["confidence"] == 0.75
+
+        # 10 proofs, 100% success → floor(100 * 0.85) = 85
+        p10 = _make_profile(total=10, succeeded=10, services=[])
+        assert compute_reputation("sha256:x", p10)["reputation_score"] == 85
+        assert compute_reputation("sha256:x", p10)["scoring"]["confidence"] == 0.85
+
+        # 20 proofs, 100% success → floor(100 * 1.00) = 100
+        p20 = _make_profile(total=20, succeeded=20, services=[])
+        assert compute_reputation("sha256:x", p20)["reputation_score"] == 100
+        assert compute_reputation("sha256:x", p20)["scoring"]["confidence"] == 1.00
+
+    def test_success_rate_scaling(self):
+        """score = floor(success_rate × confidence). 40 proofs (conf=1.0), 95% success → 95."""
         profile = _make_profile(
             total=40, succeeded=38,
             services=["a.com", "b.com", "c.com", "d.com"],
             days_ago=20, active_days=15,
         )
         rep = compute_reputation("sha256:abc123", profile)
-        # 38/40 = 95%, floor(0.25*40 + 0.20*75 + 0.20*66.7 + 0.15*40 + 0.20*95) = 63
-        assert rep["reputation_score"] == 63
-
-    def test_volume_cap(self):
-        """Volume caps at VOLUME_CAP proofs."""
-        p50 = _make_profile(total=50, succeeded=50, services=[], days_ago=0, active_days=0)
-        assert compute_reputation("sha256:x", p50)["scores"]["volume"] == 50.0
-
-        p150 = _make_profile(total=150, succeeded=150, services=[], days_ago=0, active_days=0)
-        assert compute_reputation("sha256:x", p150)["scores"]["volume"] == 100.0
-
-    def test_seniority_cap(self):
-        """Seniority caps at SENIORITY_CAP days."""
-        profile = _make_profile(total=0, succeeded=0, services=[], days_ago=60, active_days=0)
-        assert compute_reputation("sha256:x", profile)["scores"]["seniority"] == 100.0
-
-    def test_diversity_score(self):
-        profile = _make_profile(total=5, succeeded=5, services=["a.com", "b.com", "c.com"])
-        assert compute_reputation("sha256:x", profile)["scores"]["diversity"] == 30.0
+        # 38/40 = 95.0%, confidence=1.00 (40 >= 20), score=floor(95.0)=95
+        assert rep["scoring"]["success_rate"] == 95.0
+        assert rep["scoring"]["confidence"] == 1.00
+        assert rep["reputation_score"] == 95
 
     def test_identity_mismatch_penalty(self):
-        """Identity mismatch applies 0.85 multiplier."""
-        base = _make_profile(total=100, succeeded=100, services=[f"s{i}.com" for i in range(10)], days_ago=30, active_days=20)
-        bad = _make_profile(total=100, succeeded=100, services=[f"s{i}.com" for i in range(10)], days_ago=30, active_days=20, identity_mismatch=True)
+        """Identity mismatch deducts 15 points (additive, not multiplicative)."""
+        base = _make_profile(total=100, succeeded=100, services=[])
+        bad = _make_profile(total=100, succeeded=100, services=[], identity_mismatch=True)
 
         score_ok = compute_reputation("sha256:x", base)["reputation_score"]
         score_bad = compute_reputation("sha256:x", bad)["reputation_score"]
-        assert score_bad == math.floor(score_ok * 0.85)
+        assert score_ok == 100
+        assert score_bad == 100 - 15  # = 85
 
     def test_dispute_penalty(self):
-        """Lost disputes reduce score with floor at 50%."""
-        base = _make_profile(total=100, succeeded=100, services=[f"s{i}.com" for i in range(10)], days_ago=30, active_days=20)
-        p1 = _make_profile(total=100, succeeded=100, services=[f"s{i}.com" for i in range(10)], days_ago=30, active_days=20, lost_disputes=1)
-        p10 = _make_profile(total=100, succeeded=100, services=[f"s{i}.com" for i in range(10)], days_ago=30, active_days=20, lost_disputes=10)
+        """Lost disputes deduct 5 pts each; score cannot drop below 50 from disputes alone."""
+        base = _make_profile(total=100, succeeded=100, services=[])
+        p1 = _make_profile(total=100, succeeded=100, services=[], lost_disputes=1)
+        p10 = _make_profile(total=100, succeeded=100, services=[], lost_disputes=10)
 
         s_base = compute_reputation("sha256:x", base)["reputation_score"]
         s_1 = compute_reputation("sha256:x", p1)["reputation_score"]
         s_10 = compute_reputation("sha256:x", p10)["reputation_score"]
 
-        assert s_1 == math.floor(s_base * 0.95)
-        assert s_10 == math.floor(s_base * 0.50)  # floor
+        assert s_base == 100
+        assert s_1 == 100 - 5       # = 95
+        assert s_10 == 50           # floor (10 × 5 = 50 penalty, floor prevents going below 50)
 
     def test_signature_present(self):
         profile = _make_profile(total=10, succeeded=10)
@@ -259,6 +269,6 @@ class TestPublicReputation:
     def test_includes_required_fields(self):
         rep = compute_reputation("sha256:abc", _make_profile())
         public = get_public_reputation(rep)
-        for field in ["agent_id", "reputation_score", "scores", "total_proofs",
+        for field in ["agent_id", "reputation_score", "scoring", "total_proofs",
                       "first_proof_at", "last_proof_at", "lost_disputes", "signature", "computed_at"]:
             assert field in public, f"Missing field: {field}"

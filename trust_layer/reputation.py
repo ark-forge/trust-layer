@@ -1,7 +1,12 @@
 """Reputation Score — deterministic 0-100 score based on agent proof history.
 
-Score is computed from 5 dimensions: volume, regularity, seniority, diversity, success.
-Penalties apply for identity mismatches and lost disputes.
+Formula (public, auditable from proof history alone):
+    score = floor(success_rate × confidence) − penalties
+
+    success_rate  = succeeded_proofs / total_proofs × 100
+    confidence    = f(total_proofs): 1→0.60, 2-4→0.75, 5-19→0.85, 20+→1.00
+    penalties     = −15 identity mismatch | −5 per lost dispute (floor 50)
+
 Score is signed with Ed25519 for verifiable authenticity.
 """
 
@@ -14,29 +19,26 @@ from .crypto import sign_proof
 from .persistence import load_json, save_json
 
 REPUTATION_CONFIG = {
-    # Scoring caps (low at launch to reward early adopters, raise as volume grows)
-    "volume_cap": 100,
-    "regularity_cap": 20,
-    "seniority_cap_days": 30,
-    "diversity_cap": 10,
-    # Weights (total = 1.00)
-    "w_volume": 0.25,
-    "w_regularity": 0.20,
-    "w_seniority": 0.20,
-    "w_diversity": 0.15,
-    "w_success": 0.20,
-    # Penalties
-    "identity_penalty": 0.85,
-    "dispute_penalty_per_loss": 0.05,
-    "dispute_penalty_floor": 0.50,
+    # Confidence thresholds (volume → confidence factor)
+    # score = floor(success_rate × confidence) − penalties
+    # Rules are public — any party can recompute the score from the proof history.
+    "confidence_thresholds": [
+        # (upper_bound_exclusive, factor) — first matching rule wins
+        (2,  0.60),   # 0-1 proofs  → 60% confidence (provisional)
+        (5,  0.75),   # 2-4         → 75%
+        (20, 0.85),   # 5-19        → 85%
+        (None, 1.00), # 20+         → 100% (full confidence)
+    ],
+    # Penalties (additive, applied after confidence scaling)
+    "identity_mismatch_penalty": 15,   # X-Agent-Identity changed — deducted once
+    "dispute_loss_penalty": 5,         # per lost dispute
+    "dispute_penalty_floor": 50,       # score cannot drop below 50 from disputes alone
     # Cache
     "cache_ttl_seconds": 3600,
     # Disputes
     "dispute_window_days": 7,
     "max_open_disputes_per_agent": 5,
     "dispute_cooldown_seconds": 3600,
-    # Phase 2
-    "leaderboard_min_proofs": 10,
 }
 
 REPUTATION_DIR: Path = AGENTS_DIR.parent / "reputation"
@@ -71,12 +73,6 @@ def resolve_agent_profile(agent_id: str) -> tuple[Path | None, dict | None]:
 # Score computation
 # ---------------------------------------------------------------------------
 
-def _sub_score(value: float, cap: float) -> float:
-    """Compute a sub-score: linear 0-100 capped at `cap`."""
-    if cap <= 0:
-        return 0.0
-    return min(100.0, (value / cap) * 100.0)
-
 
 def _parse_timestamp(ts: str | None) -> datetime | None:
     """Parse an ISO timestamp, returning None on failure."""
@@ -92,45 +88,48 @@ def _parse_timestamp(ts: str | None) -> datetime | None:
 
 
 def compute_reputation(agent_id: str, profile: dict) -> dict:
-    """Compute reputation score from agent profile. Returns full reputation record."""
+    """Compute reputation score from agent profile. Returns full reputation record.
+
+    Formula (public, auditable):
+        score = floor(success_rate × confidence) − penalties
+
+    success_rate = succeeded / total × 100  (0–100)
+    confidence   = function of total proofs (volume → confidence):
+        1 proof  → 0.60  (provisional)
+        2–4      → 0.75
+        5–19     → 0.85
+        20+      → 1.00  (full confidence)
+    penalties (additive, after scaling):
+        identity mismatch  → −15 (once)
+        lost dispute       → −5 each (score cannot drop below 50 from disputes alone)
+    """
     cfg = REPUTATION_CONFIG
     now = datetime.now(timezone.utc)
 
     total_proofs = profile.get("transactions_total", 0)
     succeeded = profile.get("transactions_succeeded", 0)
-    active_days = len(profile.get("proof_dates_30d", []))
     unique_services = profile.get("services_used", [])
     lost_disputes = profile.get("lost_disputes", 0)
 
-    # Seniority: days since first proof
-    first_dt = _parse_timestamp(profile.get("first_seen"))
-    days_since = (now - first_dt).days if first_dt else 0
+    # Success rate (0–100)
+    success_rate = (succeeded / total_proofs * 100.0) if total_proofs > 0 else 0.0
 
-    # Five sub-scores (0-100 each)
-    s_volume = _sub_score(total_proofs, cfg["volume_cap"])
-    s_regularity = _sub_score(active_days, cfg["regularity_cap"])
-    s_seniority = _sub_score(days_since, cfg["seniority_cap_days"])
-    s_diversity = _sub_score(len(unique_services), cfg["diversity_cap"])
-    s_success = (succeeded / total_proofs * 100.0) if total_proofs > 0 else 0.0
+    # Confidence factor from volume thresholds (iterate until threshold not exceeded)
+    confidence = 1.00
+    for threshold, factor in cfg["confidence_thresholds"]:
+        if threshold is None or total_proofs < threshold:
+            confidence = factor
+            break
 
-    # Weighted total
-    score = (
-        cfg["w_volume"] * s_volume
-        + cfg["w_regularity"] * s_regularity
-        + cfg["w_seniority"] * s_seniority
-        + cfg["w_diversity"] * s_diversity
-        + cfg["w_success"] * s_success
-    )
+    score = math.floor(success_rate * confidence)
 
-    # Penalties (multiplicative)
+    # Penalties (additive, applied after scaling)
     if profile.get("identity_mismatch"):
-        score *= cfg["identity_penalty"]
+        score = max(0, score - cfg["identity_mismatch_penalty"])
     if lost_disputes > 0:
-        penalty = max(cfg["dispute_penalty_floor"],
-                      1.0 - lost_disputes * cfg["dispute_penalty_per_loss"])
-        score *= penalty
+        raw_penalty = lost_disputes * cfg["dispute_loss_penalty"]
+        score = max(cfg["dispute_penalty_floor"], score - raw_penalty)
 
-    score = math.floor(score)
     computed_at = now.isoformat()
 
     # Sign: "{agent_id}:{score}:{computed_at}" with Ed25519
@@ -148,15 +147,13 @@ def compute_reputation(agent_id: str, profile: dict) -> dict:
         "total_proofs": total_proofs,
         "succeeded_proofs": succeeded,
         "unique_services": list(unique_services),
-        "active_days_30d": active_days,
+        "active_days_30d": len(profile.get("proof_dates_30d", [])),
         "amount_total_eur": profile.get("amount_total_eur", 0.0),
         "lost_disputes": lost_disputes,
-        "scores": {
-            "volume": round(s_volume, 1),
-            "regularity": round(s_regularity, 1),
-            "seniority": round(s_seniority, 1),
-            "diversity": round(s_diversity, 1),
-            "success": round(s_success, 1),
+        "scoring": {
+            "success_rate": round(success_rate, 1),
+            "confidence": confidence,
+            "formula": "floor(success_rate × confidence) − penalties",
         },
         "reputation_score": score,
         "signature": signature,
@@ -219,7 +216,7 @@ def get_public_reputation(rep: dict) -> dict:
         "agent_id": rep["agent_id"],
         "declared_identity": rep.get("declared_identity"),
         "reputation_score": rep["reputation_score"],
-        "scores": rep["scores"],
+        "scoring": rep.get("scoring"),
         "total_proofs": rep["total_proofs"],
         "first_proof_at": rep.get("first_proof_at"),
         "last_proof_at": rep.get("last_proof_at"),
