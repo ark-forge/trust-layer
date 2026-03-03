@@ -20,17 +20,52 @@ SERVICES_DIR = DATA_DIR / "services"
 for _d in (IDEMPOTENCY_DIR, AGENTS_DIR, SERVICES_DIR):
     _d.mkdir(exist_ok=True)
 
-# --- Load settings.env ---
-SETTINGS_ENV = Path(os.environ.get(
-    "SETTINGS_ENV_PATH",
-    "/opt/claude-ceo/config/settings.env",
-))
-if SETTINGS_ENV.exists():
-    for _line in SETTINGS_ENV.read_text().splitlines():
-        _line = _line.strip()
-        if _line and not _line.startswith("#") and "=" in _line:
-            _k, _, _v = _line.partition("=")
-            os.environ.setdefault(_k.strip(), _v.strip())
+# --- Load secrets: vault first, settings.env fallback ---
+def _load_secrets() -> None:
+    """Populate os.environ from vault (primary) then settings.env (fallback)."""
+    # 1. Try vault
+    _vault_loaded = False
+    try:
+        import sys as _sys
+        _vault_path = os.environ.get("VAULT_PATH", "/opt/claude-ceo")
+        if _vault_path not in _sys.path:
+            _sys.path.insert(0, _vault_path)
+        from automation.vault import vault as _vault  # type: ignore[import]
+        _stripe = _vault.get_section("stripe") or {}
+        _smtp = _vault.get_section("email") or {}
+        _mapping = {
+            "STRIPE_LIVE_SECRET_KEY":        _stripe.get("live_secret_key", ""),
+            "STRIPE_TEST_SECRET_KEY":         _stripe.get("test_secret_key", ""),
+            "STRIPE_TL_WEBHOOK_SECRET":       _stripe.get("tl_webhook_secret", ""),
+            "STRIPE_TL_WEBHOOK_SECRET_TEST":  _stripe.get("tl_webhook_secret_test", ""),
+            "IMAP_USER":                      _smtp.get("user", "") or _smtp.get("imap_user", ""),
+            "IMAP_PASSWORD":                  _smtp.get("password", "") or _smtp.get("imap_password", ""),
+        }
+        for _k, _v in _mapping.items():
+            if _v:
+                os.environ.setdefault(_k, _v)
+        _vault_loaded = True
+    except Exception:
+        pass  # vault unavailable → fall through to settings.env
+
+    # 2. settings.env fallback (fills any gaps vault didn't cover)
+    _settings_env = Path(os.environ.get(
+        "SETTINGS_ENV_PATH",
+        "/opt/claude-ceo/config/settings.env",
+    ))
+    if _settings_env.exists():
+        for _line in _settings_env.read_text().splitlines():
+            _line = _line.strip()
+            if _line and not _line.startswith("#") and "=" in _line:
+                _k, _, _v = _line.partition("=")
+                os.environ.setdefault(_k.strip(), _v.strip())
+
+    import logging as _log
+    _log.getLogger("trust_layer.config").debug(
+        "Secrets loaded from %s", "vault" if _vault_loaded else "settings.env only"
+    )
+
+_load_secrets()
 
 # --- Stripe ---
 STRIPE_LIVE_KEY = os.environ.get("STRIPE_LIVE_SECRET_KEY", "")

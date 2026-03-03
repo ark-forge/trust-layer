@@ -92,15 +92,14 @@ pytest tests/ -v
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `TRUST_LAYER_BASE_URL` | Yes | — | Public base URL (e.g. `https://arkforge.fr/trust`) |
-| `STRIPE_LIVE_KEY` | Yes | — | Stripe live secret key (`sk_live_...`) |
-| `STRIPE_TEST_KEY` | No | — | Stripe test secret key (`sk_test_...`) |
-| `STRIPE_WEBHOOK_SECRET_LIVE` | Yes | — | Stripe webhook signing secret for live events |
-| `STRIPE_WEBHOOK_SECRET_TEST` | No | — | Stripe webhook signing secret for test events |
+| `STRIPE_LIVE_SECRET_KEY` | Yes | — | Stripe live secret key (`sk_live_...`) |
+| `STRIPE_TEST_SECRET_KEY` | No | — | Stripe test secret key (`sk_test_...`) |
+| `STRIPE_TL_WEBHOOK_SECRET` | Yes | — | Stripe webhook signing secret for live events |
+| `STRIPE_TL_WEBHOOK_SECRET_TEST` | No | — | Stripe webhook signing secret for test events |
 | `SMTP_HOST` | No | — | SMTP server for email notifications |
-| `SMTP_PORT` | No | `587` | SMTP port |
-| `SMTP_USER` | No | — | SMTP username |
-| `SMTP_PASSWORD` | No | — | SMTP password |
-| `SMTP_FROM` | No | — | Sender address for outgoing emails |
+| `SMTP_PORT` | No | `465` | SMTP port |
+| `SMTP_USER` | No | — | SMTP username (`IMAP_USER`) |
+| `SMTP_PASSWORD` | No | — | SMTP password (`IMAP_PASSWORD`) |
 | `TRUST_LAYER_INTERNAL_SECRET` | No | — | Secret forwarded to upstream as `X-Internal-Secret` header |
 | `CORS_ALLOWED_ORIGINS` | No | `https://arkforge.fr,https://www.arkforge.fr` | Comma-separated CORS allowed origins |
 
@@ -406,7 +405,7 @@ You can verify any proof without ArkForge's code. Given a proof JSON:
 # 1. Extract the components
 REQUEST_HASH=$(echo -n "$PROOF" | jq -r '.hashes.request' | sed 's/sha256://')
 RESPONSE_HASH=$(echo -n "$PROOF" | jq -r '.hashes.response' | sed 's/sha256://')
-PAYMENT_ID=$(echo -n "$PROOF" | jq -r '.certification_fee.transaction_id')
+PAYMENT_ID=$(echo -n "$PROOF" | jq -r '.certification_fee.transaction_id')  # 'free_tier' for free plan
 TIMESTAMP=$(echo -n "$PROOF" | jq -r '.timestamp')
 BUYER=$(echo -n "$PROOF" | jq -r '.parties.buyer_fingerprint')
 SELLER=$(echo -n "$PROOF" | jq -r '.parties.seller')

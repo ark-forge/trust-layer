@@ -260,7 +260,7 @@ print(f"Result: {service_response}")
 
 # Cryptographic proof
 proof = result['proof']
-print(f"Proof ID: {proof['id']}")
+print(f"Proof ID: {proof['proof_id']}")
 print(f"Verify at: {proof['verification_url']}")
 ```
 
@@ -323,7 +323,7 @@ response = requests.post(
             "data": "hello world"
         },
         "description": "Analysis with payment proof",
-        "payment_evidence": {
+        "provider_payment": {
             "type": "stripe",
             "receipt_url": receipt_url
         }
@@ -333,19 +333,19 @@ response = requests.post(
 result = response.json()
 proof = result['proof']
 
-print(f"Proof ID: {proof['id']}")
+print(f"Proof ID: {proof['proof_id']}")
 print(f"Spec version: {proof['spec_version']}")  # → 2.0
 
-payment_evidence = proof['payment_evidence']
-print(f"Receipt hash: {payment_evidence['receipt_content_hash']}")
-print(f"Amount: {payment_evidence['parsed_fields']['amount']} EUR")
+provider_payment = proof['provider_payment']
+print(f"Receipt hash: {provider_payment['receipt_content_hash']}")
+print(f"Amount: {provider_payment['parsed_fields']['amount']} EUR")
 print(f"Verify at: {proof['verification_url']}")
 ```
 
 **What happens:**
 1. Agent pays provider via Stripe (5.00 EUR)
 2. Agent receives a receipt URL from Stripe
-3. Agent calls Trust Layer with `payment_evidence`
+3. Agent calls Trust Layer with `provider_payment`
 4. Trust Layer **independently fetches the receipt from Stripe**
 5. Trust Layer **hashes the receipt** (SHA-256)
 6. Trust Layer **includes the receipt hash in the chain**
@@ -414,16 +414,17 @@ curl -s https://arkforge.fr/trust/v1/proof/prf_xxx > proof.json
 # Extract fields
 REQUEST_HASH=$(jq -r '.hashes.request' proof.json | sed 's/sha256://')
 RESPONSE_HASH=$(jq -r '.hashes.response' proof.json | sed 's/sha256://')
-PAYMENT_ID=$(jq -r '.payment.transaction_id' proof.json)
+PAYMENT_ID=$(jq -r '.certification_fee.transaction_id' proof.json)
 TIMESTAMP=$(jq -r '.timestamp' proof.json)
 BUYER=$(jq -r '.parties.buyer_fingerprint' proof.json)
 SELLER=$(jq -r '.parties.seller' proof.json)
+UPSTREAM=$(jq -r '.upstream_timestamp // empty' proof.json)
 
 # Mode B: include receipt hash if present
-RECEIPT_HASH=$(jq -r '.payment_evidence.receipt_content_hash // empty' proof.json | sed 's/sha256://')
+RECEIPT_HASH=$(jq -r '.provider_payment.receipt_content_hash // empty' proof.json | sed 's/sha256://')
 
 # Recompute chain hash
-COMPUTED=$(echo -n "${REQUEST_HASH}${RESPONSE_HASH}${PAYMENT_ID}${TIMESTAMP}${BUYER}${SELLER}${RECEIPT_HASH}" | sha256sum | cut -d' ' -f1)
+COMPUTED=$(echo -n "${REQUEST_HASH}${RESPONSE_HASH}${PAYMENT_ID}${TIMESTAMP}${BUYER}${SELLER}${UPSTREAM}${RECEIPT_HASH}" | sha256sum | cut -d' ' -f1)
 
 # Compare
 EXPECTED=$(jq -r '.hashes.chain' proof.json | sed 's/sha256://')
@@ -537,7 +538,7 @@ result = agent.execute_task("https://provider.com/api", {"task": "analyze"})
 | **Spec version** | 1.1 | 2.0 |
 | **Chain hash includes** | Request, response, timestamp | + Receipt hash |
 | **Required key** | Free/Pro/Test | Free is sufficient |
-| **Extra code** | None | 3 lines (`payment_evidence`) |
+| **Extra code** | None | 3 lines (`provider_payment`) |
 | **Use case** | Traceability, audit log | Financial audit, compliance |
 
 ---
@@ -569,7 +570,7 @@ Mode B can use a **Free key** — certification only, payment is external, no cr
 - [ ] Replace upstream URL with `https://arkforge.fr/trust/v1/proxy`
 - [ ] Add `X-Api-Key` header
 - [ ] Wrap payload: `{"target": "...", "payload": {...}}`
-- [ ] If Mode B: add `payment_evidence`
+- [ ] If Mode B: add `provider_payment`
 
 ### Step 4 — Test
 - [ ] Successful call (status 200)?
@@ -593,4 +594,4 @@ Mode B can use a **Free key** — certification only, payment is external, no cr
 
 ---
 
-*Last updated: 2026-03-02*
+*Last updated: 2026-03-03*

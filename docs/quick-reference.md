@@ -20,7 +20,7 @@ Use case: traceability, audit log, execution trace
 └──────────────────────────────────────────────────────┘
 
 Agent → Provider (Stripe payment, receives receipt_url)
-Agent → Trust Layer (certification + payment_evidence)
+Agent → Trust Layer (certification + provider_payment)
         └─ Proof: request + response + timestamp + receipt
         └─ Payment proof included
 
@@ -89,7 +89,7 @@ response = requests.post(
     json={
         "target": "https://provider.com/api",
         "payload": {...},
-        "payment_evidence": {           # ← 3 extra lines
+        "provider_payment": {           # ← 3 extra lines
             "type": "stripe",
             "receipt_url": receipt_url  # ← direct provider payment receipt
         }
@@ -112,8 +112,8 @@ proof_id = result['proof']['id']
 proof_url = result['proof']['verification_url']
 
 # Mode B only: payment proof
-if 'payment_evidence' in result['proof']:
-    amount = result['proof']['payment_evidence']['parsed_fields']['amount']
+if 'provider_payment' in result['proof']:
+    amount = result['proof']['provider_payment']['parsed_fields']['amount']
     print(f"Payment proven: {amount} EUR")
 ```
 
@@ -169,6 +169,7 @@ chain_hash = SHA256(
     timestamp +
     buyer_fingerprint +
     seller
+    [+ upstream_timestamp]   ← included only if present in proof
 )
 ```
 **Proves:** transaction — does not prove payment.
@@ -182,6 +183,7 @@ chain_hash = SHA256(
     timestamp +
     buyer_fingerprint +
     seller +
+    [upstream_timestamp +]   ← included only if present in proof
     receipt_content_hash     ← SHA-256 of the Stripe receipt
 )
 ```
@@ -259,13 +261,14 @@ curl -s https://arkforge.fr/trust/v1/proof/prf_xxx > proof.json
 
 REQUEST_HASH=$(jq -r '.hashes.request' proof.json | sed 's/sha256://')
 RESPONSE_HASH=$(jq -r '.hashes.response' proof.json | sed 's/sha256://')
-PAYMENT_ID=$(jq -r '.payment.transaction_id' proof.json)
+PAYMENT_ID=$(jq -r '.certification_fee.transaction_id' proof.json)
 TIMESTAMP=$(jq -r '.timestamp' proof.json)
 BUYER=$(jq -r '.parties.buyer_fingerprint' proof.json)
 SELLER=$(jq -r '.parties.seller' proof.json)
-RECEIPT_HASH=$(jq -r '.payment_evidence.receipt_content_hash // empty' proof.json | sed 's/sha256://')
+UPSTREAM=$(jq -r '.upstream_timestamp // empty' proof.json)
+RECEIPT_HASH=$(jq -r '.provider_payment.receipt_content_hash // empty' proof.json | sed 's/sha256://')
 
-COMPUTED=$(echo -n "${REQUEST_HASH}${RESPONSE_HASH}${PAYMENT_ID}${TIMESTAMP}${BUYER}${SELLER}${RECEIPT_HASH}" | sha256sum | cut -d' ' -f1)
+COMPUTED=$(echo -n "${REQUEST_HASH}${RESPONSE_HASH}${PAYMENT_ID}${TIMESTAMP}${BUYER}${SELLER}${UPSTREAM}${RECEIPT_HASH}" | sha256sum | cut -d' ' -f1)
 EXPECTED=$(jq -r '.hashes.chain' proof.json | sed 's/sha256://')
 
 [ "$COMPUTED" = "$EXPECTED" ] && echo "VERIFIED" || echo "TAMPERED"
