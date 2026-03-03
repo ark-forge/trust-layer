@@ -140,19 +140,6 @@ class TestComputeReputation:
         assert score_ok == 100
         assert score_bad == 100 - 15  # = 85
 
-    def test_dispute_penalty(self):
-        """Lost disputes deduct 5 pts each; score cannot drop below 50 from disputes alone."""
-        base = _make_profile(total=100, succeeded=100, services=[])
-        p1 = _make_profile(total=100, succeeded=100, services=[], lost_disputes=1)
-        p10 = _make_profile(total=100, succeeded=100, services=[], lost_disputes=10)
-
-        s_base = compute_reputation("sha256:x", base)["reputation_score"]
-        s_1 = compute_reputation("sha256:x", p1)["reputation_score"]
-        s_10 = compute_reputation("sha256:x", p10)["reputation_score"]
-
-        assert s_base == 100
-        assert s_1 == 100 - 5       # = 95
-        assert s_10 == 50           # floor (10 × 5 = 50 penalty, floor prevents going below 50)
 
     def test_signature_present(self):
         profile = _make_profile(total=10, succeeded=10)
@@ -270,5 +257,5 @@ class TestPublicReputation:
         rep = compute_reputation("sha256:abc", _make_profile())
         public = get_public_reputation(rep)
         for field in ["agent_id", "reputation_score", "scoring", "total_proofs",
-                      "first_proof_at", "last_proof_at", "lost_disputes", "signature", "computed_at"]:
+                      "first_proof_at", "last_proof_at", "signature", "computed_at"]:
             assert field in public, f"Missing field: {field}"
