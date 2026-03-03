@@ -21,6 +21,9 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[test]"
 
+      - name: Generate test signing key
+        run: python3 -m trust_layer.crypto
+
       - name: Run tests
         run: pytest tests/ -v
 
