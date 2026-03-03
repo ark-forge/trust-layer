@@ -188,8 +188,8 @@ All error responses use the format `{"error": {"code": "...", "message": "...", 
 | `POST` | `/v1/credits/buy` | Buy prepaid credits via Stripe Checkout (returns checkout URL) |
 | `GET` | `/v1/pubkey` | ArkForge's Ed25519 public key for signature verification |
 | `GET` | `/v1/agent/{agent_id}/reputation` | Public reputation score (0-100) for an agent |
-| `POST` | `/v1/disputes` | File a dispute against a proof (authenticated) |
-| `GET` | `/v1/agent/{agent_id}/disputes` | Public dispute history for an agent |
+| `POST` | `/v1/disputes` | Flag a proof as contested *(infrastructure only — resolution not yet implemented)* |
+| `GET` | `/v1/agent/{agent_id}/disputes` | Dispute history for an agent *(infrastructure only)* |
 
 ## Core flow — POST /v1/proxy
 
@@ -467,36 +467,18 @@ curl https://arkforge.fr/trust/v1/agent/{agent_id}/reputation
 
 The score is signed with ArkForge's Ed25519 key — verifiable via `/v1/pubkey`. Cached for 1 hour, recomputed lazily.
 
-## Dispute System *(under design)*
+## Dispute System *(infrastructure only — resolution not yet available)*
 
-ArkForge records what happened. The proof is the primary evidence in any dispute — it cannot be altered after creation (any modification invalidates the chain hash).
+> **Note:** The dispute endpoints exist at the infrastructure level (flagging, history, proof markers) but **the resolution logic is not yet implemented**. Filing a dispute records it on the proof but does not trigger any arbitration or reputation impact. Do not rely on this system for live dispute resolution — see the [Roadmap](ROADMAP.md#dispute-protocol-under-design) for the planned design.
 
-The dispute endpoints (`POST /v1/disputes`, `GET /v1/agent/{agent_id}/disputes`) are available to flag a proof as contested, but **ArkForge does not arbitrate** — consistent with its role as a neutral recorder, not a judge. A proper dispute resolution protocol is on the roadmap.
+ArkForge records what happened. The proof is the primary evidence in any dispute — it cannot be altered after creation (any modification invalidates the chain hash). In case of a dispute:
 
-### Use the proof as evidence
-
-In case of a dispute between a buyer and a provider:
 - The **chain hash** proves the exact request, response, payment, and timestamp — none can be altered
-- The **upstream status code** recorded in the proof shows what the provider actually returned
 - The **receipt content hash** (if present) proves the payment receipt content at the time of the call
 - The **Ed25519 signature** proves ArkForge recorded it, not one of the parties
+- The **Sigstore Rekor entry** anchors the chain hash in an independent public log
 
-### Flag a proof as contested
-
-```bash
-curl -X POST https://arkforge.fr/trust/v1/disputes \
-  -H "X-Api-Key: mcp_pro_..." \
-  -H "Content-Type: application/json" \
-  -d '{"proof_id": "prf_...", "reason": "Service returned 500 but I was charged"}'
-# → {"dispute_id": "disp_...", "proof_id": "prf_...", "status": "open"}
-```
-
-### View dispute history for an agent
-
-```bash
-curl https://arkforge.fr/trust/v1/agent/{agent_id}/disputes
-# → {"disputes_filed": 2, "recent_disputes": [...]}
-```
+Bring this proof to your preferred dispute resolution channel (payment chargeback, platform arbitration, legal). The proof speaks for itself regardless of who holds it.
 
 ## Architecture
 
@@ -518,6 +500,8 @@ Upstream API (any HTTPS endpoint)
 ```
 
 **No database.** Proofs are stored as immutable JSON files on disk — one file per transaction (`proofs/{proof_id}.json`). No SQL, no edits, no deletions. Once written, a proof can only be read. This guarantees that proofs cannot be retroactively altered.
+
+**RFC 3161 timestamps** are issued by [FreeTSA.org](https://freetsa.org), a public free TSA. FreeTSA carries no contractual SLA. If FreeTSA is unavailable, the background timestamping task retries and the proof remains valid with `tsa_status: "pending"` — the Ed25519 signature and Sigstore Rekor anchor are unaffected. A paid TSA fallback (DigiStamp, Sectigo) is on the operational roadmap for high-volume deployments.
 
 ## New client onboarding
 
