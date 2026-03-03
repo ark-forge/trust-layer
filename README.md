@@ -1,6 +1,8 @@
 # ArkForge Trust Layer
 
-Add verifiable execution to any API call. One signup, one curl.
+**ArkForge certifies what your agent executed** — the exact request sent, the exact response received, the exact payment made, and the exact moment it happened. Not intent. Not a log. A cryptographic proof with European legal standing.
+
+One signup, one curl.
 
 ## Documentation
 
@@ -43,14 +45,19 @@ Or open it in a browser — each proof has a public HTML verification page.
 
 ## Why use it?
 
-- Prove what your agent actually did
-- Attach prepaid credits to execution
-- Create audit-ready API calls
-- Add trust without modifying existing services
+**For developers and agents:**
+- Prove what your agent actually executed — not what it intended
+- Attach a verifiable receipt to every API call, automatically
+- Add cryptographic trust to any upstream service without modifying it
+
+**For regulated environments (AI Act, DORA, NIS2, eIDAS):**
+- Every proof is signed (Ed25519), timestamped (RFC 3161), and anchored in a public immutability log (Sigstore Rekor)
+- RFC 3161 timestamps from WebTrust-certified authorities; eIDAS-qualified QTSP available for legal proceedings
+- Open proof specification ([ark-forge/proof-spec](https://github.com/ark-forge/proof-spec)) — any third party can verify a proof without trusting ArkForge
 
 ## Features
 
-- **Proxy** — forwards requests to upstream APIs, meters usage, creates proof
+- **Execution certification** — every API call through ArkForge produces a cryptographic proof of what was sent, received, paid, and when. Immutable after creation.
 - **Prepaid credits** — buy credits via Stripe Checkout, deducted per proof (0.10 EUR/proof)
 - **Proofs** — SHA-256 hash chain per call, publicly verifiable, anchored via RFC 3161 Timestamp Authority
 - **Ed25519 signature** — every proof is signed by ArkForge's Ed25519 key, proving origin. Public key served at `GET /v1/pubkey`
