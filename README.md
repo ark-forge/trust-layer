@@ -2,7 +2,7 @@
 
 **ArkForge certifies what your agent executed** — the exact request sent, the exact response received, the exact payment made, and the exact moment it happened. Not intent. Not a log. A cryptographic proof with European legal standing.
 
-One signup, one curl.
+Free tier: one curl, fully autonomous. Pro tier: one-time human setup, fully autonomous after that.
 
 ## Documentation
 
