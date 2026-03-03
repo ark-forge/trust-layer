@@ -4,7 +4,7 @@ import asyncio
 import hashlib
 import ipaddress
 import logging
-import os
+import socket
 from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse
@@ -25,6 +25,7 @@ from .config import (
     SERVICES_DIR,
     BACKGROUND_TASKS_LOG,
     ARKFORGE_PUBLIC_KEY,
+    INTERNAL_SECRET,
     get_signing_key,
 )
 from .keys import validate_api_key
@@ -176,6 +177,29 @@ _PRIVATE_NETWORKS = [
     ipaddress.ip_network("fc00::/7"),
     ipaddress.ip_network("fe80::/10"),
 ]
+
+
+async def _check_no_private_dns(hostname: str) -> None:
+    """Resolve hostname and reject if any resolved address is in a private range.
+
+    Guards against DNS rebinding attacks: an attacker-controlled domain may have
+    a public IP at syntactic-validation time but resolve to a private IP at request
+    time (after TTL expiry). We resolve at request time and re-check every address.
+    """
+    loop = asyncio.get_running_loop()
+    try:
+        results = await loop.run_in_executor(None, socket.getaddrinfo, hostname, None)
+    except OSError:
+        raise ProxyError("invalid_target", f"Could not resolve hostname '{hostname}'", 400)
+    for _family, _type, _proto, _canonname, sockaddr in results:
+        ip_str = sockaddr[0]
+        try:
+            addr = ipaddress.ip_address(ip_str)
+            for network in _PRIVATE_NETWORKS:
+                if addr in network:
+                    raise ProxyError("invalid_target", "Target resolves to private IP range", 400)
+        except ValueError:
+            pass
 
 
 class ProxyError(Exception):
@@ -441,6 +465,15 @@ async def execute_proxy(
     target = validate_target_url(target)
     method = method.upper()
 
+    # 2b. DNS rebinding guard — resolve domain names at request time
+    _parsed_host = urlparse(target).hostname or ""
+    try:
+        ipaddress.ip_address(_parsed_host)
+        # IP literal — already validated syntactically in validate_target_url
+    except ValueError:
+        # Domain name — resolve and verify no address is in a private range
+        await _check_no_private_dns(_parsed_host)
+
     # Detect free tier
     is_free = key_info.get("plan") == "free"
 
@@ -540,7 +573,7 @@ async def execute_proxy(
     upstream_timestamp = None
 
     try:
-        fwd_headers = {"X-Internal-Secret": os.environ.get("TRUST_LAYER_INTERNAL_SECRET", "")}
+        fwd_headers = {"X-Internal-Secret": INTERNAL_SECRET} if INTERNAL_SECRET else {}
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_SECONDS) as client:
             if method == "GET":
                 resp = await client.get(target, params=payload, headers=fwd_headers)

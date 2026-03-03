@@ -66,6 +66,10 @@ def _isolate_data(tmp_path, monkeypatch):
     monkeypatch.setattr(app_mod, "TRUST_LAYER_BASE_URL", "https://test.arkforge.fr")
     monkeypatch.setattr(app_mod, "ARKFORGE_PUBLIC_KEY", test_pubkey)
     monkeypatch.setattr(app_mod, "PROOF_ACCESS_LOG", tmp_path / "data" / "proof_access_log.jsonl")
+    monkeypatch.setattr(app_mod, "WEBHOOK_IDEMPOTENCY_FILE", tmp_path / "data" / "webhook_idempotency.jsonl")
+
+    # DNS rebinding mock — prevent real DNS resolution in proxy tests
+    monkeypatch.setattr(proxy_mod, "_check_no_private_dns", AsyncMock(return_value=None))
 
 
 @pytest.fixture

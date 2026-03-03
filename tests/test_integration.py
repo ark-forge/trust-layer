@@ -273,13 +273,14 @@ def test_proxy_full_flow_has_signature_and_spec(client, api_key):
 
 # --- Webhook ---
 
-def test_webhook_invalid_json(client):
+def test_webhook_no_secrets_returns_503(client):
+    """Webhook is rejected with 503 when no webhook secrets are configured."""
     r = client.post(
         "/v1/webhooks/stripe",
-        content=b"not json",
+        content=b"any payload",
         headers={"Content-Type": "application/json"},
     )
-    assert r.status_code == 400
+    assert r.status_code == 503
 
 
 # --- /v1/keys/setup (payment mode) ---
@@ -363,11 +364,15 @@ def test_setup_key_defaults_to_10(client, monkeypatch):
 
 # --- Webhook checkout.session.completed — créditation Pro ---
 
-def test_webhook_pro_setup_credits_account(client):
+def test_webhook_pro_setup_credits_account(client, monkeypatch):
     """Webhook Pro setup: crée la clé ET crédite le compte."""
+    import trust_layer.app as app_mod
+    monkeypatch.setattr(app_mod, "STRIPE_WEBHOOK_SECRET_TEST", "whsec_test_fake")
+
     from trust_layer.credits import get_balance
 
     event = {
+        "id": "evt_test_webhook_pro_001",
         "type": "checkout.session.completed",
         "livemode": False,
         "data": {
@@ -385,7 +390,8 @@ def test_webhook_pro_setup_credits_account(client):
         },
     }
 
-    with patch("trust_layer.app.send_welcome_email"):
+    with patch("trust_layer.app.send_welcome_email"), \
+         patch("stripe.Webhook.construct_event", return_value=event):
         r = client.post(
             "/v1/webhooks/stripe",
             json=event,

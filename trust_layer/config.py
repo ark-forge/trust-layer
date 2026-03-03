@@ -61,6 +61,19 @@ RATE_LIMIT_PER_KEY_PER_DAY = 100
 FREE_TIER_MONTHLY_LIMIT = 100
 IDEMPOTENCY_TTL_HOURS = 24
 
+# --- Internal Secret (forwarded to upstream services for service-to-service auth) ---
+INTERNAL_SECRET = os.environ.get("TRUST_LAYER_INTERNAL_SECRET", "")
+
+# --- Webhook idempotency (prevents replay attacks on Stripe webhooks) ---
+WEBHOOK_IDEMPOTENCY_FILE = DATA_DIR / "webhook_idempotency.jsonl"
+
+# --- CORS allowed origins ---
+CORS_ALLOWED_ORIGINS = [
+    o.strip()
+    for o in os.environ.get("CORS_ALLOWED_ORIGINS", "https://arkforge.fr,https://www.arkforge.fr").split(",")
+    if o.strip()
+]
+
 # --- Trust Layer URL ---
 TRUST_LAYER_BASE_URL = os.environ.get("TRUST_LAYER_BASE_URL", "https://arkforge.fr/trust")
 

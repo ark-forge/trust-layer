@@ -30,6 +30,8 @@ from .config import (
     FREE_TIER_MONTHLY_LIMIT,
     PROOF_ACCESS_LOG,
     ARKFORGE_PUBLIC_KEY,
+    WEBHOOK_IDEMPOTENCY_FILE,
+    CORS_ALLOWED_ORIGINS,
 )
 from .keys import validate_api_key, create_api_key, deactivate_key_by_ref, is_test_key, is_free_key
 from .credits import add_credits, get_balance
@@ -175,9 +177,10 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=CORS_ALLOWED_ORIGINS,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "X-Api-Key", "X-Idempotency-Key", "X-Agent-Identity", "X-Agent-Version", "Content-Type"],
+    allow_credentials=False,
 )
 
 
@@ -679,6 +682,52 @@ async def buy_credits(
     }
 
 
+# --- Webhook idempotency helpers ---
+
+def _is_webhook_processed(event_id: str) -> bool:
+    """Return True if this Stripe event_id was already processed (7-day TTL).
+
+    Prevents replay attacks: Stripe may re-deliver the same event on retries,
+    which could trigger duplicate credit grants or key creations.
+    """
+    if not event_id:
+        return False
+    try:
+        with open(WEBHOOK_IDEMPOTENCY_FILE, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get("event_id") != event_id:
+                    continue
+                try:
+                    ts = datetime.fromisoformat(entry["processed_at"])
+                    age_days = (datetime.now(timezone.utc) - ts).total_seconds() / 86400
+                    if age_days < 7:
+                        return True
+                except (KeyError, ValueError):
+                    continue
+    except FileNotFoundError:
+        pass
+    return False
+
+
+def _mark_webhook_processed(event_id: str) -> None:
+    """Append event_id to the idempotency log so duplicate deliveries are skipped."""
+    if not event_id:
+        return
+    entry = {"event_id": event_id, "processed_at": datetime.now(timezone.utc).isoformat()}
+    try:
+        with open(WEBHOOK_IDEMPOTENCY_FILE, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError as e:
+        logger.warning("Webhook idempotency log write failed: %s", e)
+
+
 # --- POST /v1/webhooks/stripe ---
 
 @app.post("/v1/webhooks/stripe")
@@ -700,11 +749,15 @@ async def stripe_webhook(request: Request):
         if secrets_to_try:
             logger.error("Webhook signature verification failed")
             raise HTTPException(400, "Invalid signature")
-        try:
-            event = json.loads(payload)
-        except json.JSONDecodeError:
-            raise HTTPException(400, "Invalid JSON")
-        logger.warning("Webhook received without signature verification")
+        # No secrets configured — reject all unauthenticated webhook calls.
+        # Accepting unsigned events would allow anyone to trigger credit grants.
+        raise HTTPException(503, "Webhook secrets not configured — request rejected")
+
+    # Idempotency guard — skip duplicate events (Stripe retries on delivery failure)
+    event_id = event.get("id", "")
+    if _is_webhook_processed(event_id):
+        logger.info("Duplicate webhook event %s — skipped", event_id)
+        return {"received": True}
 
     event_type = event.get("type", "")
     data = event.get("data", {}).get("object", {})
@@ -756,6 +809,7 @@ async def stripe_webhook(request: Request):
         if status in ("canceled", "unpaid", "past_due"):
             deactivate_key_by_ref(subscription_id)
 
+    _mark_webhook_processed(event_id)
     return {"received": True}
 
 
