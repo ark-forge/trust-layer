@@ -273,8 +273,11 @@ def test_proxy_full_flow_has_signature_and_spec(client, api_key):
 
 # --- Webhook ---
 
-def test_webhook_no_secrets_returns_503(client):
+def test_webhook_no_secrets_returns_503(client, monkeypatch):
     """Webhook is rejected with 503 when no webhook secrets are configured."""
+    import trust_layer.app as app_mod
+    monkeypatch.setattr(app_mod, "STRIPE_WEBHOOK_SECRET_LIVE", "")
+    monkeypatch.setattr(app_mod, "STRIPE_WEBHOOK_SECRET_TEST", "")
     r = client.post(
         "/v1/webhooks/stripe",
         content=b"any payload",
