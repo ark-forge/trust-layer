@@ -621,11 +621,6 @@ async def execute_proxy(
     # 9. Generate proof (with party identities)
     buyer_fingerprint = sha256_hex(api_key)
     seller = target_domain
-
-    # Snapshot buyer reputation score at proof time (cached, non-blocking)
-    from .reputation import get_reputation as _get_rep
-    _rep = _get_rep(f"sha256:{buyer_fingerprint}")
-    buyer_reputation_score = _rep["reputation_score"] if _rep else None
     proof_id = proof_id_for_debit
     proof = generate_proof(request_data, response_data, payment_data, timestamp, buyer_fingerprint, seller,
                            agent_identity=agent_identity, agent_version=agent_version,
@@ -667,9 +662,6 @@ async def execute_proxy(
         proof_record["upstream_timestamp"] = upstream_timestamp
     if provider_payment_record:
         proof_record["provider_payment"] = provider_payment_record
-    if buyer_reputation_score is not None:
-        proof_record["buyer_reputation_score"] = buyer_reputation_score
-        proof_record["buyer_profile_url"] = f"{TRUST_LAYER_BASE_URL}/v1/agent/sha256:{buyer_fingerprint}/reputation"
 
     # Ed25519 signature: sign the chain hash to prove ArkForge origin
     chain_hash = proof["_raw_chain_hash"]
@@ -686,10 +678,19 @@ async def execute_proxy(
     task = asyncio.create_task(_post_proof_background(proof_id, proof_record, chain_hash, verification_url, email))
     _track_task(task)
 
-    # 13. Update shadow profiles
+    # 13. Update shadow profiles + snapshot reputation (inclut cette transaction)
     _update_agent_profile(api_key, amount, currency, target_domain, service_succeeded,
                           agent_identity, agent_version)
     _update_service_profile(target_domain, response_time_ms, service_succeeded)
+
+    # Snapshot buyer reputation — après update profil, cache invalidé → score inclut cette transaction
+    from .reputation import get_reputation as _get_rep, invalidate_cache as _invalidate_rep
+    _invalidate_rep(f"sha256:{buyer_fingerprint}")
+    _rep = _get_rep(f"sha256:{buyer_fingerprint}")
+    if _rep:
+        proof_record["buyer_reputation_score"] = _rep["reputation_score"]
+        proof_record["buyer_profile_url"] = f"{TRUST_LAYER_BASE_URL}/v1/agent/sha256:{buyer_fingerprint}/reputation"
+        store_proof(proof_id, proof_record)  # update stored proof with score
 
     # Scrub X-Internal-Secret from service response BEFORE returning to client.
     # Hash was already computed above (line generate_proof), so chain integrity is preserved.
