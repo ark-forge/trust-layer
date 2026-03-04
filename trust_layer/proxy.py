@@ -29,7 +29,7 @@ from .config import (
     INTERNAL_SECRET,
     get_signing_key,
 )
-from .keys import validate_api_key, _KEYS_LOCK
+from .keys import validate_api_key, get_key_plan, _KEYS_LOCK
 from .payments.base import ChargeResult
 from .credits import debit_credits, InsufficientCredits
 from .rate_limit import rollback_overage
@@ -515,8 +515,10 @@ async def execute_proxy(
         # Domain name — resolve and verify no address is in a private range
         await _check_no_private_dns(_parsed_host)
 
-    # Detect free tier
-    is_free = key_info.get("plan") == "free"
+    # Detect plan and tier — use prefix-based detection for correctness
+    # (mcp_test_* keys store plan="pro" in metadata but are treated as test/pay-per-use)
+    plan = get_key_plan(api_key)
+    is_free = plan == "free"
 
     # 3. Check rate limit (must be before amount calculation: overage status affects price)
     allowed, remaining, is_overage, block_reason = check_rate_limit(api_key)
@@ -545,10 +547,14 @@ async def execute_proxy(
     if is_free:
         amount = 0.0
     elif is_overage:
-        plan = key_info.get("plan", "pro")
         amount = OVERAGE_PRICES.get(plan, PROOF_PRICE)
+    elif plan in ("pro", "enterprise"):
+        amount = 0.0  # Subscription covers within-quota proofs
     else:
-        amount = PROOF_PRICE  # Fixed price per proof for pro/test keys
+        amount = PROOF_PRICE  # test keys: pay-per-use
+
+    # Subscription proofs (pro/enterprise within quota) require no credit debit
+    is_subscription = not is_free and not is_overage and plan in ("pro", "enterprise")
 
     # 5. Hash request
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -568,8 +574,18 @@ async def execute_proxy(
             status="free_tier",
             receipt_url=None,
         )
+    elif is_subscription:
+        charge_result = ChargeResult(
+            provider="subscription",
+            transaction_id="subscription",
+            amount=0.0,
+            currency=currency,
+            status="subscription",
+            receipt_url=None,
+        )
     else:
         # Prepaid credit deduction — atomic check+debit under per-key lock
+        # (overage proofs and legacy test keys)
         try:
             debit_id, new_balance = debit_credits(api_key, amount, proof_id_for_debit,
                                                   is_overage=is_overage)
@@ -590,12 +606,12 @@ async def execute_proxy(
         charge_result = ChargeResult(
             provider="prepaid_credit",
             transaction_id=debit_id,
-            amount=amount,  # overage: 0.01/0.005 EUR; standard: 0.10 EUR
+            amount=amount,  # overage: 0.01/0.005 EUR; test: 0.10 EUR
             currency="eur",
             status="succeeded",
             receipt_url=None,
         )
-        # Warn if balance is now low (< 10 proofs remaining)
+        # Warn if overage credits are running low
         _notify_low_credits_if_needed(api_key, key_info, new_balance)
 
     # Payment OK — from here, always return proof even on service error
