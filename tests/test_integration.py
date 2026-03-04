@@ -252,9 +252,9 @@ def test_usage_with_key(client, api_key):
     assert "daily" in data
     assert "used" in data["daily"]
     assert "remaining" in data["daily"]
-    # Pro key should have credit info
-    assert "credit_balance" in data
-    assert "proofs_remaining" in data
+    # test key: no monthly limit, no overage credits
+    assert "monthly" not in data
+    assert "proofs_remaining" not in data
 
 
 # --- Pubkey ---
@@ -561,3 +561,6 @@ def test_usage_shows_monthly_for_pro(client):
     assert "monthly" in data
     assert data["monthly"]["limit"] == PRO_MONTHLY_LIMIT
     assert data["monthly"]["remaining"] == PRO_MONTHLY_LIMIT  # no calls yet
+    # overage credits visible
+    assert "overage_credits_eur" in data
+    assert data["overage_credits_eur"] == 10.0

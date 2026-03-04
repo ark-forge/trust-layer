@@ -974,11 +974,10 @@ async def usage(
     if not api_key:
         return _error_response("invalid_api_key", "API key required", 401)
     result = get_usage(api_key)
-    # Add credit balance for pro/test keys
-    if not is_free_key(api_key):
+    # Add overage credit balance for subscription plans
+    if not is_free_key(api_key) and not result.get("plan") == "test":
         balance = get_balance(api_key)
-        result["credit_balance"] = balance
-        result["proofs_remaining"] = int(balance / PROOF_PRICE) if PROOF_PRICE > 0 else 0
+        result["overage_credits_eur"] = round(balance, 4)
     return result
 
 
@@ -997,7 +996,7 @@ async def pricing():
                 "credit_card_required": False,
             },
             "pro": {
-                "price": "39 EUR/month",
+                "price": "29 EUR/month",
                 "monthly_quota": PRO_MONTHLY_LIMIT,
                 "overage": f"{PRO_OVERAGE_PRICE} EUR/proof",
                 "witnesses": "3 (Ed25519, RFC 3161 TSA, Sigstore Rekor)",
@@ -1009,7 +1008,7 @@ async def pricing():
                 "monthly_quota": ENTERPRISE_MONTHLY_LIMIT,
                 "overage": f"{ENTERPRISE_OVERAGE_PRICE} EUR/proof",
                 "witnesses": "3 (Ed25519, RFC 3161 QTSP eIDAS, Sigstore Rekor)",
-                "setup": "contact@arkforge.fr",
+                "setup": f"{TRUST_LAYER_BASE_URL}/v1/keys/enterprise-setup",
                 "credit_card_required": True,
             },
         },
