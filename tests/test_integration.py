@@ -1,15 +1,18 @@
 """End-to-end integration tests via FastAPI TestClient."""
 
 import json
+from datetime import datetime, timezone
 from unittest.mock import patch, AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
 
 from trust_layer.app import app
-from trust_layer.keys import create_api_key
+from trust_layer.keys import create_api_key, update_overage_settings
 from trust_layer.credits import add_credits
-from trust_layer.config import PROOF_PRICE
+from trust_layer.config import PROOF_PRICE, PRO_OVERAGE_PRICE
+import trust_layer.rate_limit as _rl_mod  # for patched RATE_LIMITS_FILE at runtime
+from trust_layer.persistence import load_json, save_json
 
 
 @pytest.fixture
@@ -456,3 +459,149 @@ def test_billing_portal_requires_customer_id(client):
     r = client.post("/v1/keys/portal", json={"mode": "test"})
     assert r.status_code == 400
     assert r.json()["error"]["code"] == "invalid_request"
+
+
+# --- Overage billing — HTTP-level integration ---
+
+def _exhaust_monthly_quota(key, monthly_limit=5000):
+    """Pre-fill rate_limits.json to simulate exhausted monthly quota.
+
+    Uses the module-level RATE_LIMITS_FILE (patched by conftest) so the write
+    goes to the same tmp path that check_rate_limit reads from.
+    """
+    key_id = key[:16]
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    month = datetime.now(timezone.utc).strftime("%Y-%m")
+    rl_file = _rl_mod.RATE_LIMITS_FILE  # patched by conftest
+    limits = load_json(rl_file, {})
+    limits[key_id] = {
+        "date": today, "count": 0,
+        "month": month, "month_count": monthly_limit,
+    }
+    save_json(rl_file, limits)
+
+
+def test_pro_monthly_quota_exhausted_suggests_overage(client):
+    """Pro key with exhausted monthly quota → 429, message mentions /v1/keys/overage."""
+    from trust_layer.config import _PRO_MONTHLY_LIMIT
+    key = create_api_key("cus_integ_quota", "ref_integ_quota", "quota@test.com", plan="pro")
+    add_credits(key, 5.0, "pi_quota_integ")
+    # Exhaust the real monthly limit — no dict patching needed
+    _exhaust_monthly_quota(key, monthly_limit=_PRO_MONTHLY_LIMIT)
+
+    mock_http = _mock_http_client()
+    with patch("httpx.AsyncClient", return_value=mock_http), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+        r = client.post(
+            "/v1/proxy",
+            json={"target": "https://example.com/api", "payload": {}},
+            headers={"Authorization": f"Bearer {key}"},
+        )
+
+    assert r.status_code == 429
+    body = r.json()
+    assert body["error"]["code"] == "rate_limited"
+    assert "/v1/keys/overage" in body["error"]["message"]
+
+
+def test_pro_usage_includes_monthly_section(client):
+    """Pro key /v1/usage includes monthly quota section (test key has no monthly limit)."""
+    key = create_api_key("cus_integ_pro_usage", "ref_pro_usage", "pro_usage@test.com", plan="pro")
+    add_credits(key, 5.0, "pi_pro_usage")
+    r = client.get("/v1/usage", headers={"Authorization": f"Bearer {key}"})
+    assert r.status_code == 200
+    data = r.json()
+    assert "monthly" in data, f"Pro /v1/usage must include monthly section, got: {list(data.keys())}"
+    assert "used" in data["monthly"]
+    assert "limit" in data["monthly"]
+    assert "remaining" in data["monthly"]
+
+
+def test_overage_full_flow_via_http(client):
+    """Full overage e2e: enable overage → proxy call (quota exhausted) → proof → verify."""
+    from trust_layer.config import _PRO_MONTHLY_LIMIT
+    key = create_api_key("cus_integ_ov_flow", "ref_ov_flow", "ov_flow@test.com", plan="pro")
+    add_credits(key, 5.0, "pi_ov_flow")
+    update_overage_settings(key, enabled=True, cap_eur=10.0, overage_rate=PRO_OVERAGE_PRICE)
+    # Exhaust real monthly limit — no dict patching needed
+    _exhaust_monthly_quota(key, monthly_limit=_PRO_MONTHLY_LIMIT)
+
+    mock_http = _mock_http_client()
+    with patch("httpx.AsyncClient", return_value=mock_http), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+        r = client.post(
+            "/v1/proxy",
+            json={"target": "https://example.com/api", "payload": {}},
+            headers={"Authorization": f"Bearer {key}"},
+        )
+
+    assert r.status_code == 200, f"Expected 200 for overage call, got {r.status_code}: {r.text}"
+    data = r.json()
+    assert "proof" in data
+    proof = data["proof"]
+    assert proof["proof_id"].startswith("prf_")
+    # Certification fee: prepaid_credit at overage rate
+    fee = proof["certification_fee"]
+    assert fee["method"] == "prepaid_credit"
+    assert round(fee["amount"], 4) == PRO_OVERAGE_PRICE
+
+    # Verify the proof is retrievable and integrity is valid
+    proof_id = proof["proof_id"]
+    r2 = client.get(f"/v1/proof/{proof_id}")
+    assert r2.status_code == 200
+    proof_data = r2.json()
+    assert proof_data["integrity_verified"] is True
+
+
+def test_free_tier_monthly_quota_429_via_http(client):
+    """Free key with exhausted 100-proof monthly quota → 429 via HTTP."""
+    from trust_layer.config import FREE_TIER_MONTHLY_LIMIT
+    key = create_api_key("cus_integ_free_quota", "ref_free_quota", "free_quota@test.com", plan="free")
+    # Exhaust real free tier monthly limit
+    _exhaust_monthly_quota(key, monthly_limit=FREE_TIER_MONTHLY_LIMIT)
+
+    mock_http = _mock_http_client()
+    with patch("httpx.AsyncClient", return_value=mock_http), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+        r = client.post(
+            "/v1/proxy",
+            json={"target": "https://example.com/api", "payload": {}},
+            headers={"Authorization": f"Bearer {key}"},
+        )
+
+    assert r.status_code == 429
+    assert r.json()["error"]["code"] == "rate_limited"
+
+
+def test_overage_cap_reached_429_via_http(client):
+    """Overage cap reached → 429 overage_cap_reached via HTTP."""
+    from trust_layer.config import OVERAGE_CAP_MIN
+    key = create_api_key("cus_integ_cap", "ref_cap", "cap@test.com", plan="pro")
+    add_credits(key, 5.0, "pi_cap_integ")
+    update_overage_settings(key, enabled=True, cap_eur=OVERAGE_CAP_MIN, overage_rate=PRO_OVERAGE_PRICE)
+
+    # Pre-fill: quota exhausted (real Pro limit) + overage cap already hit
+    from trust_layer.config import _PRO_MONTHLY_LIMIT
+    key_id = key[:16]
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    month = datetime.now(timezone.utc).strftime("%Y-%m")
+    rl_file = _rl_mod.RATE_LIMITS_FILE
+    limits = load_json(rl_file, {})
+    limits[key_id] = {
+        "date": today, "count": 0,
+        "month": month, "month_count": _PRO_MONTHLY_LIMIT,
+        "overage_count": 500, "overage_spent_eur": 5.00,
+    }
+    save_json(rl_file, limits)
+
+    mock_http = _mock_http_client()
+    with patch("httpx.AsyncClient", return_value=mock_http), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+        r = client.post(
+            "/v1/proxy",
+            json={"target": "https://example.com/api", "payload": {}},
+            headers={"Authorization": f"Bearer {key}"},
+        )
+
+    assert r.status_code == 429
+    assert r.json()["error"]["code"] == "overage_cap_reached"

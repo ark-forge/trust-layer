@@ -590,7 +590,7 @@ async def execute_proxy(
         charge_result = ChargeResult(
             provider="prepaid_credit",
             transaction_id=debit_id,
-            amount=PROOF_PRICE,
+            amount=amount,  # overage: 0.01/0.005 EUR; standard: 0.10 EUR
             currency="eur",
             status="succeeded",
             receipt_url=None,

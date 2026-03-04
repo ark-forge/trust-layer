@@ -72,7 +72,8 @@ Or open it in a browser — each proof has a public HTML verification page.
 - **Free tier** — 100 proofs/month, no credit card required
 - **Agent identity** — optional `X-Agent-Identity` / `X-Agent-Version` headers, mismatch detection across calls
 - **Triptyque de la Preuve** — 3-level watermarking on every transaction (see below)
-- **Rate limiting** — daily cap (all keys) + monthly cap (free keys)
+- **Rate limiting** — daily cap (all keys) + monthly quota (Free: 100/month, Pro: 5 000/month, Enterprise: 50 000/month)
+- **Overage billing (opt-in)** — Pro/Enterprise keys can opt in to overage billing: proofs beyond the monthly quota are debited from prepaid credits at a lower per-proof rate (€0.01 Pro, €0.005 Enterprise), up to a monthly cap chosen by the user (€5–€100)
 - **Email** — welcome + proof receipts via SMTP
 - **Proof Specification** — open spec with test vectors for independent verification ([ark-forge/proof-spec](https://github.com/ark-forge/proof-spec))
 
@@ -530,7 +531,8 @@ Agent Client
     v
 Trust Layer (/v1/proxy)
     |--- 1. Validate API key + rate limit
-    |--- 2. Deduct 1 credit (Pro/Test) or check monthly quota (Free)
+    |--- 2. Check monthly quota (all plans) — if quota exhausted and overage enabled, deduct overage credit; else 429
+    |--- 2b. Deduct standard credit (0.10 EUR, Pro/Test within quota) or 0 credit (Free)
     |--- 3. Fetch external receipt from PSP (if provider_payment provided)
     |--- 4. Forward request to upstream API
     |--- 5. Hash request + response + receipt (SHA-256 chain)
@@ -606,11 +608,13 @@ curl -X POST https://arkforge.fr/trust/v1/proxy \
   }'
 ```
 
-Each call deducts 1 credit. If the balance is 0, the call returns `402 Payment Required`.
+Each standard call deducts 1 credit (0.10 EUR). If the balance is 0, the call returns `402 Payment Required`. Overage calls (beyond the monthly quota, opt-in) are debited at the overage rate instead (0.01 EUR for Pro, 0.005 EUR for Enterprise).
 
 ## Credits
 
-Pro and Test keys use prepaid credits. Each proof costs **0.10 EUR** (1 credit). Credits are bought in advance via Stripe Checkout and deducted automatically on each `/v1/proxy` call.
+Pro and Test keys use prepaid credits. Each standard proof costs **0.10 EUR** (1 credit). Credits are bought in advance via Stripe Checkout and deducted automatically on each `/v1/proxy` call.
+
+**Overage pricing (opt-in):** when the monthly quota is exhausted, Pro keys can continue at **0.01 EUR/proof** and Enterprise keys at **0.005 EUR/proof**, both debited from prepaid credits up to a monthly cap. Overage billing is disabled by default — activate it at `POST /v1/keys/overage`.
 
 ### Buy credits
 
@@ -622,7 +626,7 @@ curl -X POST https://arkforge.fr/trust/v1/credits/buy \
 # Returns: {"credits_added": 10.0, "balance": 10.0, "proofs_available": 100, ...}
 ```
 
-The saved card is charged off-session — no browser required. Credits are added immediately. Minimum purchase: 1.00 EUR (10 credits).
+The saved card is charged off-session — no browser required. Credits are added immediately. Minimum purchase: 1.00 EUR (10 standard proofs, or up to 200 overage proofs at Pro rate).
 
 ### Check balance
 
@@ -636,23 +640,28 @@ curl https://arkforge.fr/trust/v1/usage \
 
 1. **Setup** — `POST /v1/keys/setup` (10 EUR minimum): Stripe Checkout charges the card, saves it for future use, and credits the account.
 2. **Top up** — `POST /v1/credits/buy`: off-session charge, no browser required. Credits never expire.
-3. **Use** — each `POST /v1/proxy` call deducts 1 credit (0.10 EUR). If balance is 0, the call is rejected with `402 Payment Required`.
-4. **Alerts** — three email notifications keep you informed:
+3. **Use** — each `POST /v1/proxy` call within quota deducts 1 credit (0.10 EUR). If balance is 0, the call is rejected with `402 Payment Required`. If overage is enabled (opt-in), calls beyond the monthly quota deduct at the overage rate instead.
+4. **Alerts** — six email notifications keep you informed:
    - **80% quota** — when 80% of the daily/monthly quota is consumed
    - **Low balance** — when balance drops below 1.00 EUR (~10 proofs remaining), once per 24h
    - **Exhausted** — when a call is rejected due to zero balance (`402`), once per 24h — includes the recharge curl command
+   - **Overage started** — first overage proof of the month, when overage billing is active
+   - **Overage 80% cap** — when 80% of the monthly overage cap is consumed
+   - **Overage cap reached** — when the overage cap is hit and requests are blocked (`429`)
 
 Free keys (`mcp_free_*`) do not use credits — they have a monthly quota of 100 proofs at no cost.
 
 ## Plans and API key prefixes
 
-| Prefix | Plan | Payment | Witnesses | Limits |
-|--------|------|---------|-----------|--------|
-| `mcp_free_*` | Free | No charge | 3 (Ed25519, RFC 3161 TSA, Sigstore Rekor) | 100 proofs/month |
-| `mcp_pro_*` | Pro | Prepaid credits (0.10 EUR/proof) | 3 (Ed25519, RFC 3161 TSA, Sigstore Rekor) | 100 proofs/day |
-| `mcp_test_*` | Test | Test credits (Stripe test mode) | 3 (Ed25519, RFC 3161 TSA, Sigstore Rekor) | 100 proofs/day |
+| Prefix | Plan | Standard price | Overage (opt-in) | Witnesses | Limits |
+|--------|------|---------------|-----------------|-----------|--------|
+| `mcp_free_*` | Free | No charge | Not available | 3 (Ed25519, RFC 3161 TSA, Sigstore Rekor) | 100 proofs/month |
+| `mcp_pro_*` | Pro | 0.10 EUR/proof (prepaid) | 0.01 EUR/proof (€5–€100 cap) | 3 (Ed25519, RFC 3161 TSA, Sigstore Rekor) | 100/day · 5 000/month |
+| `mcp_test_*` | Test | Test credits (Stripe test mode) | Not available | 3 (Ed25519, RFC 3161 TSA, Sigstore Rekor) | 100 proofs/day |
 
 The proxy auto-selects the right plan, witnesses, and rate limits based on the API key prefix. Free tier skips Stripe entirely (no credit card required). Pro keys require a positive credit balance — buy credits via `POST /v1/credits/buy`. Test mode uses Stripe test keys (card `4242 4242 4242 4242`).
+
+Overage billing is **disabled by default** for all plans. Pro keys can opt in via `POST /v1/keys/overage` with a monthly cap of their choice (€5–€100). No overage charges are applied without explicit consent.
 
 ## Conformance testing
 
