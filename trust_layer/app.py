@@ -68,6 +68,10 @@ from .config import (
     PRO_SETUP_MIN_AMOUNT,
     RATE_LIMIT_PER_KEY_PER_DAY,
     FREE_TIER_MONTHLY_LIMIT,
+    PRO_MONTHLY_LIMIT,
+    ENTERPRISE_MONTHLY_LIMIT,
+    PRO_OVERAGE_PRICE,
+    ENTERPRISE_OVERAGE_PRICE,
     PROOF_ACCESS_LOG,
     ARKFORGE_PUBLIC_KEY,
     WEBHOOK_IDEMPOTENCY_FILE,
@@ -1073,17 +1077,10 @@ async def usage(
     if not api_key:
         return _error_response("invalid_api_key", "API key required", 401)
     result = get_usage(api_key)
-    # Add credit balance for pro/test keys
-    if not is_free_key(api_key):
+    # Add overage credit balance for subscription plans
+    if not is_free_key(api_key) and not result.get("plan") == "test":
         balance = get_balance(api_key)
-        result["credit_balance"] = balance
-        result["proofs_remaining"] = int(balance / PROOF_PRICE) if PROOF_PRICE > 0 else 0
-        # overage_credits_eur alias for transparency when overage is enabled
-        key_info_usage = validate_api_key(api_key) or {}
-        if key_info_usage.get("overage_enabled"):
-            plan = get_key_plan(api_key)
-            overage_price = OVERAGE_PRICES.get(plan, PRO_OVERAGE_PRICE)
-            result["overage_credits_eur"] = round(balance / overage_price, 2) * overage_price
+        result["overage_credits_eur"] = round(balance, 4)
     return result
 
 
@@ -1095,21 +1092,36 @@ async def pricing():
         "plans": {
             "free": {
                 "price": "0 EUR/month",
-                "limit": f"{FREE_TIER_MONTHLY_LIMIT} proofs/month",
-                "witnesses": "2 (Ed25519, RFC 3161 TSA)",
+                "monthly_quota": FREE_TIER_MONTHLY_LIMIT,
+                "overage": None,
+                "witnesses": "3 (Ed25519, RFC 3161 TSA, Sigstore Rekor)",
                 "setup": f"{TRUST_LAYER_BASE_URL}/v1/keys/free-signup",
                 "credit_card_required": False,
             },
             "pro": {
-                "proof_price": f"{PROOF_PRICE} EUR",
-                "credits": f"prepaid (min {MIN_CREDIT_PURCHASE} EUR, max {MAX_CREDIT_PURCHASE} EUR)",
-                "limit": f"{RATE_LIMIT_PER_KEY_PER_DAY} proofs/day",
-                "witnesses": "2 (Ed25519, RFC 3161 TSA)",
+                "price": "29 EUR/month",
+                "monthly_quota": PRO_MONTHLY_LIMIT,
+                "overage": f"{PRO_OVERAGE_PRICE} EUR/proof (opt-in)",
+                "witnesses": "3 (Ed25519, RFC 3161 TSA, Sigstore Rekor)",
                 "setup": f"{TRUST_LAYER_BASE_URL}/v1/keys/setup",
                 "buy_credits": f"{TRUST_LAYER_BASE_URL}/v1/credits/buy",
-                "overage": f"{PRO_OVERAGE_PRICE} EUR/proof (opt-in)",
                 "overage_config": {
                     "rate": PRO_OVERAGE_PRICE,
+                    "opt_in": True,
+                    "default_cap_eur": OVERAGE_CAP_DEFAULT,
+                    "cap_range": [OVERAGE_CAP_MIN, OVERAGE_CAP_MAX],
+                    "enable_endpoint": "/v1/keys/overage",
+                },
+            },
+            "enterprise": {
+                "price": "149 EUR/month",
+                "monthly_quota": ENTERPRISE_MONTHLY_LIMIT,
+                "overage": f"{ENTERPRISE_OVERAGE_PRICE} EUR/proof (opt-in)",
+                "witnesses": "3 (Ed25519, RFC 3161 QTSP eIDAS, Sigstore Rekor)",
+                "setup": f"{TRUST_LAYER_BASE_URL}/v1/keys/enterprise-setup",
+                "credit_card_required": True,
+                "overage_config": {
+                    "rate": ENTERPRISE_OVERAGE_PRICE,
                     "opt_in": True,
                     "default_cap_eur": OVERAGE_CAP_DEFAULT,
                     "cap_range": [OVERAGE_CAP_MIN, OVERAGE_CAP_MAX],

@@ -10,7 +10,14 @@ from fastapi.testclient import TestClient
 from trust_layer.app import app
 from trust_layer.keys import create_api_key, update_overage_settings
 from trust_layer.credits import add_credits
-from trust_layer.config import PROOF_PRICE, PRO_OVERAGE_PRICE
+from trust_layer.config import (
+    PROOF_PRICE,
+    FREE_TIER_MONTHLY_LIMIT,
+    PRO_MONTHLY_LIMIT,
+    ENTERPRISE_MONTHLY_LIMIT,
+    PRO_OVERAGE_PRICE,
+    ENTERPRISE_OVERAGE_PRICE,
+)
 import trust_layer.rate_limit as _rl_mod  # for patched RATE_LIMITS_FILE at runtime
 from trust_layer.persistence import load_json, save_json
 
@@ -66,8 +73,32 @@ def test_pricing(client):
     assert r.status_code == 200
     data = r.json()
     assert "plans" in data
-    assert data["plans"]["pro"]["proof_price"] == f"{PROOF_PRICE} EUR"
-    assert "buy_credits" in data["plans"]["pro"]
+
+    # Free plan
+    free = data["plans"]["free"]
+    assert free["monthly_quota"] == FREE_TIER_MONTHLY_LIMIT
+    assert free["overage"] is None
+    assert free["credit_card_required"] is False
+    assert "3" in free["witnesses"]
+
+    # Pro plan
+    pro = data["plans"]["pro"]
+    assert pro["monthly_quota"] == PRO_MONTHLY_LIMIT
+    assert pro["overage"] == f"{PRO_OVERAGE_PRICE} EUR/proof (opt-in)"
+    assert "buy_credits" in pro
+    assert "3" in pro["witnesses"]
+
+    # Enterprise plan
+    ent = data["plans"]["enterprise"]
+    assert ent["monthly_quota"] == ENTERPRISE_MONTHLY_LIMIT
+    assert ent["overage"] == f"{ENTERPRISE_OVERAGE_PRICE} EUR/proof (opt-in)"
+    assert "QTSP" in ent["witnesses"]
+
+
+def test_pricing_all_three_plans_present(client):
+    r = client.get("/v1/pricing")
+    plans = r.json()["plans"]
+    assert set(plans.keys()) == {"free", "pro", "enterprise"}
 
 
 # --- Proxy ---
@@ -224,9 +255,9 @@ def test_usage_with_key(client, api_key):
     assert "daily" in data
     assert "used" in data["daily"]
     assert "remaining" in data["daily"]
-    # Pro key should have credit info
-    assert "credit_balance" in data
-    assert "proofs_remaining" in data
+    # test key: no monthly limit, no overage credits
+    assert "monthly" not in data
+    assert "proofs_remaining" not in data
 
 
 # --- Pubkey ---
@@ -555,7 +586,6 @@ def test_overage_full_flow_via_http(client):
 
 def test_free_tier_monthly_quota_429_via_http(client):
     """Free key with exhausted 100-proof monthly quota → 429 via HTTP."""
-    from trust_layer.config import FREE_TIER_MONTHLY_LIMIT
     key = create_api_key("cus_integ_free_quota", "ref_free_quota", "free_quota@test.com", plan="free")
     # Exhaust real free tier monthly limit
     _exhaust_monthly_quota(key, monthly_limit=FREE_TIER_MONTHLY_LIMIT)
@@ -575,13 +605,12 @@ def test_free_tier_monthly_quota_429_via_http(client):
 
 def test_overage_cap_reached_429_via_http(client):
     """Overage cap reached → 429 overage_cap_reached via HTTP."""
-    from trust_layer.config import OVERAGE_CAP_MIN
+    from trust_layer.config import OVERAGE_CAP_MIN, _PRO_MONTHLY_LIMIT
     key = create_api_key("cus_integ_cap", "ref_cap", "cap@test.com", plan="pro")
     add_credits(key, 5.0, "pi_cap_integ")
     update_overage_settings(key, enabled=True, cap_eur=OVERAGE_CAP_MIN, overage_rate=PRO_OVERAGE_PRICE)
 
     # Pre-fill: quota exhausted (real Pro limit) + overage cap already hit
-    from trust_layer.config import _PRO_MONTHLY_LIMIT
     key_id = key[:16]
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     month = datetime.now(timezone.utc).strftime("%Y-%m")
@@ -605,3 +634,80 @@ def test_overage_cap_reached_429_via_http(client):
 
     assert r.status_code == 429
     assert r.json()["error"]["code"] == "overage_cap_reached"
+
+
+# --- Monthly quota enforcement (e2e) ---
+
+def test_proxy_returns_429_when_rate_limited(client):
+    """Proxy returns 429 with 'rate_limited' when check_rate_limit blocks."""
+    key = create_api_key("cus_rl_block", "ref_rl_block", "rl_block@test.com",
+                         test_mode=True)
+    add_credits(key, 10.0, "pi_rl_block")
+    mock_http = _mock_http_client()
+
+    # Simulate exhausted quota: first call allowed, second blocked
+    call_results = [(True, 5, False, ""), (False, 0, False, "monthly_quota")]
+
+    with patch("trust_layer.proxy.check_rate_limit", side_effect=call_results), \
+         patch("httpx.AsyncClient", return_value=mock_http), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+
+        r1 = client.post(
+            "/v1/proxy",
+            json={"target": "https://example.com/api", "payload": {}},
+            headers={"Authorization": f"Bearer {key}"},
+        )
+        assert r1.status_code == 200
+
+        r2 = client.post(
+            "/v1/proxy",
+            json={"target": "https://example.com/api", "payload": {}},
+            headers={"Authorization": f"Bearer {key}"},
+        )
+
+    assert r2.status_code == 429
+    assert r2.json()["error"]["code"] == "rate_limited"
+
+
+def test_enterprise_key_works_and_has_monthly_quota(client):
+    """Enterprise key (mcp_ent_*) is accepted and /v1/usage shows monthly quota."""
+    key = create_api_key("cus_ent_e2e", "ref_ent_e2e", "ent_e2e@company.com",
+                         plan="enterprise")
+    add_credits(key, 100.0, "pi_ent_e2e_setup")
+    mock_http = _mock_http_client()
+
+    with patch("httpx.AsyncClient", return_value=mock_http), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+        r = client.post(
+            "/v1/proxy",
+            json={"target": "https://example.com/api", "payload": {}},
+            headers={"Authorization": f"Bearer {key}"},
+        )
+
+    assert r.status_code == 200
+    assert r.json()["proof"]["proof_id"].startswith("prf_")
+
+    # /v1/usage should report monthly for enterprise
+    r2 = client.get("/v1/usage", headers={"Authorization": f"Bearer {key}"})
+    assert r2.status_code == 200
+    data = r2.json()
+    assert "monthly" in data
+    assert data["monthly"]["limit"] == ENTERPRISE_MONTHLY_LIMIT
+
+
+def test_usage_shows_monthly_for_pro(client):
+    """Pro key (mcp_pro_*) usage response includes monthly quota fields."""
+    # Use a real mcp_pro_* key (test_mode=False, plan="pro")
+    key = create_api_key("cus_pro_monthly_e2e", "ref_pro_monthly_e2e",
+                         "pro_monthly@test.com", test_mode=False, plan="pro")
+    add_credits(key, 10.0, "pi_pro_monthly_e2e")
+
+    r = client.get("/v1/usage", headers={"Authorization": f"Bearer {key}"})
+    assert r.status_code == 200
+    data = r.json()
+    assert "monthly" in data
+    assert data["monthly"]["limit"] == PRO_MONTHLY_LIMIT
+    assert data["monthly"]["remaining"] == PRO_MONTHLY_LIMIT  # no calls yet
+    # overage credits visible
+    assert "overage_credits_eur" in data
+    assert data["overage_credits_eur"] == 10.0

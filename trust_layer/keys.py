@@ -28,10 +28,13 @@ def save_api_keys(keys: dict):
 def generate_api_key(test_mode: bool = False, plan: str = "pro") -> str:
     """Generate a new API key with appropriate prefix.
 
-    Plans: 'free' (100 proofs/month, public), 'pro' (unlimited).
+    Plans: 'free' (500/month), 'pro' (€39/month, 5 000/month),
+           'enterprise' (€149/month, 50 000/month), 'test' (internal).
     """
     if plan == "free":
         prefix = "mcp_free_"
+    elif plan == "enterprise":
+        prefix = "mcp_ent_"
     elif test_mode:
         prefix = "mcp_test_"
     else:
@@ -106,12 +109,19 @@ def is_free_key(api_key: str) -> bool:
     return api_key.startswith("mcp_free_")
 
 
+def is_enterprise_key(api_key: str) -> bool:
+    """Check if an API key is an enterprise tier key."""
+    return api_key.startswith("mcp_ent_")
+
+
 def get_key_plan(api_key: str) -> str:
-    """Return the plan for an API key ('free', 'pro', or 'test')."""
+    """Return the plan for an API key ('free', 'pro', 'enterprise', or 'test')."""
     if api_key.startswith("mcp_free_"):
         return "free"
     if api_key.startswith("mcp_test_"):
         return "test"
+    if api_key.startswith("mcp_ent_"):
+        return "enterprise"
     return "pro"
 
 

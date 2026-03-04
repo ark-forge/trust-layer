@@ -92,8 +92,13 @@ MIN_CREDIT_PURCHASE = 1.00        # Min credit purchase off-session (= 10 proofs
 MAX_CREDIT_PURCHASE = 100.00      # Max credit purchase (= 1000 proofs)
 PRO_SETUP_MIN_AMOUNT = 10.00      # Min amount for Checkout setup (= 100 proofs)
 CREDIT_TRANSACTIONS_LOG = DATA_DIR / "credit_transactions.jsonl"
-RATE_LIMIT_PER_KEY_PER_DAY = 100
-FREE_TIER_MONTHLY_LIMIT = 100
+RATE_LIMIT_PER_KEY_PER_DAY = 500      # Safety daily cap (all plans)
+FREE_TIER_MONTHLY_LIMIT = 500         # Free: 500 proofs/month
+PRO_MONTHLY_LIMIT = 5_000             # Pro €29/month: 5 000 proofs/month
+ENTERPRISE_MONTHLY_LIMIT = 50_000     # Enterprise €149/month: 50 000 proofs/month
+# Overage rates (credits billed when monthly quota exceeded)
+PRO_OVERAGE_PRICE = 0.01              # EUR per proof over 5 000
+ENTERPRISE_OVERAGE_PRICE = 0.005      # EUR per proof over 50 000
 IDEMPOTENCY_TTL_HOURS = 24
 
 # --- Overage billing (opt-in) ---
