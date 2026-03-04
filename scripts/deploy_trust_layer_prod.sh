@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # deploy_trust_layer_prod.sh — Deploy Trust Layer to production with gates + rollback + release
 #
-# Usage: ./scripts/deploy_trust_layer_prod.sh [--minor|--major] [--force]
+# Usage: ./scripts/deploy_trust_layer_prod.sh [--minor|--major] [--force] [--skip-smoke]
 #
 # Flags:
-#   --force   Bypass CI GitHub check
-#   --minor   Bump minor version (1.0.x → 1.1.0)
-#   --major   Bump major version (1.x.x → 2.0.0)
-#   (default) Bump patch (1.0.2 → 1.0.3)
+#   --force        Bypass CI GitHub check
+#   --skip-smoke   Skip post-deploy smoke test (use for emergency hotfixes)
+#   --minor        Bump minor version (1.0.x → 1.1.0)
+#   --major        Bump major version (1.x.x → 2.0.0)
+#   (default)      Bump patch (1.0.2 → 1.0.3)
 
 set -euo pipefail
 
@@ -19,15 +20,20 @@ PROOF_SPEC_DIR="/opt/claude-ceo/workspace/proof-spec"
 AGENT_CLIENT_DIR="/opt/claude-ceo/workspace/agent-client"
 SETTINGS_ENV="/opt/claude-ceo/config/settings.env"
 LOG_FILE="/opt/claude-ceo/logs/deploy_trust_layer.log"
+OVH_HOST="ubuntu@51.91.99.178"
+OVH_REPO="/opt/claude-ceo/workspace/arkforge-trust-layer"
+SMOKE_TEST_SCRIPT="$REPO_DIR/scripts/smoke_test_prod.py"
 
 # --- Args ---
 VERSION_BUMP="patch"
 FORCE_CI=false
+SKIP_SMOKE=false
 for arg in "$@"; do
     case "$arg" in
-        --minor) VERSION_BUMP="minor" ;;
-        --major) VERSION_BUMP="major" ;;
-        --force) FORCE_CI=true ;;
+        --minor)      VERSION_BUMP="minor" ;;
+        --major)      VERSION_BUMP="major" ;;
+        --force)      FORCE_CI=true ;;
+        --skip-smoke) SKIP_SMOKE=true ;;
     esac
 done
 
@@ -86,7 +92,7 @@ if [ "$CURRENT_BRANCH" != "main" ]; then
 fi
 
 log "=== Trust Layer Deploy — $(date -u) ==="
-log "Branch: main | Version bump: $VERSION_BUMP | Force CI: $FORCE_CI"
+log "Branch: main | Version bump: $VERSION_BUMP | Force CI: $FORCE_CI | Skip smoke: $SKIP_SMOKE"
 
 # ============================================================
 # PHASE 1 — GATES LOCALES
@@ -154,11 +160,24 @@ if [ "$NEW_COMMIT" = "$PREV_COMMIT" ]; then
 fi
 log "New commit: $NEW_COMMIT"
 
-# Restart service
-log "Restarting $SERVICE..."
+# Restart local failover service
+log "Restarting local $SERVICE (failover)..."
 sudo systemctl restart "$SERVICE"
 
-# Health check (6 × 5s = 30s)
+# Deploy to OVH primary (nginx routes to OVH — must update it too)
+log "Deploying to OVH primary ($OVH_HOST)..."
+if ssh -o ConnectTimeout=10 "$OVH_HOST" \
+    "GIT_DIR=${OVH_REPO}/.git GIT_WORK_TREE=${OVH_REPO} git pull origin main 2>&1 && \
+     sudo systemctl restart arkforge-trust-layer 2>&1" >> "$LOG_FILE" 2>&1; then
+    log "OVH deploy OK"
+else
+    log "WARN: OVH deploy failed — rolling back local, aborting"
+    git checkout "$PREV_COMMIT" >> "$LOG_FILE" 2>&1
+    sudo systemctl restart "$SERVICE"
+    fail "OVH deploy FAILED — rolled back local to $PREV_COMMIT"
+fi
+
+# Health check via nginx (validates full stack: nginx → OVH primary, 6 × 5s = 30s)
 log "Health check: $HEALTH_URL (6 attempts × 5s)..."
 HEALTHY=false
 for i in $(seq 1 6); do
@@ -183,13 +202,48 @@ except Exception as ex:
 done
 
 if [ "$HEALTHY" = false ]; then
-    log "Health check FAILED — rolling back to $PREV_COMMIT"
+    log "Health check FAILED — rolling back local to $PREV_COMMIT"
     git checkout "$PREV_COMMIT" >> "$LOG_FILE" 2>&1
     sudo systemctl restart "$SERVICE"
-    fail "Deploy FAILED — rolled back to $PREV_COMMIT"
+    fail "Deploy FAILED — rolled back local to $PREV_COMMIT"
 fi
 
 log "Service healthy after deploy"
+
+# ============================================================
+# PHASE 2.5 — SMOKE TEST
+# ============================================================
+if [ "$SKIP_SMOKE" = true ]; then
+    log "--- Phase 2.5: Smoke test SKIPPED (--skip-smoke) ---"
+else
+    log "--- Phase 2.5: Smoke test ---"
+    if [ ! -f "$SMOKE_TEST_SCRIPT" ]; then
+        log "WARN: Smoke test script not found at $SMOKE_TEST_SCRIPT — skipping"
+    else
+        SMOKE_LOG="$LOG_FILE.smoke"
+        SMOKE_BASE_URL="${HEALTH_URL%/v1/health}"  # strip /v1/health → https://arkforge.fr/trust
+        if python3 "$SMOKE_TEST_SCRIPT" \
+               --base-url "$SMOKE_BASE_URL" \
+               --ovh-host "$OVH_HOST" \
+               2>&1 | tee -a "$SMOKE_LOG" | tail -6; then
+            log "Phase 2.5: Smoke test PASSED"
+            SMOKE_RESULT="PASSED"
+        else
+            SMOKE_EXIT=${PIPESTATUS[0]}
+            log "Phase 2.5: Smoke test FAILED (exit $SMOKE_EXIT)"
+            SMOKE_RESULT="FAILED"
+            # Rollback
+            log "Rolling back local to $PREV_COMMIT"
+            git checkout "$PREV_COMMIT" >> "$LOG_FILE" 2>&1
+            sudo systemctl restart "$SERVICE"
+            ssh -o ConnectTimeout=10 "$OVH_HOST" \
+                "GIT_DIR=${OVH_REPO}/.git GIT_WORK_TREE=${OVH_REPO} \
+                 git checkout $PREV_COMMIT 2>&1 && \
+                 sudo systemctl restart arkforge-trust-layer 2>&1" >> "$LOG_FILE" 2>&1 || true
+            fail "Smoke test FAILED — rolled back both servers to $PREV_COMMIT"
+        fi
+    fi
+fi
 
 # ============================================================
 # PHASE 3 — RELEASE
@@ -213,7 +267,13 @@ log "Tag $NEW_TAG pushed"
 # ============================================================
 # PHASE 4 — NOTIFICATION
 # ============================================================
-NOTIFY_MSG="Deploy $LAST_TAG → $NEW_TAG OK\n\n${CHANGELOG}"
+SMOKE_STATUS_MSG=""
+if [ "$SKIP_SMOKE" = true ]; then
+    SMOKE_STATUS_MSG=" | smoke: skipped"
+elif [ "${SMOKE_RESULT:-}" = "PASSED" ]; then
+    SMOKE_STATUS_MSG=" | smoke: ✓"
+fi
+NOTIFY_MSG="Deploy $LAST_TAG → $NEW_TAG OK${SMOKE_STATUS_MSG}\n\n${CHANGELOG}"
 telegram_notify "$NOTIFY_MSG"
 log "Telegram notification sent"
 
