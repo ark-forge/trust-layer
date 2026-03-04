@@ -128,6 +128,10 @@ REKOR_EC_KEY_PATH = Path(os.environ.get(
     "REKOR_EC_KEY_PATH",
     str(BASE_DIR / "trust_layer" / ".rekor_ec_key.pem"),
 ))
+# Set REKOR_ENABLED=false in dev/test to skip Sigstore Rekor submissions (avoids polluting the public log).
+REKOR_ENABLED = os.environ.get("REKOR_ENABLED", "true").lower() == "true"
+# Set TRUST_LAYER_ENV=development in dev/test. Exposed in /v1/health → environment field.
+TRUST_LAYER_ENV = os.environ.get("TRUST_LAYER_ENV", "production")
 
 # --- Ed25519 Signing ---
 SIGNING_KEY_PATH = Path(os.environ.get(

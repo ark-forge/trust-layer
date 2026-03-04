@@ -11,3 +11,4 @@ build/
 
 # Signing keys
 .signing_key.pem
+.rekor_ec_key.pem

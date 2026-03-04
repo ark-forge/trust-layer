@@ -944,11 +944,13 @@ async def root():
 
 @app.get("/v1/health")
 async def health():
+    from .config import TRUST_LAYER_ENV
     resp = {
         "status": "ok",
         "service": "arkforge-trust-layer",
         "version": __version__,
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "environment": TRUST_LAYER_ENV,
     }
     if _FAILOVER_MODE:
         resp["mode"] = "failover"

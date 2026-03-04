@@ -236,3 +236,15 @@ def test_verify_rekor_entry_not_found():
         result = verify_rekor_entry("nonexistent_uuid")
 
     assert result["verified"] is False
+
+
+def test_submit_to_rekor_disabled(monkeypatch):
+    """submit_to_rekor returns disabled dict when REKOR_ENABLED=False."""
+    import trust_layer.config as cfg
+    monkeypatch.setattr(cfg, "REKOR_ENABLED", False)
+    # Reload REKOR_ENABLED into rekor module
+    import trust_layer.rekor as rekor_mod
+    monkeypatch.setattr(rekor_mod, "REKOR_ENABLED", False)
+    result = submit_to_rekor("a" * 64)
+    assert result["status"] == "disabled"
+    assert result["provider"] == "sigstore-rekor"
