@@ -298,13 +298,10 @@ async def proxy_endpoint(
     if not isinstance(currency, str):
         return _error_response("invalid_request", "'currency' must be a string", 400)
 
-    # Amount is fixed for pro keys (PROOF_PRICE) and 0 for free keys
-    # The body "amount" field is ignored — kept for backward compat but not used
+    # Amount is recalculated inside execute_proxy based on plan + overage status.
+    # Pass 0.0 here — execute_proxy determines the real debit amount.
     key_info = validate_api_key(api_key)
-    if key_info and key_info.get("plan") == "free":
-        amount = 0.0
-    else:
-        amount = PROOF_PRICE
+    amount = 0.0
 
     try:
         result = await execute_proxy(

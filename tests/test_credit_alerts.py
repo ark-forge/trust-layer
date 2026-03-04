@@ -22,6 +22,13 @@ def key_info(pro_key):
     return load_api_keys()[pro_key]
 
 
+@pytest.fixture
+def real_pro_key():
+    """Real Pro key (mcp_pro_* prefix) — required for overage billing tests."""
+    return create_api_key("cus_overage_test", "ref_overage_test", "overage@test.com",
+                          test_mode=False, plan="pro")
+
+
 # --- _notify_credits_exhausted ---
 
 def test_exhausted_sends_email(pro_key, key_info):
@@ -131,37 +138,56 @@ def test_low_credits_zero_balance(pro_key, key_info):
         mock_send.assert_called_once_with("alert@test.com", pro_key, 0.0, 0)
 
 
-# --- Integration: proxy rejects and triggers exhausted email ---
+# --- Integration: proxy rejects on overage with 0 credits ---
 
 @pytest.mark.asyncio
-async def test_proxy_triggers_exhausted_email_on_402(pro_key):
-    """When balance is 0 and proxy is called, exhausted email should be sent."""
-    from trust_layer.proxy import execute_proxy, ProxyError
+async def test_proxy_triggers_exhausted_email_on_402(real_pro_key):
+    """Overage proof with 0 credits → 402 insufficient_overage_credits + rollback.
 
-    # Key has 0 credits (no add_credits called)
-    with patch("trust_layer.proxy._notify_credits_exhausted") as mock_notify, \
+    In the subscription model, Pro keys within quota use no credits.
+    Credits are only debited for overage proofs — insufficient balance raises 402.
+    """
+    from trust_layer.proxy import execute_proxy, ProxyError
+    from trust_layer.keys import update_overage_settings
+    from trust_layer.config import PRO_OVERAGE_PRICE
+
+    pro_key = real_pro_key
+    # Enable overage (0 credits — no add_credits)
+    update_overage_settings(pro_key, enabled=True, cap_eur=10.0,
+                            overage_rate=PRO_OVERAGE_PRICE)
+
+    # Simulate quota exhausted → overage path
+    with patch("trust_layer.proxy.check_rate_limit",
+               return_value=(True, 0, True, "")), \
+         patch("trust_layer.proxy.rollback_overage") as mock_rollback, \
          pytest.raises(ProxyError) as exc_info:
         await execute_proxy(
             target="https://httpbin.org/get",
             method="GET",
             payload={},
-            amount=PROOF_PRICE,
+            amount=0.0,
             currency="eur",
             api_key=pro_key,
         )
 
     assert exc_info.value.status == 402
-    mock_notify.assert_called_once()
+    assert exc_info.value.code == "insufficient_overage_credits"
+    mock_rollback.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_proxy_triggers_low_credits_after_debit(pro_key):
-    """After a debit that drops balance below threshold, low credits email should be sent."""
+async def test_proxy_triggers_low_credits_after_debit(real_pro_key):
+    """After an overage debit that drops balance below threshold, low-credits email fires."""
     from trust_layer.proxy import execute_proxy
+    from trust_layer.keys import update_overage_settings
+    from trust_layer.config import PRO_OVERAGE_PRICE
     from unittest.mock import AsyncMock, MagicMock, patch as upatch
 
-    # Fund key with exactly 2 proofs (below 10-proof threshold after debit)
-    add_credits(pro_key, round(PROOF_PRICE * 2, 2), "pi_low_test")
+    pro_key = real_pro_key
+    # Enable overage and fund below the 1.00 EUR threshold (0.20 EUR)
+    update_overage_settings(pro_key, enabled=True, cap_eur=10.0,
+                            overage_rate=PRO_OVERAGE_PRICE)
+    add_credits(pro_key, round(PROOF_PRICE * 2, 2), "pi_low_test")  # 0.20 EUR
 
     mock_resp = MagicMock()
     mock_resp.status_code = 200
@@ -174,7 +200,10 @@ async def test_proxy_triggers_low_credits_after_debit(pro_key):
     mock_client.get.return_value = mock_resp
     mock_client.post.return_value = mock_resp
 
-    with upatch("trust_layer.proxy._notify_low_credits_if_needed") as mock_notify, \
+    # Simulate quota exhausted → overage path
+    with upatch("trust_layer.proxy.check_rate_limit",
+                return_value=(True, 0, True, "")), \
+         upatch("trust_layer.proxy._notify_low_credits_if_needed") as mock_notify, \
          upatch("trust_layer.proxy.httpx.AsyncClient", return_value=mock_client), \
          upatch("trust_layer.proxy.submit_hash"), \
          upatch("trust_layer.proxy.send_proof_email"), \
@@ -185,7 +214,7 @@ async def test_proxy_triggers_low_credits_after_debit(pro_key):
             target="https://httpbin.org/get",
             method="GET",
             payload={},
-            amount=PROOF_PRICE,
+            amount=0.0,
             currency="eur",
             api_key=pro_key,
         )
