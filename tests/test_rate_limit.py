@@ -5,9 +5,11 @@ from trust_layer.rate_limit import check_rate_limit, get_usage
 
 
 def test_rate_limit_allows_within_limit():
-    allowed, remaining = check_rate_limit("mcp_test_ratelimit", limit=5)
+    allowed, remaining, is_overage, reason = check_rate_limit("mcp_test_ratelimit", limit=5)
     assert allowed is True
-    assert remaining == 4
+    assert remaining >= 0
+    assert is_overage is False
+    assert reason == ""
 
 
 def test_rate_limit_decrements():
@@ -21,12 +23,13 @@ def test_rate_limit_decrements():
 def test_rate_limit_blocks_at_limit():
     key = "mcp_test_blocked_"
     for i in range(5):
-        allowed, _ = check_rate_limit(key, limit=5)
+        allowed, _, _, _ = check_rate_limit(key, limit=5)
         assert allowed is True
 
-    allowed, remaining = check_rate_limit(key, limit=5)
+    allowed, remaining, is_overage, reason = check_rate_limit(key, limit=5)
     assert allowed is False
     assert remaining == 0
+    assert reason == "daily_cap"
 
 
 def test_get_usage_fresh_key():
@@ -45,20 +48,22 @@ def test_free_key_has_monthly_limit():
     assert usage["monthly"]["used"] == 0
 
 
-def test_pro_key_no_monthly_limit():
-    """Pro keys have no monthly limit."""
+def test_pro_key_has_monthly_limit():
+    """Pro keys now have a monthly limit (5000/month)."""
     usage = get_usage("mcp_pro_test_nolimit", limit=100)
     assert usage["plan"] == "pro"
-    assert "monthly" not in usage
+    assert "monthly" in usage
+    assert usage["monthly"]["limit"] == 5000
 
 
 def test_free_key_monthly_blocks():
     """Free tier key blocked when monthly limit reached."""
     key = "mcp_free_blocked_m"
-    with patch("trust_layer.rate_limit.FREE_TIER_MONTHLY_LIMIT", 3):
+    with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 3, "pro": 5000, "enterprise": 50000, "test": None}):
         for i in range(3):
-            allowed, _ = check_rate_limit(key, limit=100)
+            allowed, _, _, _ = check_rate_limit(key, limit=100)
             assert allowed is True
-        allowed, remaining = check_rate_limit(key, limit=100)
+        allowed, remaining, is_overage, reason = check_rate_limit(key, limit=100)
         assert allowed is False
         assert remaining == 0
+        assert reason == "monthly_quota"

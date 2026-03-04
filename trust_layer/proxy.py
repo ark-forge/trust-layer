@@ -16,6 +16,7 @@ from .config import (
     MIN_AMOUNT,
     MAX_AMOUNT,
     PROOF_PRICE,
+    OVERAGE_PRICES,
     PROXY_TIMEOUT_SECONDS,
     MAX_RESPONSE_STORE_BYTES,
     IDEMPOTENCY_DIR,
@@ -31,6 +32,7 @@ from .config import (
 from .keys import validate_api_key, _KEYS_LOCK
 from .payments.base import ChargeResult
 from .credits import debit_credits, InsufficientCredits
+from .rate_limit import rollback_overage
 from .proofs import sha256_hex, generate_proof_id, generate_proof, store_proof
 from .receipt import fetch_receipt
 from .persistence import load_json, save_json
@@ -516,20 +518,37 @@ async def execute_proxy(
     # Detect free tier
     is_free = key_info.get("plan") == "free"
 
-    if is_free:
-        amount = 0.0
-    else:
-        amount = PROOF_PRICE  # Fixed price per proof for pro/test keys
-
-    # 3. Check rate limit
-    allowed, remaining = check_rate_limit(api_key)
+    # 3. Check rate limit (must be before amount calculation: overage status affects price)
+    allowed, remaining, is_overage, block_reason = check_rate_limit(api_key)
     if not allowed:
-        raise ProxyError("rate_limited", "Daily rate limit reached", 429)
+        if block_reason == "overage_cap":
+            raise ProxyError(
+                "overage_cap_reached",
+                "Monthly overage cap reached. Increase cap or wait for next month.",
+                429,
+            )
+        elif block_reason == "monthly_quota":
+            raise ProxyError(
+                "rate_limited",
+                "Monthly quota exhausted. Enable overage at POST /v1/keys/overage to continue.",
+                429,
+            )
+        else:  # daily_cap
+            raise ProxyError("rate_limited", "Daily rate limit reached", 429)
 
     # 4. Check idempotency
     cached = _check_idempotency(idempotency_key)
     if cached is not None:
         return cached
+
+    # Determine proof price based on plan and overage status
+    if is_free:
+        amount = 0.0
+    elif is_overage:
+        plan = key_info.get("plan", "pro")
+        amount = OVERAGE_PRICES.get(plan, PROOF_PRICE)
+    else:
+        amount = PROOF_PRICE  # Fixed price per proof for pro/test keys
 
     # 5. Hash request
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -552,8 +571,16 @@ async def execute_proxy(
     else:
         # Prepaid credit deduction — atomic check+debit under per-key lock
         try:
-            debit_id, new_balance = debit_credits(api_key, PROOF_PRICE, proof_id_for_debit)
+            debit_id, new_balance = debit_credits(api_key, amount, proof_id_for_debit,
+                                                  is_overage=is_overage)
         except InsufficientCredits as e:
+            if is_overage:
+                rollback_overage(api_key)
+                raise ProxyError(
+                    "insufficient_overage_credits",
+                    f"Overage requires prepaid credits. Balance: {e.balance:.2f} EUR. Buy at /v1/credits/buy",
+                    402,
+                )
             _notify_credits_exhausted(api_key, key_info)
             raise ProxyError(
                 "insufficient_credits",
