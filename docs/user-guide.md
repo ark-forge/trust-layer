@@ -444,8 +444,11 @@ ArkForge sends automatic email notifications so your agent never stops silently:
 | Balance drops below **1.00 EUR** (~10 proofs) after a debit | "Low credits — action required" + recharge curl | 24h |
 | Call rejected due to **zero balance** (HTTP 402) | "Credits exhausted — agent stopped" + recharge curl | 24h |
 | **80% of daily/monthly quota** consumed | "Quota alert" + upgrade or recharge hint | Once per threshold |
+| First overage proof of the month (opt-in) | "Overage billing active — monthly quota exceeded" | Once per month |
+| 80% of overage monthly cap consumed (opt-in) | "Overage alert — 80% of monthly cap used" | Once per threshold |
+| Overage cap reached — requests blocked (opt-in) | "Overage cap reached — requests blocked" | Once per cap event |
 
-These emails are sent to the address used during key setup. They include a ready-to-run `curl` command to recharge immediately — no browser required.
+These emails are sent to the address used during key setup. They include a ready-to-run `curl` command to recharge or adjust settings immediately — no browser required.
 
 ---
 
@@ -489,6 +492,81 @@ curl -X POST https://arkforge.fr/trust/v1/credits/buy \
   "receipt_url": "https://pay.stripe.com/receipts/..."
 }
 ```
+
+---
+
+### Overage billing (opt-in, Pro/Enterprise)
+
+By default, requests beyond your monthly quota are rejected with HTTP 429.
+You can opt in to overage billing: proofs beyond your quota are debited from
+your prepaid credits at the per-proof overage rate, up to a monthly cap you choose.
+
+**Enable overage billing:**
+
+```bash
+curl -X POST https://arkforge.fr/trust/v1/keys/overage \
+  -H "X-Api-Key: mcp_pro_xxx..." \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true, "cap_eur": 20.00}'
+```
+
+Response:
+```json
+{
+  "overage_enabled": true,
+  "overage_cap_eur": 20.0,
+  "overage_rate_per_proof": 0.01,
+  "consent_at": "2026-03-04T15:30:00+00:00",
+  "message": "Overage billing enabled. Proofs beyond quota billed at 0.01 EUR/proof, cap 20.00 EUR/month."
+}
+```
+
+**Key parameters:**
+- `enabled`: `true` to opt in, `false` to opt out (immediate effect)
+- `cap_eur`: monthly spending cap for overages (€5–€100, default €20)
+- Overage proofs are billed from your **prepaid credits** — not a new charge
+- When the cap is reached, requests are blocked (HTTP 429) until you raise the cap or wait for the next month
+
+**Check overage status:**
+
+```bash
+curl https://arkforge.fr/trust/v1/keys/overage \
+  -H "X-Api-Key: mcp_pro_xxx..."
+```
+
+**Monitor usage with overage section:**
+
+```bash
+curl https://arkforge.fr/trust/v1/usage \
+  -H "X-Api-Key: mcp_pro_xxx..."
+```
+
+Response includes an `overage` section when enabled:
+```json
+{
+  "plan": "pro",
+  "monthly": {"used": 5120, "limit": 5000, "remaining": 0},
+  "overage": {
+    "enabled": true,
+    "cap_eur": 20.0,
+    "spent_eur": 1.20,
+    "count": 120,
+    "remaining_eur": 18.80,
+    "rate_per_proof": 0.01
+  }
+}
+```
+
+**Disable overage billing (effective immediately):**
+
+```bash
+curl -X POST https://arkforge.fr/trust/v1/keys/overage \
+  -H "X-Api-Key: mcp_pro_xxx..." \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": false, "cap_eur": 20.0}'
+```
+
+> **Consent stored for audit:** `consent_at` (UTC timestamp) and `consent_rate` (rate at time of consent) are preserved in your key metadata even after disabling overage. This provides an auditable record of your billing agreement.
 
 ---
 

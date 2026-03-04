@@ -199,8 +199,10 @@ All error responses use the format `{"error": {"code": "...", "message": "...", 
 | `invalid_amount` | 400 | Amount below minimum or above maximum |
 | `invalid_request` | 400 | Missing required field, invalid JSON, or malformed input |
 | `invalid_plan` | 403 | Operation not available on this plan (e.g. free key trying to buy credits) |
-| `rate_limited` | 429 | Daily or monthly quota exceeded |
+| `rate_limited` | 429 | Daily or monthly quota exceeded — if monthly quota, enable overage at `POST /v1/keys/overage` |
+| `overage_cap_reached` | 429 | Monthly overage cap reached — increase cap or wait for next month |
 | `insufficient_credits` | 402 | Credit balance too low — recharge at `/v1/credits/buy` |
+| `insufficient_overage_credits` | 402 | Overage billing active but credit balance is zero — recharge at `/v1/credits/buy` |
 | `already_exists` | 409 | A free API key already exists for this email |
 | `no_payment_method` | 400 | No payment method linked — use `/v1/keys/setup` first |
 | `payment_failed` | 402 | Stripe payment failed |
@@ -218,6 +220,8 @@ All error responses use the format `{"error": {"code": "...", "message": "...", 
 | `POST` | `/v1/proxy` | Proxied API call (charge + forward + proof) |
 | `POST` | `/v1/keys/setup` | Buy initial credits + save card via Stripe Checkout (min 10 EUR) |
 | `POST` | `/v1/keys/portal` | Open Stripe Billing Portal (update card, view invoices) |
+| `POST` | `/v1/keys/overage` | Enable/disable overage billing (Pro/Enterprise only) |
+| `GET` | `/v1/keys/overage` | Get current overage settings |
 | `POST` | `/v1/webhooks/stripe` | Stripe webhook receiver |
 | `GET` | `/v1/usage` | Usage stats for a key |
 | `GET` | `/v1/proof/{proof_id}` | Retrieve and verify proof (JSON or HTML — see content negotiation) |
