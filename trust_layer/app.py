@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional
@@ -11,6 +12,44 @@ import stripe
 from fastapi import FastAPI, Request, HTTPException, Header
 from fastapi.responses import JSONResponse, Response, HTMLResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+
+# Failover read-only mode — actif si FAILOVER_MODE=true dans l'env systemd
+_FAILOVER_MODE = os.environ.get("FAILOVER_MODE", "").lower() == "true"
+
+# Endpoints d'écriture bloqués en mode failover
+_FAILOVER_BLOCKED_PATHS = {
+    "/v1/proxy",
+    "/v1/keys/setup",
+    "/v1/keys/portal",
+    "/v1/keys/free-signup",
+    "/v1/credits/buy",
+    "/v1/disputes",
+}
+
+
+class FailoverReadOnlyMiddleware(BaseHTTPMiddleware):
+    """Bloque les écritures en mode failover pour éviter le split-brain."""
+    async def dispatch(self, request: Request, call_next):
+        if _FAILOVER_MODE and request.method == "POST":
+            path = request.url.path.rstrip("/")
+            if path in _FAILOVER_BLOCKED_PATHS:
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "error": {
+                            "code": "service_degraded",
+                            "message": (
+                                "Proof creation is temporarily unavailable. "
+                                "The primary server is undergoing maintenance. "
+                                "Please retry in a few minutes."
+                            ),
+                            "status": 503,
+                            "failover_mode": True,
+                        }
+                    },
+                )
+        return await call_next(request)
 
 from . import __version__
 from collections import defaultdict
@@ -184,6 +223,10 @@ app.add_middleware(
     allow_headers=["Authorization", "X-Api-Key", "X-Idempotency-Key", "X-Agent-Identity", "X-Agent-Version", "Content-Type"],
     allow_credentials=False,
 )
+
+if _FAILOVER_MODE:
+    app.add_middleware(FailoverReadOnlyMiddleware)
+    logger.warning("FAILOVER_MODE=true — service en lecture seule (POST /v1/proxy bloqué)")
 
 
 # --- Helpers ---
@@ -901,12 +944,16 @@ async def root():
 
 @app.get("/v1/health")
 async def health():
-    return {
+    resp = {
         "status": "ok",
         "service": "arkforge-trust-layer",
         "version": __version__,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+    if _FAILOVER_MODE:
+        resp["mode"] = "failover"
+        resp["write_enabled"] = False
+    return resp
 
 
 # --- GET /v1/usage ---
