@@ -101,9 +101,9 @@ while True:
 
 | Step | Who | Action |
 |------|-----|--------|
-| Initial setup | Human | Open Stripe Checkout, enter card once |
-| Recharge | Agent | `POST /v1/credits/buy` — automatic, programmatic |
-| Execute tasks | Agent | `POST /v1/proxy` — deducts 0.10 EUR per proof |
+| Initial setup | Human | Open Stripe Checkout, subscribe (Pro €39/month or Enterprise €149/month) |
+| Overage top-up | Agent | `POST /v1/credits/buy` — automatic when monthly quota exceeded |
+| Execute tasks | Agent | `POST /v1/proxy` — consumes monthly quota; overages billed per proof |
 
 ---
 
@@ -143,7 +143,7 @@ Use this if you want to prove both that a transaction took place **and** that a 
 
 ### Step 1 — Get an API key
 
-#### Option A — Free key (100 proofs/month)
+#### Option A — Free key (500 proofs/month)
 
 ```bash
 curl -X POST https://arkforge.fr/trust/v1/keys/free-signup \
@@ -156,7 +156,7 @@ curl -X POST https://arkforge.fr/trust/v1/keys/free-signup \
 {
   "api_key": "mcp_free_abc123...",
   "plan": "free",
-  "limit": "100 proofs/month"
+  "limit": "500 proofs/month"
 }
 ```
 
@@ -164,7 +164,7 @@ No credit card required.
 
 ---
 
-#### Option B — Pro/Test key (unlimited, credit-based)
+#### Option B — Pro key (€39/month, 5,000 proofs)
 
 ##### B.1 — Test mode (for development)
 
@@ -196,14 +196,14 @@ curl -X POST https://arkforge.fr/trust/v1/keys/setup \
 
 ---
 
-##### B.2 — Production mode (real usage)
+##### B.2 — Pro production (€39/month, 5,000 proofs/month)
 
 ```bash
 curl -X POST https://arkforge.fr/trust/v1/keys/setup \
   -H "Content-Type: application/json" \
   -d '{
     "email": "you@example.com",
-    "amount": 10
+    "plan": "pro"
   }'
 ```
 
@@ -211,7 +211,7 @@ curl -X POST https://arkforge.fr/trust/v1/keys/setup \
 ```json
 {
   "checkout_url": "https://checkout.stripe.com/c/pay/cs_live_...",
-  "proofs_included": 100,
+  "plan": "pro",
   "mode": "live"
 }
 ```
@@ -219,10 +219,12 @@ curl -X POST https://arkforge.fr/trust/v1/keys/setup \
 **Instructions:**
 1. Open `checkout_url` in a browser
 2. Enter your real card details
-3. Confirm → 10 EUR charged
+3. Confirm → €39/month subscription started
 4. Receive `mcp_pro_xxx...` by email
 
 **Note:** This is the **only manual step**. Everything after is automatic.
+
+**Overages:** usage beyond 5,000 proofs/month is billed at €0.01/proof via the card on file.
 
 ---
 
@@ -433,7 +435,7 @@ EXPECTED=$(jq -r '.hashes.chain' proof.json | sed 's/sha256://')
 
 ---
 
-## Credit management (Pro/Test only)
+## Quota management
 
 ### Email alerts
 
@@ -441,15 +443,15 @@ ArkForge sends automatic email notifications so your agent never stops silently:
 
 | Trigger | Email | Cooldown |
 |---------|-------|---------|
-| Balance drops below **1.00 EUR** (~10 proofs) after a debit | "Low credits — action required" + recharge curl | 24h |
-| Call rejected due to **zero balance** (HTTP 402) | "Credits exhausted — agent stopped" + recharge curl | 24h |
-| **80% of daily/monthly quota** consumed | "Quota alert" + upgrade or recharge hint | Once per threshold |
+| **80% of monthly quota** consumed | "Quota alert" + upgrade hint | Once per threshold |
+| Call rejected due to **quota exceeded** (HTTP 429, Free) | "Monthly quota exhausted" | 24h |
+| **Overage credits** drop below **1.00 EUR** (Pro/Enterprise) | "Low overage credits — action required" | 24h |
 
-These emails are sent to the address used during key setup. They include a ready-to-run `curl` command to recharge immediately — no browser required.
+These emails are sent to the address used during key setup.
 
 ---
 
-### Check balance
+### Check quota usage
 
 ```bash
 curl https://arkforge.fr/trust/v1/usage \
@@ -460,9 +462,8 @@ curl https://arkforge.fr/trust/v1/usage \
 ```json
 {
   "plan": "pro",
-  "credit_balance": 47.5,
-  "proofs_available": 475,
-  "proofs_used_today": 25
+  "monthly": { "used": 1250, "limit": 5000, "remaining": 3750 },
+  "credit_balance": 47.5
 }
 ```
 
@@ -545,20 +546,21 @@ result = agent.execute_task("https://provider.com/api", {"task": "analyze"})
 
 ## Pricing
 
-| Plan | Cost | Limit | Key prefix |
-|------|------|-------|------------|
-| **Free** | Free | 100 proofs/month | `mcp_free_*` |
-| **Test** | 0.10 EUR/proof (Stripe test) | Unlimited | `mcp_test_*` |
-| **Pro** | 0.10 EUR/proof (Stripe live) | Unlimited | `mcp_pro_*` |
+| Plan | Cost | Monthly quota | Key prefix |
+|------|------|---------------|------------|
+| **Free** | Free | 500 proofs/month | `mcp_free_*` |
+| **Pro** | €39/month (+ €0.01/proof overage) | 5,000 proofs/month | `mcp_pro_*` |
+| **Enterprise** | €149/month (+ €0.005/proof overage) | 50,000 proofs/month | `mcp_ent_*` |
+| **Test** | 0.10 EUR/proof (Stripe test mode) | — | `mcp_test_*` |
 
-Mode B can use a **Free key** — certification only, payment is external, no credit deduction.
+Mode B can use a **Free key** — certification only, payment is external, no monthly quota consumed.
 
 ---
 
 ## Integration checklist
 
 ### Step 1 — Key
-- [ ] Free (100/month) or Pro (unlimited)?
+- [ ] Free (500/month), Pro (€39/month, 5,000), or Enterprise (€149/month, 50,000)?
 - [ ] Test mode (development) or production?
 - [ ] Email received with `mcp_xxx...`?
 
@@ -578,9 +580,8 @@ Mode B can use a **Free key** — certification only, payment is external, no cr
 - [ ] Public verification works?
 
 ### Step 5 — Production
-- [ ] Swap Test key for Pro
-- [ ] Set up auto-recharge for autonomous agents
-- [ ] Monitor credit balance
+- [ ] Swap Test key for Pro or Enterprise
+- [ ] Monitor monthly quota (`GET /v1/usage`)
 - [ ] Store proof IDs
 
 ---
@@ -594,4 +595,4 @@ Mode B can use a **Free key** — certification only, payment is external, no cr
 
 ---
 
-*Last updated: 2026-03-03*
+*Last updated: 2026-03-04*

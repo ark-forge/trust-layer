@@ -63,16 +63,16 @@ Or open it in a browser — each proof has a public HTML verification page.
 ## Features
 
 - **Execution certification** — every API call through ArkForge produces a cryptographic proof of what was sent, received, paid, and when. Immutable after creation.
-- **Prepaid credits** — buy credits via Stripe Checkout, deducted per proof (0.10 EUR/proof)
+- **Subscription plans** — Free (500/month), Pro (€39/month, 5,000 proofs), Enterprise (€149/month, 50,000 proofs); overages billed per proof
 - **Proofs** — SHA-256 hash chain per call, publicly verifiable, anchored via RFC 3161 Timestamp Authority
 - **Ed25519 signature** — every proof is signed by ArkForge's Ed25519 key, proving origin. Public key served at `GET /v1/pubkey`
 - **Sigstore Rekor** — chain hash registered in the Linux Foundation's append-only public transparency log, verifiable by anyone at [search.sigstore.dev](https://search.sigstore.dev)
 - **External receipt verification** — attach a Stripe receipt URL to any proxy call; ArkForge fetches, hashes, and parses it independently (see below)
-- **API keys** — `mcp_free_*` / `mcp_pro_*` / `mcp_test_*` prefixes auto-select plan and Stripe mode
-- **Free tier** — 100 proofs/month, no credit card required
+- **API keys** — `mcp_free_*` / `mcp_pro_*` / `mcp_ent_*` / `mcp_test_*` prefixes auto-select plan and Stripe mode
+- **Free tier** — 500 proofs/month, no credit card required
 - **Agent identity** — optional `X-Agent-Identity` / `X-Agent-Version` headers, mismatch detection across calls
 - **Triptyque de la Preuve** — 3-level watermarking on every transaction (see below)
-- **Rate limiting** — daily cap (all keys) + monthly cap (free keys)
+- **Rate limiting** — monthly quota per plan (Free 500, Pro 5 000, Enterprise 50 000) + safety daily cap
 - **Email** — welcome + proof receipts via SMTP
 - **Proof Specification** — open spec with test vectors for independent verification ([ark-forge/proof-spec](https://github.com/ark-forge/proof-spec))
 

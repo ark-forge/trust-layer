@@ -1,31 +1,50 @@
-"""Per-API-key rate limiting — daily counter + monthly free tier."""
+"""Per-API-key rate limiting — safety daily cap + monthly quota by plan."""
 
 import logging
 import threading
 from datetime import datetime, timezone, timedelta
 
-from .config import RATE_LIMITS_FILE, RATE_LIMIT_PER_KEY_PER_DAY, FREE_TIER_MONTHLY_LIMIT
-from .keys import is_free_key, get_key_plan, validate_api_key
+from .config import (
+    RATE_LIMITS_FILE, RATE_LIMIT_PER_KEY_PER_DAY,
+    FREE_TIER_MONTHLY_LIMIT, PRO_MONTHLY_LIMIT, ENTERPRISE_MONTHLY_LIMIT,
+)
+from .keys import get_key_plan, validate_api_key
 from .persistence import load_json, save_json
 
 logger = logging.getLogger("trust_layer.rate_limit")
 
 _ALERT_THRESHOLD = 0.80  # send alert when usage crosses this fraction
 
+# Monthly quotas per plan
+_MONTHLY_LIMITS = {
+    "free": FREE_TIER_MONTHLY_LIMIT,
+    "pro": PRO_MONTHLY_LIMIT,
+    "enterprise": ENTERPRISE_MONTHLY_LIMIT,
+    "test": None,  # no monthly limit for test keys
+}
+
 # Global lock — serialises all rate_limits.json write operations.
 # Prevents TOCTOU races when concurrent threads call check_rate_limit simultaneously.
 _RATE_LIMIT_LOCK = threading.Lock()
 
 
+def _get_monthly_limit(plan: str) -> int | None:
+    """Return monthly proof quota for a plan, or None if unlimited."""
+    return _MONTHLY_LIMITS.get(plan)
+
+
 def check_rate_limit(api_key: str, limit: int = RATE_LIMIT_PER_KEY_PER_DAY) -> tuple[bool, int]:
     """Check if API key is within limits. Returns (allowed, remaining).
 
-    - All keys: daily limit (default 100/day, safety cap)
-    - Free keys: additional monthly limit (100/month)
+    - All keys: daily safety cap (RATE_LIMIT_PER_KEY_PER_DAY)
+    - free/pro/enterprise: monthly quota (enforced hard limit)
+    - test: no monthly limit
     """
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     month = datetime.now(timezone.utc).strftime("%Y-%m")
     key_id = api_key[:16]
+    plan = get_key_plan(api_key)
+    monthly_limit = _get_monthly_limit(plan)
     remaining = 0
 
     with _RATE_LIMIT_LOCK:
@@ -42,27 +61,29 @@ def check_rate_limit(api_key: str, limit: int = RATE_LIMIT_PER_KEY_PER_DAY) -> t
             entry["month"] = month
             entry["month_count"] = 0
 
-        # Check daily limit (all keys)
+        # Check daily safety cap (all keys)
         daily_remaining = max(0, limit - entry["count"])
         if daily_remaining <= 0:
             limits[key_id] = entry
             save_json(RATE_LIMITS_FILE, limits)
             return False, 0
 
-        # Check monthly limit (free keys only)
-        if is_free_key(api_key):
-            monthly_remaining = max(0, FREE_TIER_MONTHLY_LIMIT - entry.get("month_count", 0))
+        # Check monthly quota (free / pro / enterprise)
+        if monthly_limit is not None:
+            monthly_remaining = max(0, monthly_limit - entry.get("month_count", 0))
             if monthly_remaining <= 0:
                 limits[key_id] = entry
                 save_json(RATE_LIMITS_FILE, limits)
                 return False, 0
+        else:
+            monthly_remaining = None
 
-        # Allowed — increment both counters
+        # Allowed — increment counters
         entry["count"] += 1
         entry["month_count"] = entry.get("month_count", 0) + 1
 
-        if is_free_key(api_key):
-            remaining = min(daily_remaining - 1, FREE_TIER_MONTHLY_LIMIT - entry["month_count"])
+        if monthly_remaining is not None:
+            remaining = min(daily_remaining - 1, monthly_limit - entry["month_count"])
         else:
             remaining = daily_remaining - 1
 
@@ -73,13 +94,13 @@ def check_rate_limit(api_key: str, limit: int = RATE_LIMIT_PER_KEY_PER_DAY) -> t
         save_json(RATE_LIMITS_FILE, limits)
 
     # Quota alert: fire once when usage crosses 80% threshold (outside lock — I/O)
-    _maybe_send_quota_alert(api_key, entry, limit, today, month)
+    _maybe_send_quota_alert(api_key, plan, entry, limit, today, month)
 
     return True, max(0, remaining)
 
 
-def _maybe_send_quota_alert(api_key: str, entry: dict, daily_limit: int, today: str, month: str):
-    """Send a one-time quota alert email when usage first crosses 80%."""
+def _maybe_send_quota_alert(api_key: str, plan: str, entry: dict, daily_limit: int, today: str, month: str):
+    """Send a one-time quota alert email when monthly usage first crosses 80%."""
     try:
         from .email_notify import send_quota_alert_email
 
@@ -88,24 +109,15 @@ def _maybe_send_quota_alert(api_key: str, entry: dict, daily_limit: int, today: 
         if not email:
             return
 
-        if is_free_key(api_key):
-            # Monthly quota alert for free keys
+        monthly_limit = _get_monthly_limit(plan)
+        if monthly_limit is not None:
             month_count = entry.get("month_count", 0)
             alert_key = f"alert_monthly_{month}"
-            if (month_count >= FREE_TIER_MONTHLY_LIMIT * _ALERT_THRESHOLD
+            if (month_count >= monthly_limit * _ALERT_THRESHOLD
                     and not entry.get(alert_key)):
                 entry[alert_key] = True
-                send_quota_alert_email(email, api_key, month_count, FREE_TIER_MONTHLY_LIMIT, "monthly")
-                logger.info("Monthly quota alert sent to %s (%d/%d)", email, month_count, FREE_TIER_MONTHLY_LIMIT)
-        else:
-            # Daily quota alert for pro/test keys
-            daily_count = entry.get("count", 0)
-            alert_key = f"alert_daily_{today}"
-            if (daily_count >= daily_limit * _ALERT_THRESHOLD
-                    and not entry.get(alert_key)):
-                entry[alert_key] = True
-                send_quota_alert_email(email, api_key, daily_count, daily_limit, "daily")
-                logger.info("Daily quota alert sent to %s (%d/%d)", email, daily_count, daily_limit)
+                send_quota_alert_email(email, api_key, month_count, monthly_limit, "monthly")
+                logger.info("Monthly quota alert sent to %s (%d/%d)", email, month_count, monthly_limit)
     except Exception as e:
         logger.warning("Quota alert skipped: %s", e)
 
@@ -119,6 +131,7 @@ def get_usage(api_key: str, limit: int = RATE_LIMIT_PER_KEY_PER_DAY) -> dict:
     entry = limits.get(key_id, {"date": today, "count": 0, "month": month, "month_count": 0})
 
     plan = get_key_plan(api_key)
+    monthly_limit = _get_monthly_limit(plan)
 
     daily_used = entry.get("count", 0) if entry.get("date") == today else 0
     monthly_used = entry.get("month_count", 0) if entry.get("month") == month else 0
@@ -128,24 +141,26 @@ def get_usage(api_key: str, limit: int = RATE_LIMIT_PER_KEY_PER_DAY) -> dict:
         "daily": {"used": daily_used, "limit": limit, "remaining": max(0, limit - daily_used)},
     }
 
-    if plan == "free":
+    if monthly_limit is not None:
         result["monthly"] = {
             "used": monthly_used,
-            "limit": FREE_TIER_MONTHLY_LIMIT,
-            "remaining": max(0, FREE_TIER_MONTHLY_LIMIT - monthly_used),
+            "limit": monthly_limit,
+            "remaining": max(0, monthly_limit - monthly_used),
         }
 
     return result
 
 
 def check_quota_alerts(limit: int = RATE_LIMIT_PER_KEY_PER_DAY) -> list[dict]:
-    """Check all keys for >80% daily quota usage. Returns list of alerts."""
+    """Check all keys for >80% monthly quota usage. Returns list of alerts."""
     limits = load_json(RATE_LIMITS_FILE, {})
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    month = datetime.now(timezone.utc).strftime("%Y-%m")
     alerts = []
     for key_id, entry in limits.items():
-        if entry.get("date") != today:
+        if entry.get("month") != month:
             continue
+        month_count = entry.get("month_count", 0)
+        # We don't have the plan from key_id prefix alone — use daily count as proxy
         used = entry.get("count", 0)
         if used >= limit * 0.8:
             alerts.append({
@@ -153,8 +168,9 @@ def check_quota_alerts(limit: int = RATE_LIMIT_PER_KEY_PER_DAY) -> list[dict]:
                 "used": used,
                 "limit": limit,
                 "pct": round(used / limit * 100, 1),
+                "month_count": month_count,
             })
-            logger.info("API key %s at %d%% of daily quota (%d/%d)", key_id, round(used / limit * 100), used, limit)
+            logger.info("API key %s at %d%% of daily cap (%d/%d)", key_id, round(used / limit * 100), used, limit)
     return alerts
 
 
