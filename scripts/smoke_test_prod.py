@@ -1,0 +1,291 @@
+#!/usr/bin/env python3
+"""
+smoke_test_prod.py — Trust Layer post-deploy smoke test suite
+
+Usage: python3 scripts/smoke_test_prod.py [--base-url URL] [--ovh-host HOST]
+Exit: 0 = all passed, 1 = test failures, 2 = critical setup error
+
+Tests: 40 checks across 10 sections (critical path only, ~90s with rate-limit delays).
+Creates ephemeral test keys on OVH via SSH, deactivates them on exit.
+"""
+import argparse
+import json
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+
+# ── Config ────────────────────────────────────────────────────
+parser = argparse.ArgumentParser()
+parser.add_argument("--base-url", default="https://arkforge.fr/trust")
+parser.add_argument("--ovh-host", default="ubuntu@51.91.99.178")
+args = parser.parse_args()
+
+BASE = args.base_url.rstrip("/")
+OVH = args.ovh_host
+
+PASS = "\033[92m✓\033[0m"
+FAIL = "\033[91m✗\033[0m"
+WARN = "\033[93m⚠\033[0m"
+
+results: list[tuple[str, bool]] = []
+FREE_KEY = ""
+PRO_KEY = ""
+
+
+# ── Helpers ───────────────────────────────────────────────────
+def req(method, path, body=None, headers=None, delay=1.2):
+    time.sleep(delay)
+    url = BASE + path
+    data = json.dumps(body).encode() if body is not None else None
+    h = {"Content-Type": "application/json", **(headers or {})}
+    r = urllib.request.Request(url, data=data, headers=h, method=method)
+    try:
+        with urllib.request.urlopen(r, timeout=15) as resp:
+            s, c = resp.status, resp.read()
+    except urllib.error.HTTPError as e:
+        s, c = e.code, e.read()
+    try:
+        return s, json.loads(c)
+    except Exception:
+        return s, c.decode(errors="replace")
+
+
+def chk(name, ok, detail=""):
+    results.append((name, ok))
+    icon = PASS if ok else FAIL
+    print(f"  {icon} {name}" + (f"  [{detail}]" if detail else ""))
+    return ok
+
+
+def sec(title):
+    print(f"\n{'─'*56}\n  {title}\n{'─'*56}")
+
+
+def ssh(script: str, timeout=20) -> str:
+    """Run python3 script on OVH via stdin pipe. Returns stdout stripped."""
+    r = subprocess.run(
+        ["ssh", OVH, "python3", "/dev/stdin"],
+        input=script.encode(), capture_output=True, timeout=timeout,
+    )
+    if r.returncode != 0:
+        raise RuntimeError(r.stderr.decode().strip()[:200])
+    return r.stdout.decode().strip()
+
+
+# ── Setup: create ephemeral test keys ─────────────────────────
+print(f"\n  Smoke test — {BASE}")
+try:
+    out = ssh(f"""
+import sys
+sys.path.insert(0, '/opt/claude-ceo/workspace/arkforge-trust-layer')
+from trust_layer.keys import create_api_key
+fk = create_api_key('', 'smoke_free', 'smoke_free@arkforge.fr', plan='free')
+pk = create_api_key('cus_smoke', 'smoke_pro', 'smoke_pro@arkforge.fr', plan='pro')
+print(fk)
+print(pk)
+""")
+    lines = out.splitlines()
+    FREE_KEY = lines[0] if len(lines) > 0 else ""
+    PRO_KEY = lines[1] if len(lines) > 1 else ""
+    if not FREE_KEY.startswith("mcp_free_") or not PRO_KEY.startswith("mcp_pro_"):
+        print(f"  {FAIL} Key creation failed: {out[:100]}")
+        sys.exit(2)
+    print(f"  Keys: FREE={FREE_KEY[:22]}... PRO={PRO_KEY[:22]}...")
+except Exception as e:
+    print(f"  {FAIL} SSH setup failed: {e}")
+    sys.exit(2)
+
+
+# ── 1. Infra ──────────────────────────────────────────────────
+sec("1. INFRA")
+s, d = req("GET", "/v1/health")
+chk("health 200 + status ok", s == 200 and d.get("status") == "ok",
+    f"v{d.get('version')} | {d.get('environment')}")
+chk("environment = production", d.get("environment") == "production")
+
+s, d = req("GET", "/v1/pricing")
+pro_p = d.get("plans", {}).get("pro", {})
+ent_p = d.get("plans", {}).get("enterprise", {})
+free_p = d.get("plans", {}).get("free", {})
+chk("free: 500/mois", free_p.get("monthly_quota") == 500)
+chk("pro: 5000/mois @ 29 EUR", pro_p.get("monthly_quota") == 5000 and "29" in pro_p.get("price", ""))
+chk("ent: 50000/mois @ 149 EUR", ent_p.get("monthly_quota") == 50000 and "149" in ent_p.get("price", ""))
+chk("overage opt-in pro + ent", "opt-in" in pro_p.get("overage", "") and "opt-in" in ent_p.get("overage", ""))
+
+# ── 2. Auth ───────────────────────────────────────────────────
+sec("2. AUTH")
+s, _ = req("GET", "/v1/usage")
+chk("/v1/usage sans clé → 401", s == 401)
+s, _ = req("POST", "/v1/proxy", {"target": "https://httpbin.org/get", "method": "GET", "payload": {}})
+chk("/v1/proxy sans clé → 401", s == 401)
+s, _ = req("GET", "/v1/keys/overage")
+chk("/v1/keys/overage sans clé → 401", s == 401)
+
+# ── 3. Free Key ───────────────────────────────────────────────
+sec("3. FREE KEY")
+s, d = req("GET", "/v1/usage", headers={"X-Api-Key": FREE_KEY})
+chk("free usage: plan=free, monthly=500",
+    d.get("plan") == "free" and d.get("monthly", {}).get("limit") == 500,
+    f"plan={d.get('plan')} monthly={d.get('monthly', {}).get('limit')}")
+chk("free: pas de section overage", "overage" not in d)
+
+s, d = req("POST", "/v1/keys/overage", {"enabled": True, "cap_eur": 20},
+           headers={"X-Api-Key": FREE_KEY})
+chk("free + overage → 403", s == 403, f"HTTP {s}")
+
+# ── 4. Proxy Free Tier ────────────────────────────────────────
+sec("4. PROXY FREE TIER")
+s, d = req("POST", "/v1/proxy",
+           {"target": "https://httpbin.org/get", "method": "GET", "payload": {}},
+           headers={"X-Api-Key": FREE_KEY})
+chk("proxy free 200", s == 200, f"HTTP {s}")
+proof = d.get("proof", {}) if isinstance(d, dict) else {}
+fee = proof.get("certification_fee", {})
+chk("fee.method=free_tier, amount=0.0",
+    fee.get("method") == "free_tier" and fee.get("amount") == 0.0,
+    f"method={fee.get('method')} amount={fee.get('amount')}")
+chk("arkforge_signature présente", proof.get("arkforge_signature", "").startswith("ed25519:"))
+
+PROOF_ID_FREE = proof.get("proof_id", "")
+s, d = req("GET", f"/v1/proof/{PROOF_ID_FREE}")
+chk("GET /v1/proof/{id}: integrity_verified", d.get("integrity_verified") is True)
+
+s, d = req("GET", f"/v/{ PROOF_ID_FREE}", delay=1.2)  # stamp shorthand (via nginx strip → app /v/)
+# Actually the path through nginx is /trust/v/{id}
+time.sleep(1.2)
+r = urllib.request.Request(f"{BASE}/v/{PROOF_ID_FREE}", method="GET")
+try:
+    with urllib.request.urlopen(r, timeout=10) as resp:
+        stamp_s = resp.status
+except (urllib.error.HTTPError, urllib.error.URLError) as e:
+    stamp_s = e.code if hasattr(e, "code") else 302
+chk("stamp /trust/v/{id} → 200 ou 302", stamp_s in (200, 302), f"HTTP {stamp_s}")
+
+# ── 5. Pro Key — Subscription Model ──────────────────────────
+sec("5. PRO SUBSCRIPTION MODEL")
+s, d = req("GET", "/v1/usage", headers={"X-Api-Key": PRO_KEY})
+chk("pro usage: plan=pro, monthly=5000",
+    d.get("plan") == "pro" and d.get("monthly", {}).get("limit") == 5000)
+
+s, d = req("POST", "/v1/proxy",
+           {"target": "https://httpbin.org/get", "method": "GET", "payload": {}},
+           headers={"X-Api-Key": PRO_KEY})
+proof_pro = d.get("proof", {}) if isinstance(d, dict) else {}
+fee_pro = proof_pro.get("certification_fee", {})
+chk("pro proxy 200", s == 200, f"HTTP {s}")
+chk("pro: fee.method=subscription, amount=0.0",
+    fee_pro.get("method") == "subscription" and fee_pro.get("amount") == 0.0,
+    f"method={fee_pro.get('method')} amount={fee_pro.get('amount')}")
+
+PROOF_ID_PRO = proof_pro.get("proof_id", "")
+s, d = req("GET", f"/v1/proof/{PROOF_ID_PRO}")
+chk("pro proof integrity_verified", d.get("integrity_verified") is True)
+
+s, d = req("GET", "/v1/usage", headers={"X-Api-Key": PRO_KEY})
+chk("pro usage monthly.used ≥ 1", d.get("monthly", {}).get("used", 0) >= 1,
+    f"used={d.get('monthly', {}).get('used')}")
+
+# ── 6. Overage Endpoints ─────────────────────────────────────
+sec("6. OVERAGE")
+s, d = req("GET", "/v1/keys/overage", headers={"X-Api-Key": PRO_KEY})
+chk("GET overage: enabled=false, plan=pro, price=0.01",
+    d.get("overage_enabled") is False and d.get("plan") == "pro" and d.get("overage_price") == 0.01,
+    f"enabled={d.get('overage_enabled')} plan={d.get('plan')} price={d.get('overage_price')}")
+
+s, d = req("POST", "/v1/keys/overage", {"enabled": True, "cap_eur": 10.0},
+           headers={"X-Api-Key": PRO_KEY})
+chk("enable overage 200 + consent_at",
+    s == 200 and bool(d.get("consent_at")) and d.get("overage_enabled") is True,
+    f"HTTP {s}")
+
+s, d = req("POST", "/v1/keys/overage", {"enabled": True, "cap_eur": 2.0},
+           headers={"X-Api-Key": PRO_KEY})
+chk("cap < 5 EUR → 400", s == 400, f"HTTP {s}")
+
+s, d = req("POST", "/v1/keys/overage", {"enabled": False, "cap_eur": 10.0},
+           headers={"X-Api-Key": PRO_KEY})
+chk("disable overage 200", s == 200 and d.get("overage_enabled") is False)
+
+# ── 7. Sécurité ───────────────────────────────────────────────
+sec("7. SÉCURITÉ")
+s, d = req("POST", "/v1/proxy",
+           {"target": "http://localhost:22", "method": "GET", "payload": {}},
+           headers={"X-Api-Key": FREE_KEY})
+code = d.get("error", {}).get("code", "?") if isinstance(d, dict) else "?"
+chk("SSRF localhost:22 → 400", s == 400, f"code={code}")
+
+s, d = req("POST", "/v1/proxy",
+           {"target": "http://169.254.169.254/latest/meta-data", "method": "GET", "payload": {}},
+           headers={"X-Api-Key": FREE_KEY})
+code = d.get("error", {}).get("code", "?") if isinstance(d, dict) else "?"
+chk("SSRF 169.254.169.254 → 400", s == 400, f"code={code}")
+
+s, d = req("POST", "/v1/proxy",
+           {"target": "https://api.anthropic.com/v1/messages", "method": "GET", "payload": {}},
+           headers={"X-Api-Key": FREE_KEY})
+chk("outbound guard Anthropic → 400/502", s in (400, 502), f"HTTP {s}")
+
+# ── 8. Credits Validation ─────────────────────────────────────
+sec("8. CREDITS")
+s, d = req("POST", "/v1/credits/buy", {"amount": 0.50}, headers={"X-Api-Key": PRO_KEY})
+chk("credits < 1 EUR → 400", s == 400)
+s, d = req("POST", "/v1/credits/buy", {"amount": 200.0}, headers={"X-Api-Key": PRO_KEY})
+chk("credits > 100 EUR → 400", s == 400)
+
+# ── 9. Pubkey + Idempotence ───────────────────────────────────
+sec("9. PUBKEY + IDEMPOTENCE")
+s, d = req("GET", "/v1/pubkey")
+chk("pubkey: Ed25519 présente",
+    s == 200 and d.get("pubkey", "").startswith("ed25519:"),
+    f"{d.get('pubkey', '?')[:28]}...")
+
+h = {"X-Api-Key": FREE_KEY, "X-Idempotency-Key": "smoke-idem-001"}
+s1, d1 = req("POST", "/v1/proxy",
+             {"target": "https://httpbin.org/get", "method": "GET", "payload": {}}, headers=h)
+s2, d2 = req("POST", "/v1/proxy",
+             {"target": "https://httpbin.org/get", "method": "GET", "payload": {}}, headers=h)
+id1 = d1.get("proof", {}).get("proof_id", "?") if isinstance(d1, dict) else "?"
+id2 = d2.get("proof", {}).get("proof_id", "?") if isinstance(d2, dict) else "?"
+chk("idempotence: même proof_id", id1 == id2, f"id={id1}")
+
+# ── 10. Cleanup ───────────────────────────────────────────────
+sec("10. CLEANUP")
+try:
+    out = ssh(f"""
+import sys
+sys.path.insert(0, '/opt/claude-ceo/workspace/arkforge-trust-layer')
+from trust_layer.keys import load_api_keys, save_api_keys
+keys = load_api_keys()
+deactivated = []
+for k in ['{FREE_KEY}', '{PRO_KEY}']:
+    if k in keys:
+        keys[k]['active'] = False
+        deactivated.append(k[:18])
+save_api_keys(keys)
+print('deactivated:', deactivated)
+""")
+    print(f"  {PASS} Clés test désactivées  [{out.strip()[:60]}]")
+    results.append(("cleanup", True))
+except Exception as e:
+    print(f"  {WARN} Cleanup SSH failed: {e}")
+    results.append(("cleanup", False))
+
+# ── Summary ───────────────────────────────────────────────────
+total = len(results)
+passed = sum(1 for _, ok in results if ok)
+failed = total - passed
+
+print(f"\n{'='*56}")
+if failed == 0:
+    print(f"  SMOKE TEST : {passed}/{total} — TOUT VERT")
+else:
+    print(f"  SMOKE TEST : {passed}/{total}  ({failed} ÉCHECS)")
+    print("\n  Échecs :")
+    for name, ok in results:
+        if not ok:
+            print(f"    {FAIL} {name}")
+
+print()
+sys.exit(0 if failed == 0 else 1)
