@@ -524,7 +524,7 @@ async def execute_proxy(
     # 3. Check rate limit
     allowed, remaining = check_rate_limit(api_key)
     if not allowed:
-        raise ProxyError("rate_limited", "Daily rate limit reached", 429)
+        raise ProxyError("rate_limited", "Rate limit reached (monthly quota or daily cap)", 429)
 
     # 4. Check idempotency
     cached = _check_idempotency(idempotency_key)
