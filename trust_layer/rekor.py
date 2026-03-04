@@ -18,7 +18,7 @@ import httpx
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
-from .config import REKOR_EC_KEY_PATH, REKOR_URL
+from .config import REKOR_EC_KEY_PATH, REKOR_URL, REKOR_ENABLED
 
 logger = logging.getLogger("trust_layer.rekor")
 
@@ -163,6 +163,9 @@ def submit_to_rekor(chain_hash_hex: str) -> dict:
     Returns a dict with Rekor metadata on success, or {provider, status:'failed', error} on failure.
     The proof remains valid even if Rekor is unavailable.
     """
+    if not REKOR_ENABLED:
+        logger.info("Rekor disabled (REKOR_ENABLED=false), skipping %s...", chain_hash_hex[:16])
+        return {"provider": "sigstore-rekor", "status": "disabled", "reason": "non-production environment"}
     last_error = "unknown"
     for attempt in range(_MAX_RETRIES):
         result = _submit_once(chain_hash_hex)

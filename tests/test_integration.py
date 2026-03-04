@@ -49,6 +49,13 @@ def test_health(client):
     assert data["service"] == "arkforge-trust-layer"
 
 
+def test_health_shows_environment(client, monkeypatch):
+    import trust_layer.config as cfg
+    monkeypatch.setattr(cfg, "TRUST_LAYER_ENV", "test")
+    r = client.get("/v1/health")
+    assert r.json()["environment"] == "test"
+
+
 # --- Pricing ---
 
 def test_pricing(client):

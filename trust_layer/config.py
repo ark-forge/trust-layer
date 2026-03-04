@@ -128,6 +128,8 @@ REKOR_EC_KEY_PATH = Path(os.environ.get(
     "REKOR_EC_KEY_PATH",
     str(BASE_DIR / "trust_layer" / ".rekor_ec_key.pem"),
 ))
+REKOR_ENABLED = os.environ.get("REKOR_ENABLED", "true").lower() == "true"
+TRUST_LAYER_ENV = os.environ.get("TRUST_LAYER_ENV", "production")
 
 # --- Ed25519 Signing ---
 SIGNING_KEY_PATH = Path(os.environ.get(
