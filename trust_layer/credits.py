@@ -47,13 +47,15 @@ def get_balance(api_key: str) -> float:
     return float(info.get("credit_balance", 0.0))
 
 
-def debit_credits(api_key: str, amount: float, proof_id: str) -> tuple[str, float]:
+def debit_credits(api_key: str, amount: float, proof_id: str,
+                  is_overage: bool = False) -> tuple[str, float]:
     """Atomically check balance and debit credits. Returns (transaction_id, new_balance).
 
     The check-and-debit is performed under a per-API-key lock, preventing
     concurrent requests from overdrawing the balance.
 
     Raises InsufficientCredits if balance < amount.
+    is_overage: marks the transaction as overage in the log (subtype='overage').
     """
     with _key_lock(api_key):
         keys = load_api_keys()
@@ -73,6 +75,7 @@ def debit_credits(api_key: str, amount: float, proof_id: str) -> tuple[str, floa
     log_transaction({
         "id": txn_id,
         "type": "debit",
+        "subtype": "overage" if is_overage else "standard",
         "api_key_prefix": api_key[:8],
         "amount": amount,
         "proof_id": proof_id,

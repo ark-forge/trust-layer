@@ -101,6 +101,23 @@ PRO_OVERAGE_PRICE = 0.01              # EUR per proof over 5 000
 ENTERPRISE_OVERAGE_PRICE = 0.005      # EUR per proof over 50 000
 IDEMPOTENCY_TTL_HOURS = 24
 
+# --- Overage billing (opt-in) ---
+PRO_OVERAGE_PRICE = 0.01          # EUR per proof beyond monthly quota (Pro)
+ENTERPRISE_OVERAGE_PRICE = 0.005  # EUR per proof beyond monthly quota (Enterprise)
+OVERAGE_CAP_MIN = 5.00            # EUR minimum monthly cap
+OVERAGE_CAP_MAX = 100.00          # EUR maximum monthly cap
+OVERAGE_CAP_DEFAULT = 20.00       # EUR default suggested cap
+
+# Plan → overage price mapping
+OVERAGE_PRICES = {
+    "pro": PRO_OVERAGE_PRICE,
+    "enterprise": ENTERPRISE_OVERAGE_PRICE,
+}
+
+# Monthly quotas per plan (None = unlimited daily cap only)
+_PRO_MONTHLY_LIMIT = 5000
+_ENTERPRISE_MONTHLY_LIMIT = 50000
+
 # --- Internal Secret (forwarded to upstream services for service-to-service auth) ---
 INTERNAL_SECRET = os.environ.get("TRUST_LAYER_INTERNAL_SECRET", "")
 

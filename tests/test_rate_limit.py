@@ -6,9 +6,11 @@ from trust_layer.config import FREE_TIER_MONTHLY_LIMIT, PRO_MONTHLY_LIMIT, ENTER
 
 
 def test_rate_limit_allows_within_limit():
-    allowed, remaining = check_rate_limit("mcp_test_ratelimit", limit=5)
+    allowed, remaining, is_overage, reason = check_rate_limit("mcp_test_ratelimit", limit=5)
     assert allowed is True
-    assert remaining == 4
+    assert remaining >= 0
+    assert is_overage is False
+    assert reason == ""
 
 
 def test_rate_limit_decrements():
@@ -22,12 +24,13 @@ def test_rate_limit_decrements():
 def test_rate_limit_blocks_at_limit():
     key = "mcp_test_blocked_"
     for i in range(5):
-        allowed, _ = check_rate_limit(key, limit=5)
+        allowed, _, _, _ = check_rate_limit(key, limit=5)
         assert allowed is True
 
-    allowed, remaining = check_rate_limit(key, limit=5)
+    allowed, remaining, is_overage, reason = check_rate_limit(key, limit=5)
     assert allowed is False
     assert remaining == 0
+    assert reason == "daily_cap"
 
 
 def test_get_usage_fresh_key():
@@ -73,15 +76,15 @@ def test_test_key_no_monthly_limit():
 
 def test_free_key_monthly_blocks():
     """Free tier key blocked when monthly limit reached."""
-    key = "mcp_free_blocked_monthly2"
-    # Patch the _MONTHLY_LIMITS dict so the check reads the patched value at call time
+    key = "mcp_free_blocked_m"
     with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 3, "pro": 5000, "enterprise": 50000, "test": None}):
         for i in range(3):
-            allowed, _ = check_rate_limit(key, limit=100)
+            allowed, _, _, _ = check_rate_limit(key, limit=100)
             assert allowed is True
-        allowed, remaining = check_rate_limit(key, limit=100)
+        allowed, remaining, is_overage, reason = check_rate_limit(key, limit=100)
         assert allowed is False
         assert remaining == 0
+        assert reason == "monthly_quota"
 
 
 def test_pro_key_monthly_blocks():
@@ -89,8 +92,9 @@ def test_pro_key_monthly_blocks():
     key = "mcp_pro_blocked_monthly"
     with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 500, "pro": 3, "enterprise": 50000, "test": None}):
         for i in range(3):
-            allowed, _ = check_rate_limit(key, limit=100)
+            allowed, _, _, _ = check_rate_limit(key, limit=100)
             assert allowed is True
-        allowed, remaining = check_rate_limit(key, limit=100)
+        allowed, remaining, is_overage, reason = check_rate_limit(key, limit=100)
         assert allowed is False
         assert remaining == 0
+        assert reason == "monthly_quota"

@@ -23,6 +23,7 @@ _FAILOVER_BLOCKED_PATHS = {
     "/v1/keys/setup",
     "/v1/keys/portal",
     "/v1/keys/free-signup",
+    "/v1/keys/overage",
     "/v1/credits/buy",
     "/v1/disputes",
 }
@@ -75,8 +76,17 @@ from .config import (
     ARKFORGE_PUBLIC_KEY,
     WEBHOOK_IDEMPOTENCY_FILE,
     CORS_ALLOWED_ORIGINS,
+    PRO_OVERAGE_PRICE,
+    ENTERPRISE_OVERAGE_PRICE,
+    OVERAGE_PRICES,
+    OVERAGE_CAP_MIN,
+    OVERAGE_CAP_MAX,
+    OVERAGE_CAP_DEFAULT,
 )
-from .keys import validate_api_key, create_api_key, deactivate_key_by_ref, is_test_key, is_free_key
+from .keys import (
+    validate_api_key, create_api_key, deactivate_key_by_ref, is_test_key, is_free_key,
+    get_overage_settings, update_overage_settings, get_key_plan,
+)
 from .credits import add_credits, get_balance
 from .proofs import load_proof, store_proof, get_public_proof, verify_proof_integrity
 from .proxy import execute_proxy, ProxyError, drain_background_tasks, _track_task, _log_background_task
@@ -728,7 +738,9 @@ async def buy_credits(
 
     # Add credits
     new_balance = add_credits(api_key, amount, charge_result.transaction_id)
-    proofs_available = int(new_balance / PROOF_PRICE)
+    plan = get_key_plan(api_key)
+    overage_price = OVERAGE_PRICES.get(plan, PROOF_PRICE)
+    proofs_available = int(new_balance / overage_price)
 
     logger.info("Credits purchased: %.2f EUR (pi=%s)", amount, charge_result.transaction_id)
 
@@ -932,6 +944,7 @@ async def root():
             "credits_buy": "POST /v1/credits/buy",
             "setup_pro": "POST /v1/keys/setup",
             "billing_portal": "POST /v1/keys/portal",
+            "overage": "POST|GET /v1/keys/overage",
             "proof": "GET /v1/proof/{proof_id}",
             "reputation": "GET /v1/agent/{agent_id}/reputation",
             "disputes": "POST /v1/disputes",
@@ -960,6 +973,96 @@ async def health():
         resp["mode"] = "failover"
         resp["write_enabled"] = False
     return resp
+
+
+# --- POST /v1/keys/overage ---
+
+@app.post("/v1/keys/overage")
+async def set_overage(
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None),
+):
+    """Enable or disable overage billing for the requesting API key.
+
+    Body: {"enabled": true/false, "cap_eur": <5–100>}
+    Only available for Pro and Enterprise plans.
+    """
+    api_key = _get_api_key(authorization, x_api_key)
+    if not api_key:
+        return _error_response("invalid_api_key", "API key required", 401)
+
+    key_info = validate_api_key(api_key)
+    if not key_info:
+        return _error_response("invalid_api_key", "Invalid or inactive API key", 401)
+
+    plan = get_key_plan(api_key)
+    if plan not in ("pro", "enterprise"):
+        return _error_response(
+            "invalid_plan",
+            "Overage billing is only available for Pro and Enterprise plans.",
+            403,
+        )
+
+    try:
+        body = await request.json()
+    except Exception:
+        return _error_response("invalid_request", "Invalid JSON body", 400)
+
+    if "enabled" not in body:
+        return _error_response("invalid_request", "'enabled' field is required (true/false)", 400)
+
+    enabled = body.get("enabled")
+    if not isinstance(enabled, bool):
+        return _error_response("invalid_request", "'enabled' must be a boolean", 400)
+
+    cap_eur = body.get("cap_eur", OVERAGE_CAP_DEFAULT)
+    try:
+        cap_eur = float(cap_eur)
+    except (TypeError, ValueError):
+        return _error_response("invalid_request", "'cap_eur' must be a number", 400)
+
+    overage_rate = OVERAGE_PRICES.get(plan, PRO_OVERAGE_PRICE)
+
+    try:
+        settings = update_overage_settings(api_key, enabled=enabled, cap_eur=cap_eur,
+                                           overage_rate=overage_rate)
+    except ValueError as e:
+        return _error_response("invalid_request", str(e), 400)
+
+    msg = (
+        f"Overage billing enabled. Proofs beyond quota billed at {overage_rate} EUR/proof "
+        f"from prepaid credits, cap {cap_eur:.2f} EUR/month."
+        if enabled
+        else "Overage billing disabled. Requests beyond quota will be rejected (HTTP 429)."
+    )
+
+    return {
+        "overage_enabled": settings["overage_enabled"],
+        "overage_cap_eur": settings["overage_cap_eur"],
+        "overage_rate_per_proof": overage_rate,
+        "consent_at": settings["overage_consent_at"],
+        "message": msg,
+    }
+
+
+# --- GET /v1/keys/overage ---
+
+@app.get("/v1/keys/overage")
+async def get_overage(
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None),
+):
+    """Return current overage settings for the requesting API key."""
+    api_key = _get_api_key(authorization, x_api_key)
+    if not api_key:
+        return _error_response("invalid_api_key", "API key required", 401)
+
+    key_info = validate_api_key(api_key)
+    if not key_info:
+        return _error_response("invalid_api_key", "Invalid or inactive API key", 401)
+
+    return get_overage_settings(api_key)
 
 
 # --- GET /v1/usage ---
@@ -998,18 +1101,32 @@ async def pricing():
             "pro": {
                 "price": "29 EUR/month",
                 "monthly_quota": PRO_MONTHLY_LIMIT,
-                "overage": f"{PRO_OVERAGE_PRICE} EUR/proof",
+                "overage": f"{PRO_OVERAGE_PRICE} EUR/proof (opt-in)",
                 "witnesses": "3 (Ed25519, RFC 3161 TSA, Sigstore Rekor)",
                 "setup": f"{TRUST_LAYER_BASE_URL}/v1/keys/setup",
                 "buy_credits": f"{TRUST_LAYER_BASE_URL}/v1/credits/buy",
+                "overage_config": {
+                    "rate": PRO_OVERAGE_PRICE,
+                    "opt_in": True,
+                    "default_cap_eur": OVERAGE_CAP_DEFAULT,
+                    "cap_range": [OVERAGE_CAP_MIN, OVERAGE_CAP_MAX],
+                    "enable_endpoint": "/v1/keys/overage",
+                },
             },
             "enterprise": {
                 "price": "149 EUR/month",
                 "monthly_quota": ENTERPRISE_MONTHLY_LIMIT,
-                "overage": f"{ENTERPRISE_OVERAGE_PRICE} EUR/proof",
+                "overage": f"{ENTERPRISE_OVERAGE_PRICE} EUR/proof (opt-in)",
                 "witnesses": "3 (Ed25519, RFC 3161 QTSP eIDAS, Sigstore Rekor)",
                 "setup": f"{TRUST_LAYER_BASE_URL}/v1/keys/enterprise-setup",
                 "credit_card_required": True,
+                "overage_config": {
+                    "rate": ENTERPRISE_OVERAGE_PRICE,
+                    "opt_in": True,
+                    "default_cap_eur": OVERAGE_CAP_DEFAULT,
+                    "cap_range": [OVERAGE_CAP_MIN, OVERAGE_CAP_MAX],
+                    "enable_endpoint": "/v1/keys/overage",
+                },
             },
         },
         "contact": "contact@arkforge.fr",

@@ -216,6 +216,125 @@ ArkForge Trust Layer — https://arkforge.fr/trust
         logger.warning("Low credits email failed: %s", e)
 
 
+def send_overage_first_email(email: str, api_key: str, plan: str, spent: float, cap: float):
+    """Send email on first overage proof of the month."""
+    from .config import OVERAGE_PRICES
+    rate = OVERAGE_PRICES.get(plan, 0.01)
+    subject = "[ArkForge] Overage billing active — monthly quota exceeded"
+    body = f"""ArkForge Trust Layer — Overage Billing Active
+{'=' * 50}
+
+Your monthly quota has been reached. Overage billing is now active.
+
+Your agent will continue to work, but each proof beyond the quota
+is billed from your prepaid credits at the overage rate.
+
+  Plan:            {plan}
+  Overage rate:    {rate:.3f} EUR / proof
+  Spent (overage): {spent:.4f} EUR
+  Monthly cap:     {cap:.2f} EUR
+
+Check your current usage:
+  curl https://arkforge.fr/trust/v1/usage \\
+    -H "X-Api-Key: {api_key}"
+
+To disable overage billing:
+  curl -X POST https://arkforge.fr/trust/v1/keys/overage \\
+    -H "X-Api-Key: {api_key}" \\
+    -H "Content-Type: application/json" \\
+    -d '{{"enabled": false, "cap_eur": {cap:.2f}}}'
+
+When you reach your cap ({cap:.2f} EUR), requests will be blocked until
+you increase the cap or wait for the next monthly reset.
+
+{'=' * 50}
+ArkForge Trust Layer — https://arkforge.fr/trust
+"""
+    try:
+        _send_email(email, subject, body)
+    except Exception as e:
+        logger.warning("Overage first email failed: %s", e)
+
+
+def send_overage_80pct_email(email: str, api_key: str, plan: str, spent: float, cap: float):
+    """Send email when 80% of overage cap is consumed."""
+    remaining = round(cap - spent, 4)
+    subject = "[ArkForge] Overage alert — 80% of monthly cap used"
+    body = f"""ArkForge Trust Layer — Overage Cap Warning
+{'=' * 50}
+
+You have used 80% of your monthly overage cap.
+
+  Spent:           {spent:.4f} EUR / {cap:.2f} EUR cap
+  Remaining:       {remaining:.4f} EUR
+
+Your agent may stop working soon when the cap is reached.
+
+Options:
+  1. Increase your monthly cap:
+     curl -X POST https://arkforge.fr/trust/v1/keys/overage \\
+       -H "X-Api-Key: {api_key}" \\
+       -H "Content-Type: application/json" \\
+       -d '{{"enabled": true, "cap_eur": {min(cap * 2, 100):.2f}}}'
+
+  2. Buy more prepaid credits:
+     curl -X POST https://arkforge.fr/trust/v1/credits/buy \\
+       -H "X-Api-Key: {api_key}" \\
+       -H "Content-Type: application/json" \\
+       -d '{{"amount": 10}}'
+
+  3. Disable overage (requests will be rejected at quota):
+     curl -X POST https://arkforge.fr/trust/v1/keys/overage \\
+       -H "X-Api-Key: {api_key}" \\
+       -H "Content-Type: application/json" \\
+       -d '{{"enabled": false, "cap_eur": {cap:.2f}}}'
+
+{'=' * 50}
+ArkForge Trust Layer — https://arkforge.fr/trust
+"""
+    try:
+        _send_email(email, subject, body)
+    except Exception as e:
+        logger.warning("Overage 80pct email failed: %s", e)
+
+
+def send_overage_cap_email(email: str, api_key: str, plan: str, spent: float, cap: float):
+    """Send email when overage cap is reached and requests are being blocked."""
+    subject = "[ArkForge] Overage cap reached — requests blocked"
+    body = f"""ArkForge Trust Layer — Overage Cap Reached
+{'=' * 50}
+
+Your monthly overage cap of {cap:.2f} EUR has been reached.
+
+All requests beyond the monthly quota are now blocked (HTTP 429)
+until you take one of the following actions:
+
+  1. Increase your monthly cap (max 100 EUR):
+     curl -X POST https://arkforge.fr/trust/v1/keys/overage \\
+       -H "X-Api-Key: {api_key}" \\
+       -H "Content-Type: application/json" \\
+       -d '{{"enabled": true, "cap_eur": {min(cap * 2, 100):.2f}}}'
+
+  2. Buy more prepaid credits:
+     curl -X POST https://arkforge.fr/trust/v1/credits/buy \\
+       -H "X-Api-Key: {api_key}" \\
+       -H "Content-Type: application/json" \\
+       -d '{{"amount": 10}}'
+
+  3. Wait for the next monthly reset (first day of next month).
+
+  Spent this month: {spent:.4f} EUR
+  Cap:              {cap:.2f} EUR
+
+{'=' * 50}
+ArkForge Trust Layer — https://arkforge.fr/trust
+"""
+    try:
+        _send_email(email, subject, body)
+    except Exception as e:
+        logger.warning("Overage cap email failed: %s", e)
+
+
 def send_credits_exhausted_email(email: str, api_key: str):
     """Send an alert email when credits are fully exhausted."""
     subject = "[ArkForge] Credits exhausted — agent stopped"
