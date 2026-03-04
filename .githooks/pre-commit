@@ -10,8 +10,8 @@ NC='\033[0m'
 
 ERRORS=0
 
-# Fichiers stagés (hors suppressions)
-STAGED=$(git diff --cached --name-only --diff-filter=ACMR)
+# Fichiers stagés (hors suppressions, hors hook lui-même)
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR | grep -v "^\.githooks/" || true)
 
 if [ -z "$STAGED" ]; then
     exit 0
@@ -71,10 +71,42 @@ check "OpenAI API key (sk-...T3Blb)" \
     "sk-[A-Za-z0-9]{48}" \
     "\.env\.example|test_.*\.py|\.md$"
 
-# Mots de passe hardcodés
-check "Password hardcodé" \
-    "(password|passwd|secret|api_key)\s*=\s*['\"][^'\"]{8,}['\"]" \
-    "test_.*\.py|conftest\.py|\.env\.example|config\.py|\.md$"
+# Mots de passe hardcodés dans le code (toutes extensions)
+check "Password hardcodé (code)" \
+    "(password|passwd|imap_password|smtp_password|db_password)\s*=\s*['\"][^'\"]{8,}['\"]" \
+    "test_.*\.py|conftest\.py|\.env\.example|config\.py"
+
+# Mots de passe dans les docs/README/commentaires
+# Détecte "password: valeur_reelle" mais pas "password: xxx", "password: <...>", "password: your_"
+check "Password dans doc/commentaire" \
+    "(password|mot de passe|mdp|pwd|passwd)\s*[:=]\s*(?!xxx|your_|<|\.\.\.|\*|example|changeme|placeholder|CHANGE|SECRET)[^\s'\"<]{6,}" \
+    "\.env\.example|test_.*\.py|conftest\.py"
+
+# URLs avec credentials embarqués (http://user:pass@host)
+check "Credentials dans URL" \
+    "https?://[^@\s]{3,}:[^@\s]{3,}@[a-zA-Z0-9]" \
+    "\.env\.example|test_.*\.py"
+
+# Tokens JWT hardcodés (eyJ... = header base64 d'un JWT)
+check "JWT token hardcodé" \
+    "eyJ[A-Za-z0-9+/]{30,}\.[A-Za-z0-9+/]{30,}" \
+    "test_.*\.py|conftest\.py|\.env\.example"
+
+# Variables d'environnement avec vraie valeur dans les docs
+# Détecte FOO_SECRET=valeur_reelle mais pas FOO_SECRET=sk_test_fake ou FOO=xxx
+check "Variable secrète avec valeur réelle dans doc" \
+    "^(STRIPE_LIVE|STRIPE_SECRET|IMAP_PASSWORD|SMTP_PASSWORD|TELEGRAM_BOT_TOKEN|INTERNAL_SECRET|VAULT_MASTER_KEY)\s*=\s*(?!sk_test_|sk_live_xxx|your_|xxx|<|\.\.\.|\*|changeme)[^\s]{8,}" \
+    "\.env\.example|test_.*\.py|config\.py"
+
+# Clés Mistral / autres LLM
+check "Mistral API key" \
+    "[A-Za-z0-9]{32,}(mistral|MISTRAL)" \
+    "\.env\.example|test_.*\.py"
+
+# Emails personnels dans les docs (hors domaines attendus)
+check "Email personnel dans doc" \
+    "[a-zA-Z0-9._%+-]{4,}@(?!(arkforge\.fr|example\.(com|org)|test\.com|gmail\.com|mailbox\.org|busilezas))[a-zA-Z0-9.-]+\.(fr|com|io|net|org|dev)" \
+    "test_.*\.py|conftest\.py|\.env\.example|certs/"
 
 # Fichiers suspects stagés directement
 for f in $STAGED; do
