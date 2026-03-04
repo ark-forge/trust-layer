@@ -7,6 +7,9 @@ from trust_layer.keys import (
     deactivate_key_by_ref,
     find_key_by_ref,
     is_test_key,
+    is_free_key,
+    is_enterprise_key,
+    get_key_plan,
     load_api_keys,
 )
 
@@ -62,3 +65,46 @@ def test_prefix_routing():
     live_key = generate_api_key(test_mode=False)
     assert is_test_key(test_key) is True
     assert is_test_key(live_key) is False
+
+
+# --- Enterprise plan ---
+
+def test_generate_enterprise_key():
+    key = generate_api_key(plan="enterprise")
+    assert key.startswith("mcp_ent_")
+    assert len(key) == 8 + 48  # "mcp_ent_" (8) + 24 bytes hex (48)
+
+
+def test_is_enterprise_key():
+    assert is_enterprise_key("mcp_ent_abc123") is True
+    assert is_enterprise_key("mcp_pro_abc123") is False
+    assert is_enterprise_key("mcp_free_abc123") is False
+    assert is_enterprise_key("mcp_test_abc123") is False
+
+
+def test_is_free_key():
+    assert is_free_key("mcp_free_abc123") is True
+    assert is_free_key("mcp_pro_abc123") is False
+    assert is_free_key("mcp_ent_abc123") is False
+
+
+def test_get_key_plan_all_prefixes():
+    assert get_key_plan("mcp_free_xxx") == "free"
+    assert get_key_plan("mcp_pro_xxx") == "pro"
+    assert get_key_plan("mcp_ent_xxx") == "enterprise"
+    assert get_key_plan("mcp_test_xxx") == "test"
+    assert get_key_plan("mcp_unknown_xxx") == "pro"  # fallback
+
+
+def test_enterprise_key_test_mode_ignored():
+    """test_mode=True is overridden by plan='enterprise'."""
+    key = generate_api_key(test_mode=True, plan="enterprise")
+    assert key.startswith("mcp_ent_")
+
+
+def test_create_enterprise_key():
+    key = create_api_key("cus_ent1", "ref_ent1", "ent@company.com", plan="enterprise")
+    info = validate_api_key(key)
+    assert info is not None
+    assert info["plan"] == "enterprise"
+    assert is_enterprise_key(key)
