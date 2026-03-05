@@ -86,7 +86,8 @@ STRIPE_PRO_PRODUCT_ID = os.environ.get("STRIPE_PRO_PRODUCT_ID", "")
 # --- SMTP ---
 SMTP_HOST = os.environ.get("SMTP_HOST", "ssl0.ovh.net")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "465"))
-SMTP_USER = os.environ.get("IMAP_USER", "contact@arkforge.fr")
+SMTP_USER = os.environ.get("IMAP_USER", "noreply@arkforge.fr")       # sender (automated)
+SMTP_CONTACT = os.environ.get("SMTP_CONTACT", "contact@arkforge.fr") # reply-to (human inbox)
 SMTP_PASSWORD = os.environ.get("IMAP_PASSWORD", "")
 
 # --- Proxy limits ---
