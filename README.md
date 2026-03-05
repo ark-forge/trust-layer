@@ -142,6 +142,8 @@ pytest tests/ -v
 | `SMTP_PASSWORD` | No | — | SMTP password (`IMAP_PASSWORD`) |
 | `TRUST_LAYER_INTERNAL_SECRET` | No | — | Secret forwarded to upstream as `X-Internal-Secret` header |
 | `CORS_ALLOWED_ORIGINS` | No | `https://arkforge.fr,https://www.arkforge.fr` | Comma-separated CORS allowed origins |
+| `KEYS_FERNET_KEY_FILE` | No | `/opt/claude-ceo/config/keys_fernet.key` | Path to Fernet key for `api_keys.json` encryption at rest. Generate: `python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. If absent, keys are stored unencrypted (warning logged). |
+| `KEYS_FERNET_KEY` | No | — | Fernet key as base64 string (env var alternative to `KEYS_FERNET_KEY_FILE`). Takes precedence over the file. |
 
 ### Signing key
 
@@ -157,6 +159,7 @@ The public key is served at `GET /v1/pubkey`. **Back up `.signing_key.pem` — l
 
 ```bash
 chmod 600 .signing_key.pem .env
+chmod 600 /opt/claude-ceo/config/keys_fernet.key   # Fernet key for api_keys.json encryption
 chmod 750 data/ proofs/
 ```
 
@@ -544,6 +547,8 @@ Upstream API (any HTTPS endpoint)
 ```
 
 **No database.** Proofs are stored as immutable JSON files on disk — one file per transaction (`proofs/{proof_id}.json`). No SQL, no edits, no deletions. Once written, a proof can only be read. This guarantees that proofs cannot be retroactively altered.
+
+**Encryption at rest.** The API key database (`data/api_keys.json`) is encrypted at rest with AES-128 (Fernet / AES-128-CBC + HMAC-SHA256). Proof files contain only SHA-256 hashes — no payload content. Proofs are retained for 7 years from creation for dispute resolution purposes.
 
 **RFC 3161 timestamps** use a pool of 3 public TSA servers tried in order — first success wins:
 
