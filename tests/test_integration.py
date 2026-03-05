@@ -333,7 +333,7 @@ def test_setup_key_subscription_mode(client, monkeypatch):
     """Checkout session créée en mode subscription avec price_id Pro."""
     import trust_layer.app as app_mod
     monkeypatch.setattr(app_mod, "STRIPE_TEST_KEY", "sk_test_fake")
-    monkeypatch.setattr(app_mod, "STRIPE_PRO_PRICE_ID", "price_test_pro_monthly")
+    monkeypatch.setattr(app_mod, "STRIPE_PRO_PRICE_ID_TEST", "price_test_pro_monthly")
 
     mock_customer = MagicMock()
     mock_customer.id = "cus_test_setup"

@@ -84,6 +84,7 @@ from .config import (
     OVERAGE_CAP_DEFAULT,
 
     STRIPE_PRO_PRICE_ID,
+    STRIPE_PRO_PRICE_ID_TEST,
     STRIPE_PRO_PRODUCT_ID,
 )
 from .keys import (
@@ -455,7 +456,7 @@ async def setup_key(request: Request):
     if not sk:
         return _error_response("internal_error", f"Stripe {req_mode} key not configured", 500)
 
-    price_id = STRIPE_PRO_PRICE_ID
+    price_id = STRIPE_PRO_PRICE_ID_TEST if req_mode == "test" else STRIPE_PRO_PRICE_ID
     if not price_id:
         return _error_response("internal_error", "Stripe Pro price ID not configured", 500)
 
