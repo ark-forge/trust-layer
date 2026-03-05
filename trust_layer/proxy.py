@@ -187,17 +187,20 @@ def _inject_digital_stamp(result: dict, proof_record: dict) -> None:
         "msg": "Payment confirmed, execution anchored.",
     }
 
-# Private IP ranges to block
+# Private IP ranges to block (SSRF protection)
 _PRIVATE_NETWORKS = [
-    ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("169.254.0.0/16"),
-    ipaddress.ip_network("0.0.0.0/8"),
-    ipaddress.ip_network("::1/128"),
-    ipaddress.ip_network("fc00::/7"),
-    ipaddress.ip_network("fe80::/10"),
+    ipaddress.ip_network("127.0.0.0/8"),      # loopback
+    ipaddress.ip_network("10.0.0.0/8"),        # RFC 1918
+    ipaddress.ip_network("172.16.0.0/12"),     # RFC 1918
+    ipaddress.ip_network("192.168.0.0/16"),    # RFC 1918
+    ipaddress.ip_network("169.254.0.0/16"),    # link-local (AWS/cloud metadata)
+    ipaddress.ip_network("100.64.0.0/10"),     # CGNAT / shared address space (RFC 6598)
+    ipaddress.ip_network("0.0.0.0/8"),         # "this" network
+    ipaddress.ip_network("::1/128"),           # IPv6 loopback
+    ipaddress.ip_network("fc00::/7"),          # IPv6 unique local
+    ipaddress.ip_network("fe80::/10"),         # IPv6 link-local
+    ipaddress.ip_network("::ffff:0:0/96"),     # IPv4-mapped IPv6 (wraps RFC 1918 addresses)
+    ipaddress.ip_network("2002::/16"),         # 6to4 (embeds arbitrary IPv4)
 ]
 
 

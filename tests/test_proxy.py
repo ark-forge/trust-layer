@@ -47,6 +47,58 @@ def test_validate_target_rejects_zero():
         validate_target_url("https://0.0.0.0/api")
 
 
+def test_validate_target_rejects_link_local():
+    """169.254.x.x — cloud metadata (AWS IMDSv1, GCP, Azure)."""
+    with pytest.raises(ProxyError):
+        validate_target_url("https://169.254.169.254/latest/meta-data/")
+
+
+def test_validate_target_rejects_cgnat():
+    """100.64.0.0/10 — CGNAT / shared address space (RFC 6598), used by AWS internally."""
+    with pytest.raises(ProxyError):
+        validate_target_url("https://100.64.0.1/api")
+    with pytest.raises(ProxyError):
+        validate_target_url("https://100.127.255.255/api")
+
+
+def test_validate_target_rejects_ipv6_loopback():
+    with pytest.raises(ProxyError):
+        validate_target_url("https://[::1]/api")
+
+
+def test_validate_target_rejects_ipv6_unique_local():
+    """fc00::/7 — IPv6 unique local (equivalent of RFC 1918)."""
+    with pytest.raises(ProxyError):
+        validate_target_url("https://[fd00::1]/api")
+
+
+def test_validate_target_rejects_ipv6_link_local():
+    with pytest.raises(ProxyError):
+        validate_target_url("https://[fe80::1]/api")
+
+
+def test_validate_target_rejects_ipv4_mapped_ipv6():
+    """::ffff:0:0/96 — IPv4-mapped IPv6, wraps RFC 1918 addresses (e.g. ::ffff:192.168.1.1)."""
+    with pytest.raises(ProxyError):
+        validate_target_url("https://[::ffff:192.168.1.1]/api")
+    with pytest.raises(ProxyError):
+        validate_target_url("https://[::ffff:10.0.0.1]/api")
+    with pytest.raises(ProxyError):
+        validate_target_url("https://[::ffff:127.0.0.1]/api")
+
+
+def test_validate_target_rejects_6to4():
+    """2002::/16 — 6to4 tunneling, embeds arbitrary IPv4 in the address."""
+    with pytest.raises(ProxyError):
+        validate_target_url("https://[2002::1]/api")
+
+
+def test_validate_target_allows_public_ip():
+    """Public IPs must remain reachable."""
+    url = validate_target_url("https://8.8.8.8/api")
+    assert url == "https://8.8.8.8/api"
+
+
 def test_validate_currency_valid():
     assert validate_currency("eur") == "eur"
     assert validate_currency("USD") == "usd"
