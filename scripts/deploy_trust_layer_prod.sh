@@ -151,12 +151,33 @@ log "All gates PASSED"
 # ============================================================
 log "--- Phase 2: Deploy ---"
 
-# Save current commit for rollback
-PREV_COMMIT=$(git rev-parse HEAD)
-log "Previous commit: $PREV_COMMIT"
+# Compute version early — deployed code must embed the correct version
+LAST_TAG=$(git tag --sort=-v:refname | head -1)
+if [ -z "$LAST_TAG" ]; then LAST_TAG="v0.0.0"; fi
+NEW_TAG=$(bump_version "$LAST_TAG" "$VERSION_BUMP")
+NEW_VERSION="${NEW_TAG#v}"
+log "Version: $LAST_TAG → $NEW_TAG"
 
-# Pull latest
-log "git pull origin main..."
+# Build changelog before version-bump commit (cleaner history)
+CHANGELOG=$(git log "${LAST_TAG}..HEAD" --oneline --no-merges 2>/dev/null | head -20 | sed 's/^/• /' || echo "• No changelog available")
+
+# Save rollback point BEFORE version bump
+PREV_COMMIT=$(git rev-parse HEAD)
+log "Previous commit (rollback point): $PREV_COMMIT"
+
+# Bump trust_layer/__init__.py (idempotent — skipped if already correct)
+CURRENT_APP_VERSION=$(grep -oP '(?<=__version__ = ")[^"]+' trust_layer/__init__.py 2>/dev/null || echo "")
+if [ "$CURRENT_APP_VERSION" != "$NEW_VERSION" ]; then
+    sed -i "s/^__version__ = .*/__version__ = \"$NEW_VERSION\"/" trust_layer/__init__.py
+    git add trust_layer/__init__.py
+    git commit -m "chore: bump version to $NEW_VERSION" >> "$LOG_FILE" 2>&1
+    git push origin main >> "$LOG_FILE" 2>&1
+    log "Version bumped $CURRENT_APP_VERSION → $NEW_VERSION"
+else
+    log "Version already at $NEW_VERSION — no bump needed"
+fi
+
+# Pull latest (no-op if we just pushed, ensures consistency)
 git pull origin main >> "$LOG_FILE" 2>&1
 
 NEW_COMMIT=$(git rev-parse HEAD)
@@ -382,16 +403,7 @@ fi
 # PHASE 3 — RELEASE
 # ============================================================
 log "--- Phase 3: Release ---"
-
-LAST_TAG=$(git tag --sort=-v:refname | head -1)
-if [ -z "$LAST_TAG" ]; then
-    LAST_TAG="v0.0.0"
-fi
-NEW_TAG=$(bump_version "$LAST_TAG" "$VERSION_BUMP")
-log "Version: $LAST_TAG → $NEW_TAG"
-
-# Build changelog (commits since last tag)
-CHANGELOG=$(git log "${LAST_TAG}..HEAD" --oneline --no-merges 2>/dev/null | head -20 | sed 's/^/• /' || echo "• No changelog available")
+# NEW_TAG, LAST_TAG, CHANGELOG already computed in Phase 2
 
 git tag "$NEW_TAG"
 git push origin "$NEW_TAG" >> "$LOG_FILE" 2>&1
