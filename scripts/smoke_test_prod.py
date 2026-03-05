@@ -3,16 +3,20 @@
 smoke_test_prod.py — Trust Layer post-deploy smoke test suite
 
 Usage: python3 scripts/smoke_test_prod.py [--base-url URL] [--ovh-host HOST]
+                                           [--expected-version X.Y.Z]
 Exit: 0 = all passed, 1 = test failures, 2 = critical setup error
 
-Tests: 40 checks across 10 sections (critical path only, ~90s with rate-limit delays).
+Tests: ~55 checks across 13 sections (critical path only, ~100s with rate-limit delays).
 Creates ephemeral test keys on OVH via SSH, deactivates them on exit.
 """
 import argparse
+import hashlib
+import hmac
 import json
 import subprocess
 import sys
 import time
+import uuid
 import urllib.error
 import urllib.request
 
@@ -20,6 +24,7 @@ import urllib.request
 parser = argparse.ArgumentParser()
 parser.add_argument("--base-url", default="https://arkforge.fr/trust")
 parser.add_argument("--ovh-host", default="ubuntu@51.91.99.178")
+parser.add_argument("--expected-version", default="", help="Expected version string (e.g. 0.5.4)")
 args = parser.parse_args()
 
 BASE = args.base_url.rstrip("/")
@@ -32,9 +37,19 @@ WARN = "\033[93m⚠\033[0m"
 results: list[tuple[str, bool]] = []
 FREE_KEY = ""
 PRO_KEY = ""
+WEBHOOK_SECRET = ""
+INACTIVE_KEY = ""
 
 
 # ── Helpers ───────────────────────────────────────────────────
+def forge_stripe_sig(body: str, secret: str) -> str:
+    """Forge a valid Stripe webhook signature header."""
+    ts = str(int(time.time()))
+    signed = f"{ts}.{body}"
+    sig = hmac.new(secret.encode(), signed.encode(), hashlib.sha256).hexdigest()
+    return f"t={ts},v1={sig}"
+
+
 def req(method, path, body=None, headers=None, delay=1.2):
     time.sleep(delay)
     url = BASE + path
@@ -80,19 +95,47 @@ try:
     out = ssh(f"""
 import sys
 sys.path.insert(0, '/opt/claude-ceo/workspace/arkforge-trust-layer')
-from trust_layer.keys import create_api_key
+from trust_layer.keys import create_api_key, load_api_keys, save_api_keys
+from trust_layer.config import STRIPE_WEBHOOK_SECRET_LIVE, STRIPE_WEBHOOK_SECRET_TEST
+
+# Clés de test
 fk = create_api_key('', 'smoke_free', 'smoke_free@arkforge.fr', plan='free')
 pk = create_api_key('cus_smoke', 'smoke_pro', 'smoke_pro@arkforge.fr', plan='pro')
+
+# Clé inactive pour tester le rejet
+ik = create_api_key('', 'smoke_inactive', 'smoke_inactive@arkforge.fr', plan='free')
+keys = load_api_keys()
+if ik in keys:
+    keys[ik]['active'] = False
+    save_api_keys(keys)
+
+# Clé pro avec subscription ref (pour webhook invoice.paid)
+wk = create_api_key('cus_smoke_wh', 'sub_smoke_wh_001', 'smoke_wh@arkforge.fr', plan='pro')
+keys2 = load_api_keys()
+if wk in keys2:
+    keys2[wk]['active'] = False
+    save_api_keys(keys2)
+
+# Secret webhook (on prefere live, sinon test)
+ws = STRIPE_WEBHOOK_SECRET_LIVE or STRIPE_WEBHOOK_SECRET_TEST
+
 print(fk)
 print(pk)
+print(ik)
+print(ws)
+print(wk)
 """)
     lines = out.splitlines()
-    FREE_KEY = lines[0] if len(lines) > 0 else ""
-    PRO_KEY = lines[1] if len(lines) > 1 else ""
+    FREE_KEY   = lines[0] if len(lines) > 0 else ""
+    PRO_KEY    = lines[1] if len(lines) > 1 else ""
+    INACTIVE_KEY = lines[2] if len(lines) > 2 else ""
+    WEBHOOK_SECRET = lines[3] if len(lines) > 3 else ""
+    WEBHOOK_KEY  = lines[4] if len(lines) > 4 else ""
     if not FREE_KEY.startswith("mcp_free_") or not PRO_KEY.startswith("mcp_pro_"):
         print(f"  {FAIL} Key creation failed: {out[:100]}")
         sys.exit(2)
     print(f"  Keys: FREE={FREE_KEY[:22]}... PRO={PRO_KEY[:22]}...")
+    print(f"  Webhook secret: {'OK' if WEBHOOK_SECRET else 'ABSENT'}")
 except Exception as e:
     print(f"  {FAIL} SSH setup failed: {e}")
     sys.exit(2)
@@ -101,9 +144,14 @@ except Exception as e:
 # ── 1. Infra ──────────────────────────────────────────────────
 sec("1. INFRA")
 s, d = req("GET", "/v1/health")
+deployed_version = d.get("version", "?") if isinstance(d, dict) else "?"
 chk("health 200 + status ok", s == 200 and d.get("status") == "ok",
-    f"v{d.get('version')} | {d.get('environment')}")
+    f"v{deployed_version} | {d.get('environment')}")
 chk("environment = production", d.get("environment") == "production")
+if args.expected_version:
+    chk(f"version = {args.expected_version}",
+        deployed_version == args.expected_version,
+        f"deployed={deployed_version} expected={args.expected_version}")
 
 s, d = req("GET", "/v1/pricing")
 pro_p = d.get("plans", {}).get("pro", {})
@@ -122,6 +170,13 @@ s, _ = req("POST", "/v1/proxy", {"target": "https://httpbin.org/get", "method": 
 chk("/v1/proxy sans clé → 401", s == 401)
 s, _ = req("GET", "/v1/keys/overage")
 chk("/v1/keys/overage sans clé → 401", s == 401)
+
+# Régression OBS-007 — clé invalide + clé inactive doivent retourner 401 (pas 200)
+s, d = req("GET", "/v1/usage", headers={"X-Api-Key": "mcp_pro_fakekeysmoke0000000000000000"})
+chk("OBS-007: fausse clé pro → 401 (pas 200)", s == 401, f"HTTP {s}")
+if INACTIVE_KEY:
+    s, d = req("GET", "/v1/usage", headers={"X-Api-Key": INACTIVE_KEY})
+    chk("OBS-007: clé inactive → 401 (pas 200)", s == 401, f"HTTP {s}")
 
 # ── 3. Free Key ───────────────────────────────────────────────
 sec("3. FREE KEY")
@@ -250,17 +305,127 @@ id1 = d1.get("proof", {}).get("proof_id", "?") if isinstance(d1, dict) else "?"
 id2 = d2.get("proof", {}).get("proof_id", "?") if isinstance(d2, dict) else "?"
 chk("idempotence: même proof_id", id1 == id2, f"id={id1}")
 
+# ── 11. Webhooks Stripe ───────────────────────────────────────
+sec("11. WEBHOOKS STRIPE")
+
+# 11.1 Signature invalide → 400
+wh_path = "/v1/webhooks/stripe"
+fake_body = json.dumps({"id": "evt_fake", "type": "invoice.paid", "livemode": True,
+                        "data": {"object": {}}}, separators=(',', ':'))
+s, _ = req("POST", wh_path, headers={"Stripe-Signature": "t=1234,v1=badsig",
+           "Content-Type": "application/json"}, body=None, delay=0.5)
+# req() encodes body as JSON — bypass it for raw webhook payload
+time.sleep(0.5)
+wh_url = BASE + wh_path
+wh_req = urllib.request.Request(wh_url,
+    data=fake_body.encode(),
+    headers={"Content-Type": "application/json", "Stripe-Signature": "t=1234,v1=badsig"},
+    method="POST")
+try:
+    with urllib.request.urlopen(wh_req, timeout=10) as r:
+        wh_s1 = r.status
+except urllib.error.HTTPError as e:
+    wh_s1 = e.code
+chk("webhook signature invalide → 400", wh_s1 == 400, f"HTTP {wh_s1}")
+
+# 11.2 Signature absente → 400
+time.sleep(0.5)
+wh_req2 = urllib.request.Request(wh_url,
+    data=fake_body.encode(),
+    headers={"Content-Type": "application/json"},
+    method="POST")
+try:
+    with urllib.request.urlopen(wh_req2, timeout=10) as r:
+        wh_s2 = r.status
+except urllib.error.HTTPError as e:
+    wh_s2 = e.code
+chk("webhook sans signature → 400", wh_s2 == 400, f"HTTP {wh_s2}")
+
+# 11.3 invoice.paid valide → 200 + réactivation clé (si webhook secret disponible)
+if WEBHOOK_SECRET and WEBHOOK_KEY:
+    event_id = f"evt_smoke_inv_paid_{uuid.uuid4().hex[:8]}"
+    inv_paid_payload = json.dumps({
+        "id": event_id,
+        "type": "invoice.paid",
+        "livemode": True,
+        "data": {
+            "object": {
+                "id": f"in_smoke_{uuid.uuid4().hex[:12]}",
+                "subscription": "sub_smoke_wh_001",
+                "customer": "cus_smoke_wh",
+                "billing_reason": "subscription_cycle",
+                "status": "paid",
+                "amount_paid": 2900,
+                "currency": "eur"
+            }
+        }
+    }, separators=(',', ':'))
+    sig_header = forge_stripe_sig(inv_paid_payload, WEBHOOK_SECRET)
+    time.sleep(0.5)
+    wh_req3 = urllib.request.Request(wh_url,
+        data=inv_paid_payload.encode(),
+        headers={"Content-Type": "application/json", "Stripe-Signature": sig_header},
+        method="POST")
+    try:
+        with urllib.request.urlopen(wh_req3, timeout=10) as r:
+            wh_s3, wh_body3 = r.status, json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        wh_s3, wh_body3 = e.code, {}
+    chk("invoice.paid valide → 200 received=true",
+        wh_s3 == 200 and wh_body3.get("received") is True, f"HTTP {wh_s3}")
+
+    # Vérifier que la clé a été réactivée sur le serveur
+    time.sleep(0.5)
+    try:
+        reactivated = ssh(f"""
+import sys
+sys.path.insert(0, '/opt/claude-ceo/workspace/arkforge-trust-layer')
+from trust_layer.keys import load_api_keys
+keys = load_api_keys()
+key = '{WEBHOOK_KEY}'
+print(keys.get(key, {{}}).get('active', 'NOT_FOUND'))
+""")
+        chk("invoice.paid: clé réactivée sur serveur",
+            reactivated.strip() == "True", f"active={reactivated.strip()}")
+    except Exception as e:
+        chk("invoice.paid: clé réactivée sur serveur", False, str(e)[:40])
+else:
+    print(f"  {WARN} Webhook secret absent — test invoice.paid ignoré")
+
+# ── 12. TSR (RFC 3161) ────────────────────────────────────────
+sec("12. TSR RFC 3161")
+if PROOF_ID_FREE:
+    time.sleep(0.5)
+    tsr_url = BASE + f"/v1/proof/{PROOF_ID_FREE}/tsr"
+    tsr_req = urllib.request.Request(tsr_url, method="GET")
+    try:
+        with urllib.request.urlopen(tsr_req, timeout=15) as r:
+            tsr_s, tsr_ct, tsr_len = r.status, r.headers.get("Content-Type", ""), len(r.read())
+    except urllib.error.HTTPError as e:
+        tsr_s, tsr_ct, tsr_len = e.code, "", 0
+    chk("GET /v1/proof/{id}/tsr → 200 DER",
+        tsr_s == 200 and tsr_len > 100, f"HTTP {tsr_s} size={tsr_len}B")
+
+    tsr_head = urllib.request.Request(tsr_url, method="HEAD")
+    try:
+        with urllib.request.urlopen(tsr_head, timeout=10) as r:
+            head_s = r.status
+    except urllib.error.HTTPError as e:
+        head_s = e.code
+    chk("HEAD /v1/proof/{id}/tsr → 200 (OBS-002 regression)", head_s == 200, f"HTTP {head_s}")
+
 # ── 10. Cleanup ───────────────────────────────────────────────
 sec("10. CLEANUP")
 try:
+    wh_key_line = WEBHOOK_KEY if "WEBHOOK_KEY" in dir() else ""
     out = ssh(f"""
 import sys
 sys.path.insert(0, '/opt/claude-ceo/workspace/arkforge-trust-layer')
 from trust_layer.keys import load_api_keys, save_api_keys
 keys = load_api_keys()
 deactivated = []
-for k in ['{FREE_KEY}', '{PRO_KEY}']:
-    if k in keys:
+for k in ['{FREE_KEY}', '{PRO_KEY}', '{INACTIVE_KEY}', '{wh_key_line}']:
+    if k and k in keys:
         keys[k]['active'] = False
         deactivated.append(k[:18])
 save_api_keys(keys)
