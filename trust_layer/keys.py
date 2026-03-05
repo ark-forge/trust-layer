@@ -1,9 +1,12 @@
 """API key lifecycle — generate, validate, deactivate."""
 
+import json
+import os
 import secrets
 import threading
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from .config import API_KEYS_FILE, OVERAGE_CAP_DEFAULT, OVERAGE_CAP_MIN, OVERAGE_CAP_MAX, OVERAGE_PRICES
@@ -16,13 +19,70 @@ logger = logging.getLogger("trust_layer.keys")
 # deactivate_key_by_ref, or any other function that does load+modify+save.
 _KEYS_LOCK = threading.Lock()
 
+# ---------------------------------------------------------------------------
+# Encryption at rest for api_keys.json (Fernet / AES-128-CBC + HMAC-SHA256)
+# ---------------------------------------------------------------------------
+_KEYS_FERNET_KEY_FILE = Path(
+    os.environ.get("KEYS_FERNET_KEY_FILE", "/opt/claude-ceo/config/keys_fernet.key")
+)
+_keys_fernet = None
+_keys_fernet_init_lock = threading.Lock()
+
+
+def _get_keys_fernet():
+    """Return a Fernet instance for api_keys.json encryption, or None if key not available."""
+    global _keys_fernet
+    if _keys_fernet is not None:
+        return _keys_fernet
+    with _keys_fernet_init_lock:
+        if _keys_fernet is not None:
+            return _keys_fernet
+        try:
+            from cryptography.fernet import Fernet
+            key_b64 = os.environ.get("KEYS_FERNET_KEY", "").strip()
+            if not key_b64 and _KEYS_FERNET_KEY_FILE.exists():
+                key_b64 = _KEYS_FERNET_KEY_FILE.read_text().strip()
+            if key_b64:
+                _keys_fernet = Fernet(key_b64.encode())
+                logger.info("api_keys.json encryption enabled (Fernet)")
+            else:
+                logger.warning("KEYS_FERNET_KEY not configured — api_keys.json stored unencrypted")
+        except Exception as e:
+            logger.error("Failed to initialise keys Fernet: %s", e)
+        return _keys_fernet
+
 
 def load_api_keys() -> dict:
-    return load_json(API_KEYS_FILE, {})
+    """Load api_keys.json, decrypting if Fernet key is available."""
+    fernet = _get_keys_fernet()
+    if fernet is None:
+        return load_json(API_KEYS_FILE, {})
+    if not API_KEYS_FILE.exists():
+        return {}
+    raw = API_KEYS_FILE.read_bytes()
+    if not raw:
+        return {}
+    try:
+        from cryptography.fernet import InvalidToken
+        decrypted = fernet.decrypt(raw)
+        return json.loads(decrypted)
+    except Exception:
+        # Plain-JSON fallback: migration path — next save_api_keys() will encrypt
+        try:
+            return json.loads(raw)
+        except Exception:
+            return {}
 
 
 def save_api_keys(keys: dict):
-    save_json(API_KEYS_FILE, keys)
+    """Save api_keys.json, encrypting with Fernet if key is available."""
+    fernet = _get_keys_fernet()
+    if fernet is None:
+        save_json(API_KEYS_FILE, keys)
+        return
+    data = json.dumps(keys, indent=2, sort_keys=True).encode()
+    encrypted = fernet.encrypt(data)
+    API_KEYS_FILE.write_bytes(encrypted)
 
 
 def generate_api_key(test_mode: bool = False, plan: str = "pro") -> str:
