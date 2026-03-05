@@ -329,10 +329,11 @@ def test_webhook_no_secrets_returns_503(client, monkeypatch):
 
 # --- /v1/keys/setup (payment mode) ---
 
-def test_setup_key_payment_mode(client, monkeypatch):
-    """Checkout session créée en mode payment avec montant et line_items."""
+def test_setup_key_subscription_mode(client, monkeypatch):
+    """Checkout session créée en mode subscription avec price_id Pro."""
     import trust_layer.app as app_mod
     monkeypatch.setattr(app_mod, "STRIPE_TEST_KEY", "sk_test_fake")
+    monkeypatch.setattr(app_mod, "STRIPE_PRO_PRICE_ID", "price_test_pro_monthly")
 
     mock_customer = MagicMock()
     mock_customer.id = "cus_test_setup"
@@ -350,85 +351,54 @@ def test_setup_key_payment_mode(client, monkeypatch):
         r = client.post("/v1/keys/setup", json={
             "email": "pro@test.com",
             "mode": "test",
-            "amount": 10.0,
         })
 
     assert r.status_code == 200
     data = r.json()
     assert data["checkout_url"] == "https://checkout.stripe.com/pay/cs_test_xxx"
-    assert data["amount"] == 10.0
-    assert data["proofs_included"] == 100
+    assert data["plan"] == "pro"
+    assert data["price_monthly_eur"] == 29.0
+    assert data["proofs_per_month"] == 5000
 
-    # Vérifier que le Checkout est en mode payment (pas setup)
+    # Vérifier que le Checkout est en mode subscription
     call_kwargs = mock_create.call_args.kwargs
-    assert call_kwargs["mode"] == "payment"
-    assert call_kwargs["line_items"][0]["price_data"]["unit_amount"] == 1000
-    assert call_kwargs["payment_intent_data"]["setup_future_usage"] == "off_session"
-    assert call_kwargs["metadata"]["product"] == "trust_layer_pro_setup"
-    assert call_kwargs["metadata"]["credit_amount"] == "10.0"
+    assert call_kwargs["mode"] == "subscription"
+    assert call_kwargs["line_items"][0]["price"] == "price_test_pro_monthly"
+    assert call_kwargs["metadata"]["product"] == "trust_layer_pro_subscription"
 
 
-def test_setup_key_amount_too_low(client, monkeypatch):
-    """Montant inférieur au minimum rejeté (vérifié avant d'appeler Stripe)."""
+def test_setup_key_no_price_id_returns_500(client, monkeypatch):
+    """Sans price_id configuré, retourne 500."""
     import trust_layer.app as app_mod
     monkeypatch.setattr(app_mod, "STRIPE_TEST_KEY", "sk_test_fake")
-    r = client.post("/v1/keys/setup", json={
-        "email": "pro@test.com",
-        "mode": "test",
-        "amount": 5.0,
-    })
-    assert r.status_code == 400
-    assert r.json()["error"]["code"] == "invalid_amount"
+    monkeypatch.setattr(app_mod, "STRIPE_PRO_PRICE_ID", "")
+    r = client.post("/v1/keys/setup", json={"email": "pro@test.com", "mode": "test"})
+    assert r.status_code == 500
+    assert r.json()["error"]["code"] == "internal_error"
 
 
-def test_setup_key_defaults_to_10(client, monkeypatch):
-    """Sans amount, défaut à 10€."""
-    import trust_layer.app as app_mod
-    monkeypatch.setattr(app_mod, "STRIPE_TEST_KEY", "sk_test_fake")
+# --- Webhook checkout.session.completed — abonnement Pro ---
 
-    mock_customer = MagicMock()
-    mock_customer.id = "cus_test_default"
-    mock_customer_list = MagicMock()
-    mock_customer_list.data = []
-
-    mock_session = MagicMock()
-    mock_session.url = "https://checkout.stripe.com/pay/cs_test_yyy"
-    mock_session.id = "cs_test_yyy"
-
-    with patch("stripe.Customer.list", return_value=mock_customer_list), \
-         patch("stripe.Customer.create", return_value=mock_customer), \
-         patch("stripe.checkout.Session.create", return_value=mock_session) as mock_create:
-
-        r = client.post("/v1/keys/setup", json={"email": "pro@test.com", "mode": "test"})
-
-    assert r.status_code == 200
-    call_kwargs = mock_create.call_args.kwargs
-    assert call_kwargs["line_items"][0]["price_data"]["unit_amount"] == 1000  # 10€
-
-
-# --- Webhook checkout.session.completed — créditation Pro ---
-
-def test_webhook_pro_setup_credits_account(client, monkeypatch):
-    """Webhook Pro setup: crée la clé ET crédite le compte."""
+def test_webhook_pro_subscription_creates_key(client, monkeypatch):
+    """Webhook Pro subscription: crée la clé avec plan pro, pas de crédits."""
     import trust_layer.app as app_mod
     monkeypatch.setattr(app_mod, "STRIPE_WEBHOOK_SECRET_TEST", "whsec_test_fake")
 
     from trust_layer.credits import get_balance
 
     event = {
-        "id": "evt_test_webhook_pro_001",
+        "id": "evt_test_webhook_pro_sub_001",
         "type": "checkout.session.completed",
         "livemode": False,
         "data": {
             "object": {
-                "customer": "cus_webhook_pro_test",
-                "customer_details": {"email": "webhook_pro@test.com"},
-                "payment_intent": "pi_webhook_pro_001",
-                "subscription": None,
+                "customer": "cus_webhook_pro_sub_test",
+                "customer_details": {"email": "webhook_pro_sub@test.com"},
+                "payment_intent": None,
+                "subscription": "sub_pro_test_001",
                 "metadata": {
-                    "product": "trust_layer_pro_setup",
-                    "email": "webhook_pro@test.com",
-                    "credit_amount": "10.0",
+                    "product": "trust_layer_pro_subscription",
+                    "email": "webhook_pro_sub@test.com",
                 },
             }
         },
@@ -445,18 +415,17 @@ def test_webhook_pro_setup_credits_account(client, monkeypatch):
     assert r.status_code == 200
     assert r.json()["received"] is True
 
-    # La clé a été créée — trouver via load_api_keys
     from trust_layer.keys import load_api_keys
     keys = load_api_keys()
-    pro_key = None
-    for key_str, info in keys.items():
-        if info.get("email") == "webhook_pro@test.com":
-            pro_key = key_str
-            break
-
+    pro_key = next((k for k, v in keys.items() if v.get("email") == "webhook_pro_sub@test.com"), None)
     assert pro_key is not None, "Pro API key not created by webhook"
+
+    # Pas de crédits ajoutés — modèle subscription quota mensuel
     balance = get_balance(pro_key)
-    assert balance == 10.0, f"Expected balance 10.0, got {balance}"
+    assert balance == 0.0, f"Expected no credits (subscription model), got {balance}"
+
+    # Plan correctement défini
+    assert keys[pro_key]["plan"] in ("mcp_pro_live", "mcp_pro_test")
 
 
 # --- /v1/keys/portal ---

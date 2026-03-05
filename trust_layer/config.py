@@ -38,6 +38,8 @@ def _load_secrets() -> None:
             "STRIPE_TEST_SECRET_KEY":         _stripe.get("test_secret_key", ""),
             "STRIPE_TL_WEBHOOK_SECRET":       _stripe.get("tl_webhook_secret", ""),
             "STRIPE_TL_WEBHOOK_SECRET_TEST":  _stripe.get("tl_webhook_secret_test", ""),
+            "STRIPE_PRO_PRICE_ID":             _stripe.get("pro_price_id", ""),
+            "STRIPE_PRO_PRODUCT_ID":           _stripe.get("pro_product_id", ""),
             "IMAP_USER":                      _smtp.get("user", "") or _smtp.get("imap_user", ""),
             "IMAP_PASSWORD":                  _smtp.get("password", "") or _smtp.get("imap_password", ""),
         }
@@ -72,6 +74,8 @@ STRIPE_LIVE_KEY = os.environ.get("STRIPE_LIVE_SECRET_KEY", "")
 STRIPE_TEST_KEY = os.environ.get("STRIPE_TEST_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET_LIVE = os.environ.get("STRIPE_TL_WEBHOOK_SECRET", os.environ.get("STRIPE_WEBHOOK_SECRET", ""))
 STRIPE_WEBHOOK_SECRET_TEST = os.environ.get("STRIPE_TL_WEBHOOK_SECRET_TEST", os.environ.get("STRIPE_WEBHOOK_SECRET_TEST", ""))
+STRIPE_PRO_PRICE_ID = os.environ.get("STRIPE_PRO_PRICE_ID", "")
+STRIPE_PRO_PRODUCT_ID = os.environ.get("STRIPE_PRO_PRODUCT_ID", "")
 
 # --- SMTP ---
 SMTP_HOST = os.environ.get("SMTP_HOST", "ssl0.ovh.net")

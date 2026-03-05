@@ -82,6 +82,9 @@ from .config import (
     OVERAGE_CAP_MIN,
     OVERAGE_CAP_MAX,
     OVERAGE_CAP_DEFAULT,
+
+    STRIPE_PRO_PRICE_ID,
+    STRIPE_PRO_PRODUCT_ID,
 )
 from .keys import (
     validate_api_key, create_api_key, deactivate_key_by_ref, is_test_key, is_free_key,
@@ -427,11 +430,10 @@ async def get_proof_tsr(proof_id: str):
 
 @app.post("/v1/keys/setup")
 async def setup_key(request: Request):
-    """Create a Stripe Checkout Session (payment mode) to buy initial credits and save card.
+    """Create a Stripe Checkout Session (subscription mode) for the Pro plan at 29 EUR/month.
 
-    The card is saved for future off-session charges (setup_future_usage=off_session).
-    Minimum amount: PRO_SETUP_MIN_AMOUNT EUR. This endpoint also serves as "replace card"
-    when called again with an existing customer email.
+    On success, Stripe fires checkout.session.completed with a subscription_id.
+    The webhook creates the API key and sends the welcome email.
     """
     try:
         body = await request.json()
@@ -453,19 +455,9 @@ async def setup_key(request: Request):
     if not sk:
         return _error_response("internal_error", f"Stripe {req_mode} key not configured", 500)
 
-    amount = body.get("amount", PRO_SETUP_MIN_AMOUNT)
-    try:
-        amount = float(amount)
-    except (TypeError, ValueError):
-        return _error_response("invalid_amount", "amount must be a number", 400)
-    if amount < PRO_SETUP_MIN_AMOUNT:
-        return _error_response(
-            "invalid_amount",
-            f"Minimum setup amount is {PRO_SETUP_MIN_AMOUNT:.0f} EUR ({int(PRO_SETUP_MIN_AMOUNT / PROOF_PRICE)} proofs)",
-            400,
-        )
-    if amount > MAX_CREDIT_PURCHASE:
-        return _error_response("invalid_amount", f"Maximum is {MAX_CREDIT_PURCHASE:.0f} EUR", 400)
+    price_id = STRIPE_PRO_PRICE_ID
+    if not price_id:
+        return _error_response("internal_error", "Stripe Pro price ID not configured", 500)
 
     try:
         customers = stripe.Customer.list(email=email, limit=1, api_key=sk)
@@ -474,38 +466,28 @@ async def setup_key(request: Request):
         else:
             customer = stripe.Customer.create(
                 email=email,
-                metadata={"source": "trust-layer-setup"},
+                metadata={"source": "trust-layer-pro"},
                 api_key=sk,
             )
 
-        proofs_count = int(amount / PROOF_PRICE)
         session = stripe.checkout.Session.create(
-            mode="payment",
+            mode="subscription",
             payment_method_types=["card"],
             customer=customer.id,
-            line_items=[{
-                "price_data": {
-                    "currency": "eur",
-                    "product_data": {
-                        "name": "ArkForge Trust Layer — Pro Credits",
-                        "description": f"{proofs_count} certified proofs ({amount:.0f} EUR)",
-                    },
-                    "unit_amount": int(round(amount * 100)),
-                },
-                "quantity": 1,
-            }],
-            payment_intent_data={
-                "setup_future_usage": "off_session",
-                "description": f"ArkForge Trust Layer — {amount:.2f} EUR credits",
-                "metadata": {"product": "trust_layer_pro_setup", "email": email},
-            },
+            line_items=[{"price": price_id, "quantity": 1}],
             success_url=f"https://arkforge.fr/{lang}/tl-pro-success.html?session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=f"https://arkforge.fr/{lang}/pricing.html",
             metadata={
-                "product": "trust_layer_pro_setup",
+                "product": "trust_layer_pro_subscription",
                 "email": email,
                 "stripe_mode": req_mode,
-                "credit_amount": str(amount),
+                "lang": lang,
+            },
+            subscription_data={
+                "metadata": {
+                    "product": "trust_layer_pro_subscription",
+                    "email": email,
+                }
             },
             api_key=sk,
         )
@@ -515,8 +497,9 @@ async def setup_key(request: Request):
             "session_id": session.id,
             "customer_id": customer.id,
             "mode": req_mode,
-            "amount": amount,
-            "proofs_included": proofs_count,
+            "plan": "pro",
+            "price_monthly_eur": 29.0,
+            "proofs_per_month": 5000,
         }
 
     except stripe.StripeError as e:
@@ -890,23 +873,18 @@ async def stripe_webhook(request: Request):
         subscription_id = data.get("subscription", "")
         metadata = data.get("metadata", {})
         ref_id = subscription_id or payment_intent_id or customer_id
+        product = metadata.get("product", "")
 
         if customer_id or customer_email:
-            api_key = create_api_key(customer_id, ref_id, customer_email, test_mode=is_test)
-            logger.info("API key created for %s (ref=%s)", customer_email, ref_id)
-
-            # Pro setup: credit the account with the purchased amount
-            if metadata.get("product") == "trust_layer_pro_setup":
-                try:
-                    credit_amount = float(metadata.get("credit_amount", 0))
-                    if credit_amount > 0:
-                        add_credits(api_key, credit_amount, payment_intent_id or ref_id)
-                        logger.info(
-                            "Credits added: %.2f EUR for %s (pi=%s)",
-                            credit_amount, customer_email, payment_intent_id,
-                        )
-                except (ValueError, TypeError) as e:
-                    logger.error("Failed to add credits after checkout: %s", e)
+            if product == "trust_layer_pro_subscription":
+                # Abonnement Pro 29 EUR/mois — créer la clé API avec plan pro
+                plan = "mcp_pro_live" if not is_test else "mcp_pro_test"
+                api_key = create_api_key(customer_id, ref_id, customer_email, test_mode=is_test, plan=plan)
+                logger.info("Pro subscription activated for %s (sub=%s)", customer_email, subscription_id)
+            else:
+                # Fallback : free tier ou checkout inconnu
+                api_key = create_api_key(customer_id, ref_id, customer_email, test_mode=is_test)
+                logger.info("API key created for %s (ref=%s, product=%s)", customer_email, ref_id, product)
 
             try:
                 send_welcome_email(customer_email, api_key)
