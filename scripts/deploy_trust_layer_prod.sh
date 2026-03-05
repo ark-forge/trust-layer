@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# deploy_trust_layer_prod.sh — Deploy Trust Layer to production with gates + rollback + release
+# deploy_trust_layer_prod.sh — Deploy Trust Layer to production with gates + staged rollout + rollback
 #
 # Usage: ./scripts/deploy_trust_layer_prod.sh [--minor|--major] [--force] [--skip-smoke]
 #
@@ -9,6 +9,12 @@
 #   --minor        Bump minor version (1.0.x → 1.1.0)
 #   --major        Bump major version (1.x.x → 2.0.0)
 #   (default)      Bump patch (1.0.2 → 1.0.3)
+#
+# Staged rollout (blue/green with existing HA infra):
+#   Phase 2a — Deploy to LOCAL FAILOVER first (direct health check, read-only canary)
+#   Phase 2b — Canary validation on failover (health + version + read endpoints)
+#   Phase 2c — Deploy to OVH PRIMARY (nginx falls back to validated failover during restart)
+#   Phase 2.5 — Full smoke test against production (nginx → OVH)
 
 set -euo pipefail
 
@@ -141,7 +147,7 @@ log "Gate 4/4: trust-layer tests OK"
 log "All gates PASSED"
 
 # ============================================================
-# PHASE 2 — DEPLOY
+# PHASE 2 — DEPLOY (staged rollout: failover first → OVH primary)
 # ============================================================
 log "--- Phase 2: Deploy ---"
 
@@ -154,27 +160,102 @@ log "git pull origin main..."
 git pull origin main >> "$LOG_FILE" 2>&1
 
 NEW_COMMIT=$(git rev-parse HEAD)
-if [ "$NEW_COMMIT" = "$PREV_COMMIT" ]; then
-    log "No new commits to deploy. Exiting."
+log "Local commit: $NEW_COMMIT"
+
+# Vérifier si OVH est déjà sur ce commit (évite un restart inutile mais ne bloque pas)
+OVH_COMMIT=$(ssh -o ConnectTimeout=10 "$OVH_HOST" \
+    "GIT_DIR=${OVH_REPO}/.git git rev-parse HEAD 2>/dev/null" 2>/dev/null || echo "unknown")
+log "OVH commit: $OVH_COMMIT"
+
+if [ "$NEW_COMMIT" = "$PREV_COMMIT" ] && [ "$OVH_COMMIT" = "$NEW_COMMIT" ]; then
+    log "Rien à déployer — local et OVH sont déjà sur $NEW_COMMIT. Exiting."
     exit 0
 fi
-log "New commit: $NEW_COMMIT"
 
-# Restart local failover service
-log "Restarting local $SERVICE (failover)..."
+# ----------------------------------------------------------------
+# Phase 2a — Deploy to LOCAL FAILOVER first (direct health check)
+# ----------------------------------------------------------------
+log "--- Phase 2a: Deploy to local failover ---"
 sudo systemctl restart "$SERVICE"
+sleep 5
 
-# Deploy to OVH primary (nginx routes to OVH — must update it too)
-log "Deploying to OVH primary ($OVH_HOST)..."
+FAILOVER_HEALTHY=false
+for i in 1 2 3; do
+    STATUS_FA=$(curl -s --max-time 5 "http://127.0.0.1:8100/v1/health" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    print(d.get('status', 'error'))
+except:
+    print('error')
+" 2>/dev/null || echo "error")
+    log "Phase 2a attempt $i/3: status=$STATUS_FA"
+    if [ "$STATUS_FA" = "ok" ]; then
+        FAILOVER_HEALTHY=true
+        break
+    fi
+    sleep 5
+done
+
+if [ "$FAILOVER_HEALTHY" = false ]; then
+    log "Phase 2a FAILED — local failover not responding after restart"
+    git reset --hard "$PREV_COMMIT" >> "$LOG_FILE" 2>&1
+    sudo systemctl restart "$SERVICE"
+    fail "Phase 2a FAILED — rolled back local to $PREV_COMMIT (OVH untouched)"
+fi
+log "Phase 2a OK — local failover healthy"
+
+# ----------------------------------------------------------------
+# Phase 2b — Canary validation on failover (read-only, direct)
+# ----------------------------------------------------------------
+log "--- Phase 2b: Canary validation on failover ---"
+CANARY_OK=true
+
+FAILOVER_VERSION=$(curl -s --max-time 5 "http://127.0.0.1:8100/v1/health" | python3 -c "
+import sys, json
+try: print(json.load(sys.stdin).get('version', ''))
+except: print('')
+" 2>/dev/null || echo "")
+log "Phase 2b: failover version=$FAILOVER_VERSION"
+
+CANARY_PRICING=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "http://127.0.0.1:8100/v1/pricing")
+log "Phase 2b: /v1/pricing → HTTP $CANARY_PRICING"
+if [ "$CANARY_PRICING" != "200" ]; then CANARY_OK=false; fi
+
+CANARY_ROOT=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "http://127.0.0.1:8100/")
+log "Phase 2b: / → HTTP $CANARY_ROOT"
+if [ "$CANARY_ROOT" != "200" ]; then CANARY_OK=false; fi
+
+if [ "$CANARY_OK" = false ]; then
+    log "Phase 2b FAILED — rolling back local only (OVH untouched)"
+    git reset --hard "$PREV_COMMIT" >> "$LOG_FILE" 2>&1
+    sudo systemctl restart "$SERVICE"
+    fail "Phase 2b canary FAILED — rolled back local to $PREV_COMMIT"
+fi
+log "Phase 2b OK — canary passed (version=$FAILOVER_VERSION)"
+
+# ----------------------------------------------------------------
+# Phase 2c — Deploy to OVH PRIMARY
+# (nginx falls back to validated failover during OVH restart)
+# ----------------------------------------------------------------
+log "--- Phase 2c: Deploy to OVH primary ($OVH_HOST) ---"
 if ssh -o ConnectTimeout=10 "$OVH_HOST" \
     "GIT_DIR=${OVH_REPO}/.git GIT_WORK_TREE=${OVH_REPO} git pull origin main 2>&1 && \
      sudo systemctl restart arkforge-trust-layer 2>&1" >> "$LOG_FILE" 2>&1; then
-    log "OVH deploy OK"
+    log "Phase 2c: OVH deploy OK"
 else
-    log "WARN: OVH deploy failed — rolling back local, aborting"
-    git checkout "$PREV_COMMIT" >> "$LOG_FILE" 2>&1
+    log "Phase 2c FAILED — rolling back both servers"
+    git reset --hard "$PREV_COMMIT" >> "$LOG_FILE" 2>&1
     sudo systemctl restart "$SERVICE"
-    fail "OVH deploy FAILED — rolled back local to $PREV_COMMIT"
+    if ssh -o ConnectTimeout=10 "$OVH_HOST" \
+        "cd ${OVH_REPO} && git reset --hard $PREV_COMMIT && sudo systemctl restart arkforge-trust-layer" \
+        >> "$LOG_FILE" 2>&1; then
+        log "Rollback OVH OK"
+    else
+        log "CRITICAL: Rollback OVH FAILED — intervention manuelle requise"
+        telegram_notify "CRITICAL: rollback OVH FAILED après Phase 2c — intervention manuelle requise"
+    fi
+    fail "Phase 2c OVH deploy FAILED — rolled back both servers to $PREV_COMMIT"
 fi
 
 # Health check via nginx (validates full stack: nginx → OVH primary, 6 × 5s = 30s)
@@ -202,13 +283,33 @@ except Exception as ex:
 done
 
 if [ "$HEALTHY" = false ]; then
-    log "Health check FAILED — rolling back local to $PREV_COMMIT"
+    log "Health check FAILED — rolling back both servers to $PREV_COMMIT"
     git reset --hard "$PREV_COMMIT" >> "$LOG_FILE" 2>&1
     sudo systemctl restart "$SERVICE"
-    # Tenter rollback OVH aussi
-    ssh -o ConnectTimeout=10 "$OVH_HOST" \
+    if ssh -o ConnectTimeout=10 "$OVH_HOST" \
         "cd ${OVH_REPO} && git reset --hard $PREV_COMMIT && sudo systemctl restart arkforge-trust-layer" \
-        >> "$LOG_FILE" 2>&1 || log "WARN: Rollback OVH non confirmé"
+        >> "$LOG_FILE" 2>&1; then
+        log "Rollback OVH OK"
+    else
+        log "CRITICAL: Rollback OVH FAILED — intervention manuelle requise"
+        telegram_notify "CRITICAL: rollback OVH FAILED après health check — intervention manuelle requise"
+    fi
+    # Vérification post-rollback (2 × 5s)
+    ROLLBACK_OK=false
+    for i in 1 2; do
+        sleep 5
+        RB_STATUS=$(curl -s --max-time 5 "$HEALTH_URL" | python3 -c "
+import sys, json
+try: print(json.load(sys.stdin).get('status',''))
+except: print('error')
+" 2>/dev/null || echo "error")
+        if [ "$RB_STATUS" = "ok" ]; then ROLLBACK_OK=true; break; fi
+    done
+    if [ "$ROLLBACK_OK" = true ]; then
+        log "Service opérationnel après rollback"
+    else
+        log "WARN: Service ne répond pas après rollback — vérification manuelle requise"
+    fi
     fail "Health check FAILED — rolled back to $PREV_COMMIT"
 fi
 
