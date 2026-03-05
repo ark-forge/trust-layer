@@ -260,6 +260,11 @@ log "Phase 2b OK — canary passed (version=$FAILOVER_VERSION)"
 # (nginx falls back to validated failover during OVH restart)
 # ----------------------------------------------------------------
 log "--- Phase 2c: Deploy to OVH primary ($OVH_HOST) ---"
+# Sync vault secrets before deploy (ensures SMTP, Stripe keys are current on OVH)
+VAULT_FILE="/opt/claude-ceo/config/vault.json.enc"
+rsync -az --no-group -e "ssh -o ConnectTimeout=10" "$VAULT_FILE" "${OVH_HOST}:${VAULT_FILE}" >> "$LOG_FILE" 2>&1 \
+    && log "Phase 2c: vault synced to OVH" \
+    || log "WARN: vault sync failed (non-blocking)"
 if ssh -o ConnectTimeout=10 "$OVH_HOST" \
     "GIT_DIR=${OVH_REPO}/.git GIT_WORK_TREE=${OVH_REPO} git pull origin main 2>&1 && \
      sudo systemctl restart arkforge-trust-layer 2>&1" >> "$LOG_FILE" 2>&1; then
