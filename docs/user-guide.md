@@ -228,6 +228,35 @@ curl -X POST https://arkforge.fr/trust/v1/keys/setup \
 
 ---
 
+##### B.3 — Manage your subscription
+
+Open the Stripe Billing Portal to update your payment method, download invoices, or cancel:
+
+```bash
+curl -X POST https://arkforge.fr/trust/v1/keys/portal \
+  -H "X-Api-Key: mcp_pro_xxx..." \
+  -H "Content-Type: application/json" \
+  -d '{}'
+# Returns: {"portal_url": "https://billing.stripe.com/..."}
+```
+
+Open `portal_url` in a browser.
+
+**Subscription lifecycle:**
+
+| Event | What happens |
+|-------|-------------|
+| Subscription started | API key created and emailed |
+| Monthly renewal | Key stays active, no action needed |
+| Payment failed (Stripe retry) | Key stays active during retry period |
+| Subscription suspended (payment exhausted) | Key deactivated (HTTP 401) |
+| Payment resolved → invoice paid | **Key automatically reactivated** — no action required |
+| Subscription cancelled | Key deactivated permanently |
+
+> If your key is suspended due to a failed payment, update your card in the billing portal. Once Stripe collects the payment, your key is reactivated automatically within seconds.
+
+---
+
 ### Step 2 — Call the Trust Layer
 
 #### Mode A — Transaction proof
@@ -449,6 +478,8 @@ ArkForge sends automatic email notifications so your agent never stops silently:
 | First overage proof of the month (opt-in) | "Overage billing active — monthly quota exceeded" | Once per month |
 | 80% of overage monthly cap consumed (opt-in) | "Overage alert — 80% of monthly cap used" | Once per threshold |
 | Overage cap reached — requests blocked (opt-in) | "Overage cap reached — requests blocked" | Once per cap event |
+| Subscription payment failed (Stripe retry pending) | *(no email — key stays active during retry period)* | — |
+| Key suspended after payment exhausted | *(key returns HTTP 401 — update card in billing portal)* | — |
 
 These emails are sent to the address used during key setup. They include a ready-to-run `curl` command to recharge or adjust settings immediately — no browser required.
 
