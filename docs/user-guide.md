@@ -101,9 +101,9 @@ while True:
 
 | Step | Who | Action |
 |------|-----|--------|
-| Initial setup | Human | Open Stripe Checkout, subscribe (Pro €39/month or Enterprise €149/month) |
-| Overage top-up | Agent | `POST /v1/credits/buy` — automatic when monthly quota exceeded |
-| Execute tasks | Agent | `POST /v1/proxy` — consumes monthly quota; overages billed per proof |
+| Initial setup | Human | Open Stripe Checkout, subscribe (Pro €29/month or Enterprise €149/month) |
+| Execute tasks | Agent | `POST /v1/proxy` — included in monthly quota |
+| Overage credits (opt-in) | Agent | `POST /v1/credits/buy` — only if overage billing is enabled |
 
 ---
 
@@ -164,7 +164,7 @@ No credit card required.
 
 ---
 
-#### Option B — Pro key (€39/month, 5,000 proofs)
+#### Option B — Pro key (€29/month, 5,000 proofs)
 
 ##### B.1 — Test mode (for development)
 
@@ -173,7 +173,7 @@ curl -X POST https://arkforge.fr/trust/v1/keys/setup \
   -H "Content-Type: application/json" \
   -d '{
     "email": "you@example.com",
-    "amount": 10,
+    "plan": "pro",
     "mode": "test"
   }'
 ```
@@ -182,7 +182,7 @@ curl -X POST https://arkforge.fr/trust/v1/keys/setup \
 ```json
 {
   "checkout_url": "https://checkout.stripe.com/c/pay/cs_test_...",
-  "proofs_included": 100,
+  "plan": "pro",
   "mode": "test"
 }
 ```
@@ -196,7 +196,7 @@ curl -X POST https://arkforge.fr/trust/v1/keys/setup \
 
 ---
 
-##### B.2 — Pro production (€39/month, 5,000 proofs/month)
+##### B.2 — Pro production (€29/month, 5,000 proofs/month)
 
 ```bash
 curl -X POST https://arkforge.fr/trust/v1/keys/setup \
@@ -219,12 +219,12 @@ curl -X POST https://arkforge.fr/trust/v1/keys/setup \
 **Instructions:**
 1. Open `checkout_url` in a browser
 2. Enter your real card details
-3. Confirm → €39/month subscription started
+3. Confirm → €29/month subscription started
 4. Receive `mcp_pro_xxx...` by email
 
 **Note:** This is the **only manual step**. Everything after is automatic.
 
-**Overages:** usage beyond 5,000 proofs/month is billed at €0.01/proof via the card on file.
+**Overages (opt-in):** by default, requests beyond 5,000 proofs/month are rejected (HTTP 429). You can opt in to overage billing at 0.01 EUR/proof from prepaid credits — enable at `POST /v1/keys/overage`.
 
 ---
 
@@ -627,9 +627,9 @@ result = agent.execute_task("https://provider.com/api", {"task": "analyze"})
 | Plan | Cost | Monthly quota | Key prefix |
 |------|------|---------------|------------|
 | **Free** | Free | 500 proofs/month | `mcp_free_*` |
-| **Pro** | €39/month (+ €0.01/proof overage) | 5,000 proofs/month | `mcp_pro_*` |
-| **Enterprise** | €149/month (+ €0.005/proof overage) | 50,000 proofs/month | `mcp_ent_*` |
-| **Test** | 0.10 EUR/proof (Stripe test mode) | — | `mcp_test_*` |
+| **Pro** | €29/month (+ opt-in overage €0.01/proof) | 5,000 proofs/month | `mcp_pro_*` |
+| **Enterprise** | €149/month (+ opt-in overage €0.005/proof) | 50,000 proofs/month | `mcp_enterprise_*` |
+| **Test** | Stripe test mode | 100 proofs/day | `mcp_test_*` |
 
 Mode B can use a **Free key** — certification only, payment is external, no monthly quota consumed.
 
@@ -638,7 +638,7 @@ Mode B can use a **Free key** — certification only, payment is external, no mo
 ## Integration checklist
 
 ### Step 1 — Key
-- [ ] Free (500/month), Pro (€39/month, 5,000), or Enterprise (€149/month, 50,000)?
+- [ ] Free (500/month), Pro (€29/month, 5,000), or Enterprise (€149/month, 50,000)?
 - [ ] Test mode (development) or production?
 - [ ] Email received with `mcp_xxx...`?
 

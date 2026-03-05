@@ -147,12 +147,18 @@ TRUST_LAYER_BASE_URL = os.environ.get("TRUST_LAYER_BASE_URL", "https://arkforge.
 # --- RFC 3161 Timestamp Authority pool ---
 # Tried in order — first success wins. All are free public endpoints.
 # Primary: FreeTSA (community), Secondary: DigiCert (WebTrust), Tertiary: Sectigo (WebTrust).
-# eIDAS-qualified tier (qtsa.eu/AlfaTrust) to be added when first enterprise client requires it.
+# For eIDAS-qualified QTSP: set TSA_PRIMARY_URL + TSA_CA_FILE + TSA_CERT_FILE (on request).
 TSA_SERVERS = [
-    {"url": os.environ.get("TSA_PRIMARY_URL", "https://freetsa.org/tsr"),       "provider": "freetsa.org"},
+    {"url": os.environ.get("TSA_PRIMARY_URL", "https://freetsa.org/tsr"),       "provider": os.environ.get("TSA_PRIMARY_PROVIDER", "freetsa.org")},
     {"url": os.environ.get("TSA_SECONDARY_URL", "http://timestamp.digicert.com"), "provider": "digicert.com"},
     {"url": os.environ.get("TSA_TERTIARY_URL", "http://timestamp.sectigo.com"),   "provider": "sectigo.com"},
 ]
+
+_TSA_CERTS_DIR = BASE_DIR / "trust_layer" / "certs"
+# TSA verification certificates — configurable for custom/QTSP endpoints.
+# Defaults to bundled FreeTSA certs. Override with your TSA provider's certs.
+TSA_CA_FILE   = Path(os.environ.get("TSA_CA_FILE",   str(_TSA_CERTS_DIR / "cacert.pem")))
+TSA_CERT_FILE = Path(os.environ.get("TSA_CERT_FILE", str(_TSA_CERTS_DIR / "tsa.crt")))
 
 # --- Sigstore Rekor transparency log ---
 REKOR_URL = os.environ.get("REKOR_URL", "https://rekor.sigstore.dev")
