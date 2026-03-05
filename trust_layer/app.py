@@ -1073,6 +1073,8 @@ async def usage(
     api_key = _get_api_key(authorization, x_api_key)
     if not api_key:
         return _error_response("invalid_api_key", "API key required", 401)
+    if not validate_api_key(api_key):
+        return _error_response("invalid_api_key", "Invalid or inactive API key", 401)
     result = get_usage(api_key)
     # Add overage credit balance for subscription plans
     if not is_free_key(api_key) and not result.get("plan") == "test":
