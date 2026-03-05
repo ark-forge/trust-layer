@@ -1,4 +1,12 @@
-"""RFC 3161 Timestamp Authority — pool failover (FreeTSA → DigiCert → Sectigo)."""
+"""RFC 3161 Timestamp Authority — pool failover (FreeTSA → DigiCert → Sectigo).
+
+Custom TSA (including eIDAS-qualified QTSP) is supported via env vars:
+  TSA_PRIMARY_URL      — TSA endpoint URL
+  TSA_PRIMARY_PROVIDER — human-readable provider name recorded in proofs
+  TSA_CA_FILE          — CA cert bundle for TSR verification (PEM)
+  TSA_CERT_FILE        — TSA signing cert for TSR verification (PEM)
+Defaults to bundled FreeTSA certs when not set.
+"""
 
 import logging
 import subprocess
@@ -10,10 +18,6 @@ from typing import Optional, Tuple
 import httpx
 
 logger = logging.getLogger("trust_layer.timestamps")
-
-_CERTS_DIR = Path(__file__).parent / "certs"
-_TSA_CERT = _CERTS_DIR / "tsa.crt"   # FreeTSA cert — used by verify_tsr
-_CA_CERT  = _CERTS_DIR / "cacert.pem"  # FreeTSA CA  — used by verify_tsr
 
 
 def _submit_hash_once(hash_hex: str, tsa_url: str) -> Optional[bytes]:
@@ -94,7 +98,13 @@ def submit_hash(hash_hex: str) -> Optional[Tuple[bytes, str]]:
 
 
 def verify_tsr(tsr_bytes: bytes, hash_hex: str) -> dict:
-    """Verify a .tsr file against the original hash. Returns {verified, details}."""
+    """Verify a .tsr file against the original hash. Returns {verified, details}.
+
+    Uses TSA_CA_FILE and TSA_CERT_FILE from config (configurable via env vars).
+    Defaults to bundled FreeTSA certs.
+    """
+    from .config import TSA_CA_FILE, TSA_CERT_FILE
+
     result = {"verified": False, "details": None}
     data_path = None
     try:
@@ -117,11 +127,11 @@ def verify_tsr(tsr_bytes: bytes, hash_hex: str) -> dict:
         # Write TSR
         Path(tsr_path).write_bytes(tsr_bytes)
 
-        # Verify
+        # Verify against configured CA (FreeTSA by default, QTSP cert if configured)
         proc = subprocess.run(
             ["openssl", "ts", "-verify", "-data", data_path,
-             "-in", tsr_path, "-CAfile", str(_CA_CERT),
-             "-untrusted", str(_TSA_CERT)],
+             "-in", tsr_path, "-CAfile", str(TSA_CA_FILE),
+             "-untrusted", str(TSA_CERT_FILE)],
             capture_output=True, text=True, timeout=10,
         )
         if proc.returncode == 0 and "Verification: OK" in proc.stdout:

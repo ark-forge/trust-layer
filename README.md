@@ -553,7 +553,7 @@ Upstream API (any HTTPS endpoint)
 
 If FreeTSA is unavailable, DigiCert takes over automatically within the same background task. The `timestamp_authority.provider` field in the proof records which TSA was actually used. The pool is configured via env vars (`TSA_PRIMARY_URL`, `TSA_SECONDARY_URL`, `TSA_TERTIARY_URL`). If all TSA servers fail, the proof remains valid via Ed25519 + Sigstore Rekor anchoring.
 
-> **eIDAS-qualified timestamps (QTSP):** For legal proceedings requiring a qualified electronic timestamp under eIDAS Regulation (e.g. Article 41 evidentiary value), ArkForge supports injecting a QTSP-certified endpoint as the primary TSA — no code change required. Available as a custom arrangement on top of any plan. [Contact us](mailto:contact@arkforge.fr) for pricing and setup.
+> **eIDAS-qualified timestamps (QTSP):** For legal proceedings requiring a qualified electronic timestamp under eIDAS Regulation (e.g. Article 41 evidentiary value), ArkForge supports injecting a QTSP-certified endpoint as the primary TSA — no code change required, configuration only (`TSA_PRIMARY_URL`, `TSA_CA_FILE`, `TSA_CERT_FILE`). The QTSP provider's certificates must be supplied. Available as a custom arrangement on top of any plan. [Contact us](mailto:contact@arkforge.fr) for pricing and setup.
 
 ## New client onboarding
 
