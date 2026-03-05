@@ -51,7 +51,7 @@ curl -X POST https://arkforge.fr/trust/v1/keys/setup \
 # Enterprise production (€149/month)
 curl -X POST https://arkforge.fr/trust/v1/keys/setup \
   -d '{"email": "you@example.com", "plan": "enterprise"}'
-# → Open checkout_url, real card → mcp_enterprise_xxx by email
+# → Open checkout_url, real card → mcp_ent_xxx by email
 ```
 
 ---
@@ -128,7 +128,7 @@ if 'provider_payment' in result['proof']:
 
 | | Free | Pro | Enterprise | Test |
 |---|------|-----|------------|------|
-| **Key prefix** | `mcp_free_*` | `mcp_pro_*` | `mcp_enterprise_*` | `mcp_test_*` |
+| **Key prefix** | `mcp_free_*` | `mcp_pro_*` | `mcp_ent_*` | `mcp_test_*` |
 | **Monthly price** | Free | €29/month | €149/month | Stripe test mode |
 | **Monthly quota** | 500 proofs | 5,000 proofs | 50,000 proofs | 100/day |
 | **Overage (opt-in)** | — | 0.01 EUR/proof | 0.005 EUR/proof | — |

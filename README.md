@@ -581,7 +581,7 @@ curl -X POST https://arkforge.fr/trust/v1/keys/setup \
 # Returns: {"checkout_url": "https://checkout.stripe.com/...", "plan": "pro"}
 ```
 
-Open `checkout_url` in a browser — enter a card and confirm. Stripe activates the subscription and fires a webhook: Trust Layer creates the API key (`mcp_pro_...` or `mcp_enterprise_...`) and emails it to the client.
+Open `checkout_url` in a browser — enter a card and confirm. Stripe activates the subscription and fires a webhook: Trust Layer creates the API key (`mcp_pro_...` or `mcp_ent_...`) and emails it to the client.
 
 For test mode, add `"mode": "test"` and use Stripe test card `4242 4242 4242 4242`. Use `"plan": "enterprise"` for the Enterprise plan.
 
@@ -668,7 +668,7 @@ Free keys (`mcp_free_*`) do not use credits — they have a monthly quota of 500
 |--------|------|---------------|-------|-----------------|-----------|
 | `mcp_free_*` | Free | Free | 500 proofs/month | Not available | 3 (Ed25519, RFC 3161 TSA, Sigstore Rekor) |
 | `mcp_pro_*` | Pro | €29/month | 5,000 proofs/month | 0.01 EUR/proof (€5–€100 cap) | 3 (Ed25519, RFC 3161 TSA, Sigstore Rekor) |
-| `mcp_enterprise_*` | Enterprise | €149/month | 50,000 proofs/month | 0.005 EUR/proof (€5–€100 cap) | 3 (Ed25519, RFC 3161 TSA, Sigstore Rekor) |
+| `mcp_ent_*` | Enterprise | €149/month | 50,000 proofs/month | 0.005 EUR/proof (€5–€100 cap) | 3 (Ed25519, RFC 3161 TSA, Sigstore Rekor) |
 | `mcp_test_*` | Test | Stripe test mode | 100 proofs/day | Not available | 3 (Ed25519, RFC 3161 TSA, Sigstore Rekor) |
 
 The proxy auto-selects the right plan, witnesses, and rate limits based on the API key prefix. Free tier skips Stripe entirely (no credit card required). Pro and Enterprise keys are created automatically after Stripe subscription checkout. Test mode uses Stripe test keys (card `4242 4242 4242 4242`).
@@ -685,7 +685,33 @@ For enterprises with specific regulatory requirements:
 | On-premise deployment | Self-host with your own signing key and TSA pool — see Self-hosting section |
 | Volume above 50,000 proofs/month | Negotiated contract — [contact us](mailto:contact@arkforge.fr) |
 
-## Conformance testing
+## Security
+
+### SSRF protection
+
+The proxy endpoint only forwards to `https://` targets. Private and reserved IP ranges are blocked at validation time (before any rate limit check or DNS resolution):
+
+- RFC 1918: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`
+- Loopback: `127.0.0.0/8`, `::1/128`
+- Link-local / cloud metadata: `169.254.0.0/16` (AWS/GCP/Azure IMDS), `fe80::/10`
+- CGNAT: `100.64.0.0/10` (RFC 6598)
+- IPv4-mapped IPv6: `::ffff:0:0/96`
+- 6to4 tunneling: `2002::/16`
+- IPv6 unique local: `fc00::/7`
+
+A DNS rebinding guard resolves hostnames at request time (after syntactic validation) and re-checks every resolved address against the blocklist.
+
+### Security smoke test
+
+A full security smoke test (`scripts/security_smoke_test.py`) covers 55 checks: auth bypass, SSRF vectors, input validation, path traversal, webhook replay, information disclosure, and method restrictions. Run it against any deployment:
+
+```bash
+python3 scripts/security_smoke_test.py --url https://arkforge.fr/trust --key mcp_free_xxx
+```
+
+All 55 checks pass on the current production deployment.
+
+### Conformance testing
 
 The chain hash algorithm and proof structure are defined in the [ArkForge Proof Specification](https://github.com/ark-forge/proof-spec). The Trust Layer includes conformance tests that validate against the spec's test vectors:
 
