@@ -99,18 +99,18 @@ from trust_layer.keys import create_api_key, load_api_keys, save_api_keys
 from trust_layer.config import STRIPE_WEBHOOK_SECRET_LIVE, STRIPE_WEBHOOK_SECRET_TEST
 
 # Clés de test
-fk = create_api_key('', 'smoke_free', 'smoke_free@arkforge.fr', plan='free')
-pk = create_api_key('cus_smoke', 'smoke_pro', 'smoke_pro@arkforge.fr', plan='pro')
+fk = create_api_key('', 'smoke_free', 'smoke_free@smoke.invalid', plan='free')
+pk = create_api_key('cus_smoke', 'smoke_pro', 'smoke_pro@smoke.invalid', plan='pro')
 
 # Clé inactive pour tester le rejet
-ik = create_api_key('', 'smoke_inactive', 'smoke_inactive@arkforge.fr', plan='free')
+ik = create_api_key('', 'smoke_inactive', 'smoke_inactive@smoke.invalid', plan='free')
 keys = load_api_keys()
 if ik in keys:
     keys[ik]['active'] = False
     save_api_keys(keys)
 
 # Clé pro avec subscription ref (pour webhook invoice.paid)
-wk = create_api_key('cus_smoke_wh', 'sub_smoke_wh_001', 'smoke_wh@arkforge.fr', plan='pro')
+wk = create_api_key('cus_smoke_wh', 'sub_smoke_wh_001', 'smoke_wh@smoke.invalid', plan='pro')
 keys2 = load_api_keys()
 if wk in keys2:
     keys2[wk]['active'] = False
