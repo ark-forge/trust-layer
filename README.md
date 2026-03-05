@@ -701,6 +701,26 @@ The proxy endpoint only forwards to `https://` targets. Private and reserved IP 
 
 A DNS rebinding guard resolves hostnames at request time (after syntactic validation) and re-checks every resolved address against the blocklist.
 
+### Network exposure
+
+Uvicorn **must** bind to `127.0.0.1`, not `0.0.0.0`. The systemd template above enforces this. Binding to `0.0.0.0` exposes uvicorn directly (no TLS, no rate limiting, no nginx security headers). nginx proxies `https://your-domain/trust/` → `http://127.0.0.1:8100/` and is the only public entry point.
+
+Verify after any deployment:
+
+```bash
+ss -tlnp | grep 8100
+# Expected: 127.0.0.1:8100   (not 0.0.0.0:8100)
+```
+
+### Dependency CVE scanning
+
+```bash
+pip install pip-audit
+pip-audit   # scans installed packages against known CVEs
+```
+
+Run after any `pip install` or dependency update.
+
 ### Security smoke test
 
 A full security smoke test (`scripts/security_smoke_test.py`) covers 55 checks: auth bypass, SSRF vectors, input validation, path traversal, webhook replay, information disclosure, and method restrictions. Run it against any deployment:
