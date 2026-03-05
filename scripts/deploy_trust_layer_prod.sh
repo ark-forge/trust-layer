@@ -203,9 +203,13 @@ done
 
 if [ "$HEALTHY" = false ]; then
     log "Health check FAILED — rolling back local to $PREV_COMMIT"
-    git checkout "$PREV_COMMIT" >> "$LOG_FILE" 2>&1
+    git reset --hard "$PREV_COMMIT" >> "$LOG_FILE" 2>&1
     sudo systemctl restart "$SERVICE"
-    fail "Deploy FAILED — rolled back local to $PREV_COMMIT"
+    # Tenter rollback OVH aussi
+    ssh -o ConnectTimeout=10 "$OVH_HOST" \
+        "cd ${OVH_REPO} && git reset --hard $PREV_COMMIT && sudo systemctl restart arkforge-trust-layer" \
+        >> "$LOG_FILE" 2>&1 || log "WARN: Rollback OVH non confirmé"
+    fail "Health check FAILED — rolled back to $PREV_COMMIT"
 fi
 
 log "Service healthy after deploy"
@@ -232,14 +236,42 @@ else
             SMOKE_EXIT=${PIPESTATUS[0]}
             log "Phase 2.5: Smoke test FAILED (exit $SMOKE_EXIT)"
             SMOKE_RESULT="FAILED"
-            # Rollback
-            log "Rolling back local to $PREV_COMMIT"
-            git checkout "$PREV_COMMIT" >> "$LOG_FILE" 2>&1
+
+            # Rollback local (reset sur le commit précédent, reste sur main)
+            log "Rollback local: git reset --hard $PREV_COMMIT"
+            git reset --hard "$PREV_COMMIT" >> "$LOG_FILE" 2>&1
             sudo systemctl restart "$SERVICE"
-            ssh -o ConnectTimeout=10 "$OVH_HOST" \
-                "GIT_DIR=${OVH_REPO}/.git GIT_WORK_TREE=${OVH_REPO} \
-                 git checkout $PREV_COMMIT 2>&1 && \
-                 sudo systemctl restart arkforge-trust-layer 2>&1" >> "$LOG_FILE" 2>&1 || true
+
+            # Rollback OVH (reset + restart, vérification explicite)
+            log "Rollback OVH: git reset --hard $PREV_COMMIT"
+            if ssh -o ConnectTimeout=10 "$OVH_HOST" \
+                "cd ${OVH_REPO} && \
+                 git reset --hard $PREV_COMMIT >> /tmp/rollback.log 2>&1 && \
+                 sudo systemctl restart arkforge-trust-layer >> /tmp/rollback.log 2>&1" \
+                >> "$LOG_FILE" 2>&1; then
+                log "Rollback OVH OK"
+            else
+                log "CRITICAL: Rollback OVH FAILED — serveur OVH peut être dans un état incohérent"
+                telegram_notify "CRITICAL: rollback OVH FAILED après smoke test — intervention manuelle requise"
+            fi
+
+            # Vérification post-rollback (2 × 5s)
+            ROLLBACK_OK=false
+            for i in 1 2; do
+                sleep 5
+                RB_STATUS=$(curl -s --max-time 5 "$HEALTH_URL" | python3 -c "
+import sys, json
+try: print(json.load(sys.stdin).get('status',''))
+except: print('error')
+" 2>/dev/null || echo "error")
+                if [ "$RB_STATUS" = "ok" ]; then ROLLBACK_OK=true; break; fi
+            done
+            if [ "$ROLLBACK_OK" = true ]; then
+                log "Service opérationnel après rollback"
+            else
+                log "WARN: Service ne répond pas après rollback — vérification manuelle requise"
+            fi
+
             fail "Smoke test FAILED — rolled back both servers to $PREV_COMMIT"
         fi
     fi
