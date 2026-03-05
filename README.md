@@ -553,6 +553,8 @@ Upstream API (any HTTPS endpoint)
 
 If FreeTSA is unavailable, DigiCert takes over automatically within the same background task. The `timestamp_authority.provider` field in the proof records which TSA was actually used. The pool is configured via env vars (`TSA_PRIMARY_URL`, `TSA_SECONDARY_URL`, `TSA_TERTIARY_URL`). If all TSA servers fail, the proof remains valid via Ed25519 + Sigstore Rekor anchoring.
 
+> **eIDAS-qualified timestamps (QTSP):** For legal proceedings requiring a qualified electronic timestamp under eIDAS Regulation (e.g. Article 41 evidentiary value), ArkForge supports injecting a QTSP-certified endpoint as the primary TSA — no code change required. Available as a custom arrangement on top of any plan. [Contact us](mailto:contact@arkforge.fr) for pricing and setup.
+
 ## New client onboarding
 
 ### 1. Get a free key (instant, no card)
@@ -666,6 +668,16 @@ Free keys (`mcp_free_*`) do not use credits — they have a monthly quota of 500
 The proxy auto-selects the right plan, witnesses, and rate limits based on the API key prefix. Free tier skips Stripe entirely (no credit card required). Pro and Enterprise keys are created automatically after Stripe subscription checkout. Test mode uses Stripe test keys (card `4242 4242 4242 4242`).
 
 Overage billing is **disabled by default** for all plans. Pro and Enterprise keys can opt in via `POST /v1/keys/overage` with a monthly cap of their choice (€5–€100). No overage charges are applied without explicit consent.
+
+### Custom arrangements
+
+For enterprises with specific regulatory requirements:
+
+| Requirement | Solution |
+|------------|----------|
+| eIDAS-qualified timestamps (QTSP) | Supported via custom TSA config — not included in standard plans. [Contact us](mailto:contact@arkforge.fr) |
+| On-premise deployment | Self-host with your own signing key and TSA pool — see Self-hosting section |
+| Volume above 50,000 proofs/month | Negotiated contract — [contact us](mailto:contact@arkforge.fr) |
 
 ## Conformance testing
 

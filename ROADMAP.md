@@ -215,6 +215,8 @@ Proofs are currently stored as immutable JSON files on disk (one file per transa
 
 RFC 3161 timestamps use a pool of 3 servers (FreeTSA → DigiCert → Sectigo). If FreeTSA is unavailable, DigiCert or Sectigo takes over automatically — no proof is left without a timestamp due to a single TSA outage. The `timestamp_authority.provider` field records which server was used per proof.
 
+**eIDAS-qualified timestamps (QTSP):** for clients who require a qualified electronic timestamp under eIDAS Regulation (Article 41 — qualified evidentiary value), a QTSP-certified endpoint (e.g. Alfa Trust, Certum) can be injected as primary via `TSA_PRIMARY_URL` — no code change required. This is not included in standard plans; it is a custom arrangement billed separately (typical cost: ~€0.05/timestamp at volume). Available on request for any plan.
+
 ---
 
 ## Dispute Protocol [UNDER DESIGN]
