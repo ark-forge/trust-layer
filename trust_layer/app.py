@@ -899,12 +899,10 @@ async def stripe_webhook(request: Request):
 
         if customer_id or customer_email:
             if product == "trust_layer_pro_subscription":
-                plan_key = "mcp_pro_live" if not is_test else "mcp_pro_test"
-                api_key = create_api_key(customer_id, ref_id, customer_email, test_mode=is_test, plan=plan_key)
+                api_key = create_api_key(customer_id, ref_id, customer_email, test_mode=is_test, plan="pro")
                 logger.info("Pro subscription activated for %s (sub=%s)", customer_email, subscription_id)
             elif product == "trust_layer_enterprise_subscription":
-                plan_key = "mcp_enterprise_live" if not is_test else "mcp_enterprise_test"
-                api_key = create_api_key(customer_id, ref_id, customer_email, test_mode=is_test, plan=plan_key)
+                api_key = create_api_key(customer_id, ref_id, customer_email, test_mode=is_test, plan="enterprise")
                 logger.info("Enterprise subscription activated for %s (sub=%s)", customer_email, subscription_id)
             else:
                 # Fallback : free tier ou checkout inconnu
