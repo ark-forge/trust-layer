@@ -40,6 +40,8 @@ def _load_secrets() -> None:
             "STRIPE_TL_WEBHOOK_SECRET_TEST":  _stripe.get("tl_webhook_secret_test", ""),
             "STRIPE_PRO_PRICE_ID":             _stripe.get("pro_price_id", ""),
             "STRIPE_PRO_PRICE_ID_TEST":        _stripe.get("pro_price_id_test", ""),
+            "STRIPE_ENTERPRISE_PRICE_ID":      _stripe.get("enterprise_price_id", ""),
+            "STRIPE_ENTERPRISE_PRICE_ID_TEST": _stripe.get("enterprise_price_id_test", ""),
             "STRIPE_PRO_PRODUCT_ID":           _stripe.get("pro_product_id", ""),
             "IMAP_USER":                      _smtp.get("user", "") or _smtp.get("imap_user", ""),
             "IMAP_PASSWORD":                  _smtp.get("password", "") or _smtp.get("imap_password", ""),
@@ -77,6 +79,8 @@ STRIPE_WEBHOOK_SECRET_LIVE = os.environ.get("STRIPE_TL_WEBHOOK_SECRET", os.envir
 STRIPE_WEBHOOK_SECRET_TEST = os.environ.get("STRIPE_TL_WEBHOOK_SECRET_TEST", os.environ.get("STRIPE_WEBHOOK_SECRET_TEST", ""))
 STRIPE_PRO_PRICE_ID = os.environ.get("STRIPE_PRO_PRICE_ID", "")        # live
 STRIPE_PRO_PRICE_ID_TEST = os.environ.get("STRIPE_PRO_PRICE_ID_TEST", "")  # test
+STRIPE_ENTERPRISE_PRICE_ID = os.environ.get("STRIPE_ENTERPRISE_PRICE_ID", "")        # live
+STRIPE_ENTERPRISE_PRICE_ID_TEST = os.environ.get("STRIPE_ENTERPRISE_PRICE_ID_TEST", "")  # test
 STRIPE_PRO_PRODUCT_ID = os.environ.get("STRIPE_PRO_PRODUCT_ID", "")
 
 # --- SMTP ---
