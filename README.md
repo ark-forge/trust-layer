@@ -74,7 +74,7 @@ Or open it in a browser — each proof has a public HTML verification page.
 - **Triptyque de la Preuve** — 3-level watermarking on every transaction (see below)
 - **Rate limiting** — daily cap (all keys) + monthly quota (Free: 500/month, Pro: 5 000/month, Enterprise: 50 000/month)
 - **Overage billing (opt-in)** — Pro/Enterprise keys can opt in to overage billing: proofs beyond the monthly quota are debited from prepaid credits at a lower per-proof rate (€0.01 Pro, €0.005 Enterprise), up to a monthly cap chosen by the user (€5–€100)
-- **Email** — welcome + proof receipts via SMTP
+- **Email** — welcome + proof receipts via Resend (SMTP relay, DKIM-signed, `noreply@arkforge.fr`)
 - **Proof Specification** — open spec with test vectors for independent verification ([ark-forge/proof-spec](https://github.com/ark-forge/proof-spec))
 
 ## Use cases
@@ -116,7 +116,7 @@ pip install -e ".[test]"
 
 # Configure
 cp .env.example .env
-# Edit .env with your Stripe keys, SMTP config…
+# Edit .env with your Stripe keys and Resend API key…
 
 # Run
 uvicorn trust_layer.app:app --host 0.0.0.0 --port 8100
@@ -136,10 +136,11 @@ pytest tests/ -v
 | `STRIPE_TEST_SECRET_KEY` | No | — | Stripe test secret key (`sk_test_...`) |
 | `STRIPE_TL_WEBHOOK_SECRET` | Yes | — | Stripe webhook signing secret for live events |
 | `STRIPE_TL_WEBHOOK_SECRET_TEST` | No | — | Stripe webhook signing secret for test events |
-| `SMTP_HOST` | No | — | SMTP server for email notifications |
-| `SMTP_PORT` | No | `465` | SMTP port |
-| `SMTP_USER` | No | — | SMTP username (`IMAP_USER`) |
-| `SMTP_PASSWORD` | No | — | SMTP password (`IMAP_PASSWORD`) |
+| `SMTP_HOST` | No | `smtp.resend.com` | SMTP server (Resend relay) |
+| `SMTP_PORT` | No | `465` | SMTP port (SSL/TLS) |
+| `SMTP_LOGIN` | No | `resend` | SMTP auth login (use `resend` for Resend.com) |
+| `SMTP_USER` | No | `noreply@arkforge.fr` | From address for outgoing emails |
+| `SMTP_PASSWORD` | No | — | SMTP password / Resend API key (`re_...`) |
 | `TRUST_LAYER_INTERNAL_SECRET` | No | — | Secret forwarded to upstream as `X-Internal-Secret` header |
 | `CORS_ALLOWED_ORIGINS` | No | `https://arkforge.fr,https://www.arkforge.fr` | Comma-separated CORS allowed origins |
 | `KEYS_FERNET_KEY_FILE` | No | `/opt/claude-ceo/config/keys_fernet.key` | Path to Fernet key for `api_keys.json` encryption at rest. Generate: `python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. If absent, keys are stored unencrypted (warning logged). |

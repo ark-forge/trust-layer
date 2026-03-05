@@ -32,7 +32,7 @@ def _load_secrets() -> None:
             _sys.path.insert(0, _vault_path)
         from automation.vault import vault as _vault  # type: ignore[import]
         _stripe = _vault.get_section("stripe") or {}
-        _smtp = _vault.get_section("email") or {}
+        _smtp = _vault.get_section("smtp") or {}
         _mapping = {
             "STRIPE_LIVE_SECRET_KEY":        _stripe.get("live_secret_key", ""),
             "STRIPE_TEST_SECRET_KEY":         _stripe.get("test_secret_key", ""),
@@ -43,8 +43,10 @@ def _load_secrets() -> None:
             "STRIPE_ENTERPRISE_PRICE_ID":      _stripe.get("enterprise_price_id", ""),
             "STRIPE_ENTERPRISE_PRICE_ID_TEST": _stripe.get("enterprise_price_id_test", ""),
             "STRIPE_PRO_PRODUCT_ID":           _stripe.get("pro_product_id", ""),
-            "IMAP_USER":                      _smtp.get("user", "") or _smtp.get("imap_user", ""),
-            "IMAP_PASSWORD":                  _smtp.get("password", "") or _smtp.get("imap_password", ""),
+            "SMTP_HOST":                      _smtp.get("host", ""),
+            "SMTP_LOGIN":                     _smtp.get("login", ""),
+            "SMTP_USER":                      _smtp.get("user", ""),
+            "SMTP_PASSWORD":                  _smtp.get("password", ""),
         }
         for _k, _v in _mapping.items():
             if _v:
@@ -84,11 +86,12 @@ STRIPE_ENTERPRISE_PRICE_ID_TEST = os.environ.get("STRIPE_ENTERPRISE_PRICE_ID_TES
 STRIPE_PRO_PRODUCT_ID = os.environ.get("STRIPE_PRO_PRODUCT_ID", "")
 
 # --- SMTP ---
-SMTP_HOST = os.environ.get("SMTP_HOST", "ssl0.ovh.net")
+SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.resend.com")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "465"))
-SMTP_USER = os.environ.get("IMAP_USER", "noreply@arkforge.fr")       # sender (automated)
+SMTP_LOGIN = os.environ.get("SMTP_LOGIN", "resend")           # SMTP auth login (e.g. "resend" for Resend.com)
+SMTP_USER = os.environ.get("SMTP_USER", os.environ.get("IMAP_USER", "noreply@arkforge.fr"))  # From address
 SMTP_CONTACT = os.environ.get("SMTP_CONTACT", "contact@arkforge.fr") # reply-to (human inbox)
-SMTP_PASSWORD = os.environ.get("IMAP_PASSWORD", "")
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", os.environ.get("IMAP_PASSWORD", ""))
 
 # --- Proxy limits ---
 SUPPORTED_CURRENCIES = ["eur", "usd", "gbp"]

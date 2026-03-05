@@ -7,7 +7,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.utils import formatdate, make_msgid
 
-from .config import SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_CONTACT, SMTP_PASSWORD
+from .config import SMTP_HOST, SMTP_PORT, SMTP_LOGIN, SMTP_USER, SMTP_CONTACT, SMTP_PASSWORD
 
 logger = logging.getLogger("trust_layer.email")
 
@@ -30,7 +30,7 @@ def _send_email(to: str, subject: str, body: str):
 
     context = ssl.create_default_context()
     with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context, timeout=15) as server:
-        server.login(SMTP_USER, SMTP_PASSWORD)
+        server.login(SMTP_LOGIN, SMTP_PASSWORD)
         server.sendmail(SMTP_USER, to, msg.as_string())
 
     logger.info("Email sent to %s: %s", to, subject)
