@@ -90,6 +90,18 @@ def deactivate_key_by_ref(ref_id: str):
         save_api_keys(keys)
 
 
+def reactivate_key_by_ref(ref_id: str):
+    """Reactivate keys matching a Stripe ref (e.g., after invoice.paid following past_due)."""
+    with _KEYS_LOCK:
+        keys = load_api_keys()
+        for key, info in keys.items():
+            if info.get("stripe_ref_id") == ref_id and not info.get("active"):
+                info["active"] = True
+                info.pop("deactivated_at", None)
+                logger.info("API key reactivated for ref %s", ref_id)
+        save_api_keys(keys)
+
+
 def find_key_by_ref(ref_id: str) -> Optional[str]:
     """Find an active key by Stripe ref."""
     keys = load_api_keys()

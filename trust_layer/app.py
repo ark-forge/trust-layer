@@ -90,7 +90,7 @@ from .config import (
     STRIPE_ENTERPRISE_PRICE_ID_TEST,
 )
 from .keys import (
-    validate_api_key, create_api_key, deactivate_key_by_ref, is_test_key, is_free_key,
+    validate_api_key, create_api_key, deactivate_key_by_ref, reactivate_key_by_ref, is_test_key, is_free_key,
     get_overage_settings, update_overage_settings, get_key_plan,
 )
 from .credits import add_credits, get_balance
@@ -923,6 +923,26 @@ async def stripe_webhook(request: Request):
         status = data.get("status", "")
         if status in ("canceled", "unpaid", "past_due"):
             deactivate_key_by_ref(subscription_id)
+
+    elif event_type == "invoice.paid":
+        # Subscription renewal confirmed — reactivate key if it was suspended for past_due
+        subscription_id = data.get("subscription", "")
+        billing_reason = data.get("billing_reason", "")
+        if subscription_id and billing_reason in ("subscription_cycle", "subscription_update"):
+            reactivate_key_by_ref(subscription_id)
+            logger.info("Invoice paid (renewal) for sub=%s — key confirmed active", subscription_id)
+
+    elif event_type == "invoice.payment_failed":
+        # Payment failed — Stripe will retry; log and let subscription.updated handle deactivation
+        subscription_id = data.get("subscription", "")
+        attempt = data.get("attempt_count", 1)
+        customer_id = data.get("customer", "")
+        logger.warning(
+            "Invoice payment failed for sub=%s customer=%s attempt=%s",
+            subscription_id, customer_id, attempt
+        )
+        # On final failure (attempt_count >= 4 typically), Stripe sets subscription past_due
+        # which fires customer.subscription.updated → deactivate_key_by_ref
 
     _mark_webhook_processed(event_id)
     return {"received": True}

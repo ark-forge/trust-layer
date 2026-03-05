@@ -425,7 +425,7 @@ def test_webhook_pro_subscription_creates_key(client, monkeypatch):
     assert balance == 0.0, f"Expected no credits (subscription model), got {balance}"
 
     # Plan correctement défini
-    assert keys[pro_key]["plan"] in ("mcp_pro_live", "mcp_pro_test")
+    assert keys[pro_key]["plan"] == "pro"
 
 
 # --- /v1/keys/portal ---
