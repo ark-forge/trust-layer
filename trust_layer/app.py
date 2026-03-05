@@ -415,8 +415,8 @@ async def short_proof_url(proof_id: str):
 
 # --- GET /v1/proof/{proof_id}/tsr ---
 
-@app.get("/v1/proof/{proof_id}/tsr")
-async def get_proof_tsr(proof_id: str):
+@app.api_route("/v1/proof/{proof_id}/tsr", methods=["GET", "HEAD"])
+async def get_proof_tsr(proof_id: str, request: Request):
     """Return raw .tsr file (RFC 3161 timestamp response) for independent verification."""
     tsr_path = PROOFS_DIR / f"{proof_id}.tsr"
     if not tsr_path.exists():
@@ -728,6 +728,9 @@ async def buy_credits(
                 "api_key_prefix": api_key[:12],
             },
         )
+    except stripe.InvalidRequestError as e:
+        logger.error("Credit purchase invalid request: %s", e)
+        return _error_response("no_payment_method", "Payment method not found. Use /v1/keys/setup to register a card.", 400)
     except (stripe.StripeError, OSError, RuntimeError) as e:
         logger.error("Credit purchase payment failed: %s", e)
         return _error_response("payment_failed", f"Payment failed: {str(e)}", 402)
