@@ -7,7 +7,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.utils import formatdate, make_msgid
 
-from .config import SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD
+from .config import SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_CONTACT, SMTP_PASSWORD
 
 logger = logging.getLogger("trust_layer.email")
 
@@ -22,10 +22,10 @@ def _send_email(to: str, subject: str, body: str):
     msg["Subject"] = subject
     msg["From"] = f"ArkForge <{SMTP_USER}>"
     msg["To"] = to
-    msg["Reply-To"] = SMTP_USER
+    msg["Reply-To"] = SMTP_CONTACT
     msg["Date"] = formatdate(localtime=True)
     msg["Message-ID"] = make_msgid(domain="arkforge.fr")
-    msg["List-Unsubscribe"] = f"<mailto:{SMTP_USER}?subject=unsubscribe>"
+    msg["List-Unsubscribe"] = f"<mailto:{SMTP_CONTACT}?subject=unsubscribe>"
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
     context = ssl.create_default_context()
