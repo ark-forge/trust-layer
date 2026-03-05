@@ -86,6 +86,8 @@ from .config import (
     STRIPE_PRO_PRICE_ID,
     STRIPE_PRO_PRICE_ID_TEST,
     STRIPE_PRO_PRODUCT_ID,
+    STRIPE_ENTERPRISE_PRICE_ID,
+    STRIPE_ENTERPRISE_PRICE_ID_TEST,
 )
 from .keys import (
     validate_api_key, create_api_key, deactivate_key_by_ref, is_test_key, is_free_key,
@@ -456,9 +458,23 @@ async def setup_key(request: Request):
     if not sk:
         return _error_response("internal_error", f"Stripe {req_mode} key not configured", 500)
 
-    price_id = STRIPE_PRO_PRICE_ID_TEST if req_mode == "test" else STRIPE_PRO_PRICE_ID
+    plan = (body.get("plan") or "pro").lower()
+    if plan not in ("pro", "enterprise"):
+        plan = "pro"
+
+    if plan == "enterprise":
+        price_id = STRIPE_ENTERPRISE_PRICE_ID_TEST if req_mode == "test" else STRIPE_ENTERPRISE_PRICE_ID
+        plan_name = "enterprise"
+        price_monthly = 149.0
+        proofs_per_month = 50000
+    else:
+        price_id = STRIPE_PRO_PRICE_ID_TEST if req_mode == "test" else STRIPE_PRO_PRICE_ID
+        plan_name = "pro"
+        price_monthly = 29.0
+        proofs_per_month = 5000
+
     if not price_id:
-        return _error_response("internal_error", "Stripe Pro price ID not configured", 500)
+        return _error_response("internal_error", f"Stripe {plan_name} price ID not configured", 500)
 
     try:
         customers = stripe.Customer.list(email=email, limit=1, api_key=sk)
@@ -479,15 +495,17 @@ async def setup_key(request: Request):
             success_url=f"https://arkforge.fr/{lang}/tl-pro-success.html?session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=f"https://arkforge.fr/{lang}/pricing.html",
             metadata={
-                "product": "trust_layer_pro_subscription",
+                "product": f"trust_layer_{plan_name}_subscription",
                 "email": email,
                 "stripe_mode": req_mode,
                 "lang": lang,
+                "plan": plan_name,
             },
             subscription_data={
                 "metadata": {
-                    "product": "trust_layer_pro_subscription",
+                    "product": f"trust_layer_{plan_name}_subscription",
                     "email": email,
+                    "plan": plan_name,
                 }
             },
             api_key=sk,
@@ -498,9 +516,9 @@ async def setup_key(request: Request):
             "session_id": session.id,
             "customer_id": customer.id,
             "mode": req_mode,
-            "plan": "pro",
-            "price_monthly_eur": 29.0,
-            "proofs_per_month": 5000,
+            "plan": plan_name,
+            "price_monthly_eur": price_monthly,
+            "proofs_per_month": proofs_per_month,
         }
 
     except stripe.StripeError as e:
@@ -878,10 +896,13 @@ async def stripe_webhook(request: Request):
 
         if customer_id or customer_email:
             if product == "trust_layer_pro_subscription":
-                # Abonnement Pro 29 EUR/mois — créer la clé API avec plan pro
-                plan = "mcp_pro_live" if not is_test else "mcp_pro_test"
-                api_key = create_api_key(customer_id, ref_id, customer_email, test_mode=is_test, plan=plan)
+                plan_key = "mcp_pro_live" if not is_test else "mcp_pro_test"
+                api_key = create_api_key(customer_id, ref_id, customer_email, test_mode=is_test, plan=plan_key)
                 logger.info("Pro subscription activated for %s (sub=%s)", customer_email, subscription_id)
+            elif product == "trust_layer_enterprise_subscription":
+                plan_key = "mcp_enterprise_live" if not is_test else "mcp_enterprise_test"
+                api_key = create_api_key(customer_id, ref_id, customer_email, test_mode=is_test, plan=plan_key)
+                logger.info("Enterprise subscription activated for %s (sub=%s)", customer_email, subscription_id)
             else:
                 # Fallback : free tier ou checkout inconnu
                 api_key = create_api_key(customer_id, ref_id, customer_email, test_mode=is_test)
