@@ -2,7 +2,7 @@
 
 **ArkForge certifies what your agent executed** — the exact request sent, the exact response received, the exact payment made, and the exact moment it happened. Not intent. Not a log. A cryptographic proof with European legal standing.
 
-Free tier: one curl, fully autonomous. Pro tier: one-time human setup, fully autonomous after that.
+Free tier: one curl, instantly autonomous. Pro/Enterprise: subscribe monthly, API key delivered instantly — fully autonomous after that.
 
 ## Documentation
 
@@ -57,13 +57,13 @@ Or open it in a browser — each proof has a public HTML verification page.
 
 **For regulated environments (AI Act, DORA, NIS2, eIDAS):**
 - Every proof is signed (Ed25519), timestamped (RFC 3161), and anchored in a public immutability log (Sigstore Rekor)
-- RFC 3161 timestamps via a pool of WebTrust-certified authorities; eIDAS-qualified QTSP available on Enterprise plan for legal proceedings requiring qualified timestamps
+- RFC 3161 timestamps via a pool of WebTrust-certified authorities (FreeTSA → DigiCert → Sectigo)
 - Open proof specification ([ark-forge/proof-spec](https://github.com/ark-forge/proof-spec)) — any third party can verify a proof without trusting ArkForge
 
 ## Features
 
 - **Execution certification** — every API call through ArkForge produces a cryptographic proof of what was sent, received, paid, and when. Immutable after creation.
-- **Subscription plans** — Free (500/month), Pro (€39/month, 5,000 proofs), Enterprise (€149/month, 50,000 proofs); overages billed per proof
+- **Subscription plans** — Free (500/month, no card), Pro (€29/month, 5,000 proofs), Enterprise (€149/month, 50,000 proofs); opt-in overage billing
 - **Proofs** — SHA-256 hash chain per call, publicly verifiable, anchored via RFC 3161 Timestamp Authority
 - **Ed25519 signature** — every proof is signed by ArkForge's Ed25519 key, proving origin. Public key served at `GET /v1/pubkey`
 - **Sigstore Rekor** — chain hash registered in the Linux Foundation's append-only public transparency log, verifiable by anyone at [search.sigstore.dev](https://search.sigstore.dev)
@@ -219,7 +219,7 @@ All error responses use the format `{"error": {"code": "...", "message": "...", 
 | `GET` | `/v1/health` | Health check |
 | `GET` | `/v1/pricing` | Pricing and limits |
 | `POST` | `/v1/proxy` | Proxied API call (charge + forward + proof) |
-| `POST` | `/v1/keys/setup` | Buy initial credits + save card via Stripe Checkout (min 10 EUR) |
+| `POST` | `/v1/keys/setup` | Subscribe to Pro or Enterprise monthly plan via Stripe Checkout |
 | `POST` | `/v1/keys/portal` | Open Stripe Billing Portal (update card, view invoices) |
 | `POST` | `/v1/keys/overage` | Enable/disable overage billing (Pro/Enterprise only) |
 | `GET` | `/v1/keys/overage` | Get current overage settings |
@@ -532,7 +532,7 @@ Agent Client
 Trust Layer (/v1/proxy)
     |--- 1. Validate API key + rate limit
     |--- 2. Check monthly quota (all plans) — if quota exhausted and overage enabled, deduct overage credit; else 429
-    |--- 2b. Deduct standard credit (0.10 EUR, Pro/Test within quota) or 0 credit (Free)
+    |--- 2b. Deduct overage credit (Pro: 0.01 EUR/proof, Enterprise: 0.005 EUR/proof — opt-in only) or 0 for Free
     |--- 3. Fetch external receipt from PSP (if provider_payment provided)
     |--- 4. Forward request to upstream API
     |--- 5. Hash request + response + receipt (SHA-256 chain)
@@ -551,48 +551,31 @@ Upstream API (any HTTPS endpoint)
 2. **DigiCert** (`timestamp.digicert.com`) — WebTrust-certified CA infrastructure
 3. **Sectigo** (`timestamp.sectigo.com`) — WebTrust-certified CA infrastructure
 
-If FreeTSA is unavailable, DigiCert takes over automatically within the same background task. The `timestamp_authority.provider` field in the proof records which TSA was actually used. The pool is configured via env vars (`TSA_PRIMARY_URL`, `TSA_SECONDARY_URL`, `TSA_TERTIARY_URL`) — a QTSP eIDAS-qualified endpoint (e.g. [qtsa.eu/AlfaTrust](https://qtsa.eu), ~€0.048/timestamp) can be injected as primary for enterprise clients without code changes. If all TSA servers fail, the proof remains valid via Ed25519 + Sigstore Rekor anchoring.
+If FreeTSA is unavailable, DigiCert takes over automatically within the same background task. The `timestamp_authority.provider` field in the proof records which TSA was actually used. The pool is configured via env vars (`TSA_PRIMARY_URL`, `TSA_SECONDARY_URL`, `TSA_TERTIARY_URL`). If all TSA servers fail, the proof remains valid via Ed25519 + Sigstore Rekor anchoring.
 
 ## New client onboarding
 
-### 1. Buy initial credits and get an API key
+### 1. Get a free key (instant, no card)
+
+```bash
+curl -X POST https://arkforge.fr/trust/v1/keys/free-signup \
+  -H "Content-Type: application/json" \
+  -d '{"email": "client@example.com"}'
+# Returns: {"api_key": "mcp_free_...", "plan": "free", "limit": "500 proofs/month"}
+```
+
+### 2. Subscribe to Pro or Enterprise
 
 ```bash
 curl -X POST https://arkforge.fr/trust/v1/keys/setup \
   -H "Content-Type: application/json" \
-  -d '{"email": "client@example.com", "amount": 10}'
-# Returns: {"checkout_url": "https://checkout.stripe.com/...", "proofs_included": 100, ...}
+  -d '{"email": "client@example.com", "plan": "pro"}'
+# Returns: {"checkout_url": "https://checkout.stripe.com/...", "plan": "pro"}
 ```
 
-Open `checkout_url` in a browser — enter a card. The first purchase (minimum 10 EUR = 100 proofs) is charged immediately and the card is saved for future off-session charges. Stripe webhook fires automatically: Trust Layer creates an API key (`mcp_pro_...`), credits the account, and emails the key to the client.
+Open `checkout_url` in a browser — enter a card and confirm. Stripe activates the subscription and fires a webhook: Trust Layer creates the API key (`mcp_pro_...` or `mcp_enterprise_...`) and emails it to the client.
 
-Free keys (`mcp_free_...`) are created without payment via `/v1/keys/free-signup`.
-
-For test mode, add `"mode": "test"` and use Stripe test card `4242 4242 4242 4242`.
-
-### 2. Buy more credits (off-session, no browser required)
-
-```bash
-curl -X POST https://arkforge.fr/trust/v1/credits/buy \
-  -H "X-Api-Key: mcp_pro_..." \
-  -H "Content-Type: application/json" \
-  -d '{"amount": 10.00}'
-# Returns: {"credits_added": 10.0, "balance": 12.5, "proofs_available": 125, ...}
-```
-
-The saved card is charged directly — no browser redirect. Credits are added immediately.
-
-### 2b. Manage card / view invoices
-
-```bash
-curl -X POST https://arkforge.fr/trust/v1/keys/portal \
-  -H "X-Api-Key: mcp_pro_..." \
-  -H "Content-Type: application/json" \
-  -d '{}'
-# Returns: {"portal_url": "https://billing.stripe.com/...", ...}
-```
-
-Open `portal_url` to update your payment method, download invoices, or cancel.
+For test mode, add `"mode": "test"` and use Stripe test card `4242 4242 4242 4242`. Use `"plan": "enterprise"` for the Enterprise plan.
 
 ### 3. Use the proxy
 
@@ -608,60 +591,81 @@ curl -X POST https://arkforge.fr/trust/v1/proxy \
   }'
 ```
 
-Each standard call deducts 1 credit (0.10 EUR). If the balance is 0, the call returns `402 Payment Required`. Overage calls (beyond the monthly quota, opt-in) are debited at the overage rate instead (0.01 EUR for Pro, 0.005 EUR for Enterprise).
+Calls within the monthly quota (5,000 for Pro, 50,000 for Enterprise) are included in the subscription — no per-call charge. Beyond the quota: HTTP 429 by default, or overage billing from prepaid credits (opt-in, 0.01 EUR/proof for Pro, 0.005 EUR/proof for Enterprise).
 
-## Credits
+### 3b. Manage subscription / view invoices
 
-Pro and Test keys use prepaid credits. Each standard proof costs **0.10 EUR** (1 credit). Credits are bought in advance via Stripe Checkout and deducted automatically on each `/v1/proxy` call.
+```bash
+curl -X POST https://arkforge.fr/trust/v1/keys/portal \
+  -H "X-Api-Key: mcp_pro_..." \
+  -H "Content-Type: application/json" \
+  -d '{}'
+# Returns: {"portal_url": "https://billing.stripe.com/...", ...}
+```
 
-**Overage pricing (opt-in):** when the monthly quota is exhausted, Pro keys can continue at **0.01 EUR/proof** and Enterprise keys at **0.005 EUR/proof**, both debited from prepaid credits up to a monthly cap. Overage billing is disabled by default — activate it at `POST /v1/keys/overage`.
+Open `portal_url` to update your payment method, download invoices, or cancel the subscription.
 
-### Buy credits
+### 3c. Buy overage credits (optional, opt-in only)
 
 ```bash
 curl -X POST https://arkforge.fr/trust/v1/credits/buy \
   -H "X-Api-Key: mcp_pro_..." \
   -H "Content-Type: application/json" \
   -d '{"amount": 10.00}'
-# Returns: {"credits_added": 10.0, "balance": 10.0, "proofs_available": 100, ...}
+# Returns: {"credits_added": 10.0, "balance": 10.0, "proofs_available": 1000, ...}
 ```
 
-The saved card is charged off-session — no browser required. Credits are added immediately. Minimum purchase: 1.00 EUR (10 standard proofs, or up to 200 overage proofs at Pro rate).
+Overage credits are only consumed if you explicitly enable overage billing (`POST /v1/keys/overage`). The saved card is charged off-session — no browser required.
 
-### Check balance
+## Credits (overage only)
+
+Pro and Enterprise subscriptions include a monthly proof quota. Prepaid credits are **only used for opt-in overage billing** — not for standard calls within the quota.
+
+**Overage pricing (opt-in):** when the monthly quota is exhausted, Pro keys can continue at **0.01 EUR/proof** and Enterprise keys at **0.005 EUR/proof**, both debited from prepaid credits up to a monthly cap (€5–€100). Overage billing is disabled by default — activate it at `POST /v1/keys/overage`.
+
+### Buy overage credits
+
+```bash
+curl -X POST https://arkforge.fr/trust/v1/credits/buy \
+  -H "X-Api-Key: mcp_pro_..." \
+  -H "Content-Type: application/json" \
+  -d '{"amount": 10.00}'
+# Returns: {"credits_added": 10.0, "balance": 10.0, "proofs_available": 1000, ...}
+```
+
+The saved card is charged off-session — no browser required. Credits are added immediately. Minimum purchase: 1.00 EUR.
+
+### Check balance and quota
 
 ```bash
 curl https://arkforge.fr/trust/v1/usage \
   -H "X-Api-Key: mcp_pro_..."
-# Returns: {..., "credit_balance": 47, ...}
+# Returns: {"plan": "pro", "monthly": {"used": 1250, "limit": 5000, "remaining": 3750}, "credit_balance": 10.0}
 ```
 
-### How credits work
+### Email alerts
 
-1. **Setup** — `POST /v1/keys/setup` (10 EUR minimum): Stripe Checkout charges the card, saves it for future use, and credits the account.
-2. **Top up** — `POST /v1/credits/buy`: off-session charge, no browser required. Credits never expire.
-3. **Use** — each `POST /v1/proxy` call within quota deducts 1 credit (0.10 EUR). If balance is 0, the call is rejected with `402 Payment Required`. If overage is enabled (opt-in), calls beyond the monthly quota deduct at the overage rate instead.
-4. **Alerts** — six email notifications keep you informed:
-   - **80% quota** — when 80% of the daily/monthly quota is consumed
-   - **Low balance** — when balance drops below 1.00 EUR (~10 proofs remaining), once per 24h
-   - **Exhausted** — when a call is rejected due to zero balance (`402`), once per 24h — includes the recharge curl command
-   - **Overage started** — first overage proof of the month, when overage billing is active
-   - **Overage 80% cap** — when 80% of the monthly overage cap is consumed
-   - **Overage cap reached** — when the overage cap is hit and requests are blocked (`429`)
+- **80% monthly quota** consumed → quota alert
+- **Overage started** — first overage proof of the month (if overage enabled)
+- **Overage 80% cap** consumed → overage alert
+- **Overage cap reached** → requests blocked (HTTP 429) + alert
+- **Low balance** (< 1.00 EUR) → recharge reminder (24h cooldown)
+- **Credits exhausted** when a call is rejected (402) → includes recharge curl command
 
-Free keys (`mcp_free_*`) do not use credits — they have a monthly quota of 100 proofs at no cost.
+Free keys (`mcp_free_*`) do not use credits — they have a monthly quota of 500 proofs at no cost.
 
 ## Plans and API key prefixes
 
-| Prefix | Plan | Standard price | Overage (opt-in) | Witnesses | Limits |
-|--------|------|---------------|-----------------|-----------|--------|
-| `mcp_free_*` | Free | No charge | Not available | 3 (Ed25519, RFC 3161 TSA, Sigstore Rekor) | 100 proofs/month |
-| `mcp_pro_*` | Pro | 0.10 EUR/proof (prepaid) | 0.01 EUR/proof (€5–€100 cap) | 3 (Ed25519, RFC 3161 TSA, Sigstore Rekor) | 100/day · 5 000/month |
-| `mcp_test_*` | Test | Test credits (Stripe test mode) | Not available | 3 (Ed25519, RFC 3161 TSA, Sigstore Rekor) | 100 proofs/day |
+| Prefix | Plan | Monthly price | Quota | Overage (opt-in) | Witnesses |
+|--------|------|---------------|-------|-----------------|-----------|
+| `mcp_free_*` | Free | Free | 500 proofs/month | Not available | 3 (Ed25519, RFC 3161 TSA, Sigstore Rekor) |
+| `mcp_pro_*` | Pro | €29/month | 5,000 proofs/month | 0.01 EUR/proof (€5–€100 cap) | 3 (Ed25519, RFC 3161 TSA, Sigstore Rekor) |
+| `mcp_enterprise_*` | Enterprise | €149/month | 50,000 proofs/month | 0.005 EUR/proof (€5–€100 cap) | 3 (Ed25519, RFC 3161 TSA, Sigstore Rekor) |
+| `mcp_test_*` | Test | Stripe test mode | 100 proofs/day | Not available | 3 (Ed25519, RFC 3161 TSA, Sigstore Rekor) |
 
-The proxy auto-selects the right plan, witnesses, and rate limits based on the API key prefix. Free tier skips Stripe entirely (no credit card required). Pro keys require a positive credit balance — buy credits via `POST /v1/credits/buy`. Test mode uses Stripe test keys (card `4242 4242 4242 4242`).
+The proxy auto-selects the right plan, witnesses, and rate limits based on the API key prefix. Free tier skips Stripe entirely (no credit card required). Pro and Enterprise keys are created automatically after Stripe subscription checkout. Test mode uses Stripe test keys (card `4242 4242 4242 4242`).
 
-Overage billing is **disabled by default** for all plans. Pro keys can opt in via `POST /v1/keys/overage` with a monthly cap of their choice (€5–€100). No overage charges are applied without explicit consent.
+Overage billing is **disabled by default** for all plans. Pro and Enterprise keys can opt in via `POST /v1/keys/overage` with a monthly cap of their choice (€5–€100). No overage charges are applied without explicit consent.
 
 ## Conformance testing
 

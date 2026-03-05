@@ -34,19 +34,24 @@ Use case: financial audit, compliance, non-repudiation
 ### 1 — Get a key
 
 ```bash
-# Free (100/month)
+# Free (500/month, no card)
 curl -X POST https://arkforge.fr/trust/v1/keys/free-signup \
   -d '{"email": "you@example.com"}'
 
 # Pro Test (development)
 curl -X POST https://arkforge.fr/trust/v1/keys/setup \
-  -d '{"email": "you@example.com", "amount": 10, "mode": "test"}'
+  -d '{"email": "you@example.com", "plan": "pro", "mode": "test"}'
 # → Open checkout_url, card 4242 4242 4242 4242
 
-# Pro Prod (production)
+# Pro production (€29/month)
 curl -X POST https://arkforge.fr/trust/v1/keys/setup \
-  -d '{"email": "you@example.com", "amount": 10}'
-# → Open checkout_url, real card
+  -d '{"email": "you@example.com", "plan": "pro"}'
+# → Open checkout_url, real card → mcp_pro_xxx by email
+
+# Enterprise production (€149/month)
+curl -X POST https://arkforge.fr/trust/v1/keys/setup \
+  -d '{"email": "you@example.com", "plan": "enterprise"}'
+# → Open checkout_url, real card → mcp_enterprise_xxx by email
 ```
 
 ---
@@ -121,15 +126,15 @@ if 'provider_payment' in result['proof']:
 
 ## Plans
 
-| | Free | Test | Pro |
-|---|------|------|-----|
-| **Key prefix** | `mcp_free_*` | `mcp_test_*` | `mcp_pro_*` |
-| **Cost** | Free | 0.10 EUR/proof (test) | 0.10 EUR/proof (prod) |
-| **Limit** | 100/month | Unlimited | Unlimited |
-| **Stripe** | — | Test mode | Live mode |
-| **Card** | None | `4242 4242 4242 4242` | Real card |
-| **Setup** | Email | Checkout (once) | Checkout (once) |
-| **Recharge** | No | Automatic | Automatic |
+| | Free | Pro | Enterprise | Test |
+|---|------|-----|------------|------|
+| **Key prefix** | `mcp_free_*` | `mcp_pro_*` | `mcp_enterprise_*` | `mcp_test_*` |
+| **Monthly price** | Free | €29/month | €149/month | Stripe test mode |
+| **Monthly quota** | 500 proofs | 5,000 proofs | 50,000 proofs | 100/day |
+| **Overage (opt-in)** | — | 0.01 EUR/proof | 0.005 EUR/proof | — |
+| **Stripe** | — | Live | Live | Test mode |
+| **Card** | None | Real card | Real card | `4242 4242 4242 4242` |
+| **Setup** | Email only | Checkout (subscribe) | Checkout (subscribe) | Checkout (test) |
 
 ---
 
@@ -196,35 +201,19 @@ chain_hash = SHA256(
 **One-time human setup → then fully autonomous**
 
 ```
-Human (once)   →  Stripe Checkout  →  Card saved + key delivered
-Agent (always) →  /v1/usage        →  Check balance
-               →  /v1/credits/buy  →  Recharge if low (card charged automatically)
-               →  /v1/proxy        →  Execute + get proof (0.10 EUR deducted)
+Human (once)   →  Stripe Checkout   →  Subscription active + key delivered by email
+Agent (always) →  /v1/usage         →  Check monthly quota
+               →  /v1/proxy         →  Execute + get proof (within monthly quota)
+               →  /v1/credits/buy   →  Buy overage credits if opt-in enabled
 ```
 
 ```python
 class AutonomousAgent:
-    def __init__(self, api_key, min_balance=5.0, recharge_amount=10.0):
+    def __init__(self, api_key):
         self.api_key = api_key
-        self.min_balance = min_balance
-        self.recharge_amount = recharge_amount
         self.headers = {"X-Api-Key": api_key, "Content-Type": "application/json"}
 
-    def ensure_budget(self):
-        balance = requests.get(
-            "https://arkforge.fr/trust/v1/usage",
-            headers=self.headers
-        ).json()['credit_balance']
-
-        if balance < self.min_balance:
-            requests.post(
-                "https://arkforge.fr/trust/v1/credits/buy",
-                headers=self.headers,
-                json={"amount": self.recharge_amount}
-            )
-
     def execute(self, target, payload):
-        self.ensure_budget()
         return requests.post(
             "https://arkforge.fr/trust/v1/proxy",
             headers=self.headers,
@@ -235,21 +224,22 @@ agent = AutonomousAgent("mcp_pro_xxx...")
 result = agent.execute("https://provider.com/api", {"task": "analyze"})
 ```
 
-No browser required after the initial setup.
+No browser required after the initial subscription setup.
 
 | Step | Who | Endpoint |
 |------|-----|----------|
-| Setup (once) | Human | `POST /v1/keys/setup` → Stripe Checkout |
-| Recharge | Agent | `POST /v1/credits/buy` → off-session card charge |
-| Execute | Agent | `POST /v1/proxy` → 0.10 EUR/proof |
+| Subscribe (once) | Human | `POST /v1/keys/setup` → Stripe Checkout |
+| Execute | Agent | `POST /v1/proxy` → included in monthly quota |
+| Overage credits (opt-in) | Agent | `POST /v1/credits/buy` → off-session card charge |
 
-**Automatic email alerts (no configuration needed):**
+**Automatic email alerts:**
 
-| Balance | Email sent |
-|---------|-----------|
-| < 1.00 EUR (~10 proofs) | "Low credits — action required" (24h cooldown) |
-| 0 EUR → call rejected 402 | "Credits exhausted — agent stopped" (24h cooldown) |
-| 80% quota consumed | "Quota alert" |
+| Event | Email sent |
+|-------|-----------|
+| 80% monthly quota consumed | "Quota alert" |
+| Overage started (opt-in) | "Overage billing active" |
+| 80% of overage cap | "Overage alert" (24h cooldown) |
+| Overage cap reached | "Requests blocked" |
 
 ---
 
