@@ -158,7 +158,7 @@ def test_proxy_private_ip_rejected(client, api_key):
 
 
 def test_proxy_insufficient_credits(client):
-    """Pro key with no credits should get 402."""
+    """Test key with no credits should succeed — test keys are internal, no charge."""
     key = create_api_key("cus_no_credits", "ref_no_credits", "no@credits.com", test_mode=True)
     mock_http = _mock_http_client()
 
@@ -170,8 +170,8 @@ def test_proxy_insufficient_credits(client):
             headers={"Authorization": f"Bearer {key}"},
         )
 
-    assert r.status_code == 402
-    assert r.json()["error"]["code"] == "insufficient_credits"
+    assert r.status_code == 200
+    assert r.json()["proof"]["certification_fee"]["amount"] == 0.0
 
 
 def test_proxy_full_success(client, api_key):
@@ -194,7 +194,7 @@ def test_proxy_full_success(client, api_key):
     assert "proof" in data
     assert "service_response" in data
     assert data["proof"]["proof_id"].startswith("prf_")
-    assert data["proof"]["certification_fee"]["method"] == "prepaid_credit"
+    assert data["proof"]["certification_fee"]["amount"] == 0.0
     assert data["service_response"]["status_code"] == 200
 
     # Check X-ArkForge-Proof header

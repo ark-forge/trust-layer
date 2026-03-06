@@ -175,10 +175,7 @@ def _mock_http_client(response_body=None, status_code=200, headers=None):
 
 @pytest.mark.asyncio
 async def test_execute_proxy_full_flow(test_api_key):
-    """Full proxy flow with prepaid credits + mock target service."""
-    # Add credits first
-    add_credits(test_api_key, 10.00, "pi_test_flow")
-
+    """Full proxy flow with test key — no charge (internal use)."""
     mock_client = _mock_http_client({"result": "scan_complete", "score": 85})
 
     with patch("httpx.AsyncClient", return_value=mock_client), \
@@ -188,7 +185,7 @@ async def test_execute_proxy_full_flow(test_api_key):
             target="https://example.com/api/scan",
             method="POST",
             payload={"repo_url": "https://github.com/test/repo"},
-            amount=PROOF_PRICE,
+            amount=0.0,
             currency="eur",
             api_key=test_api_key,
         )
@@ -200,14 +197,12 @@ async def test_execute_proxy_full_flow(test_api_key):
     assert result["proof"]["proof_id"].startswith("prf_")
     assert "verification_url" in result["proof"]
     assert result["proof"]["hashes"]["chain"].startswith("sha256:")
-    assert result["proof"]["certification_fee"]["method"] == "prepaid_credit"
+    assert result["proof"]["certification_fee"]["amount"] == 0.0
 
 
 @pytest.mark.asyncio
 async def test_execute_proxy_service_error(test_api_key):
-    """Credits deducted but service returns 500 — proof is still returned."""
-    add_credits(test_api_key, 10.00, "pi_test_502")
-
+    """Service returns 500 — proof is still returned with no charge (test key)."""
     mock_client = _mock_http_client({"error": "internal server error"}, status_code=500)
 
     with patch("httpx.AsyncClient", return_value=mock_client), \
@@ -217,32 +212,35 @@ async def test_execute_proxy_service_error(test_api_key):
             target="https://example.com/api/fail",
             method="POST",
             payload={},
-            amount=PROOF_PRICE,
+            amount=0.0,
             currency="eur",
             api_key=test_api_key,
         )
 
-    # Should return error with proof (credits were deducted)
+    # Should return error with proof
     assert "error" in result
     assert result["error"]["code"] == "service_error"
     assert "proof" in result
-    assert result["proof"]["certification_fee"]["status"] == "succeeded"
 
 
 @pytest.mark.asyncio
 async def test_execute_proxy_insufficient_credits(test_api_key):
-    """No credits — 402 insufficient_credits."""
-    with pytest.raises(ProxyError) as exc_info:
-        await execute_proxy(
+    """Test key with no credits succeeds — test keys are free (internal use)."""
+    mock_client = _mock_http_client({"result": "ok"})
+
+    with patch("httpx.AsyncClient", return_value=mock_client), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+
+        result = await execute_proxy(
             target="https://example.com/api",
             method="POST",
             payload={},
-            amount=PROOF_PRICE,
+            amount=0.0,
             currency="eur",
             api_key=test_api_key,
         )
-    assert exc_info.value.code == "insufficient_credits"
-    assert exc_info.value.status == 402
+    assert "proof" in result
+    assert result["proof"]["certification_fee"]["amount"] == 0.0
 
 
 @pytest.mark.asyncio

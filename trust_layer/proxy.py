@@ -559,6 +559,8 @@ async def execute_proxy(
 
     # Subscription proofs (pro/enterprise within quota) require no credit debit
     is_subscription = not is_free and not is_overage and plan in ("pro", "enterprise")
+    # Test keys: internal use, no charge (treated like free tier for billing purposes)
+    is_test = plan == "test"
 
     # 5. Hash request
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -569,7 +571,7 @@ async def execute_proxy(
 
     proof_id_for_debit = generate_proof_id()
 
-    if is_free:
+    if is_free or is_test:
         charge_result = ChargeResult(
             provider="free_tier",
             transaction_id="free_tier",

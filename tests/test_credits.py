@@ -100,8 +100,8 @@ def test_credit_transaction_log(pro_api_key, tmp_path):
 
 @pytest.mark.asyncio
 async def test_proxy_with_credits(pro_api_key):
-    """Full proxy flow using prepaid credits."""
-    add_credits(pro_api_key, 1.00, "pi_test_proxy")
+    """Test key proxy flow — no charge (internal use, treated as free tier)."""
+    initial_balance = get_balance(pro_api_key)
 
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -122,35 +122,45 @@ async def test_proxy_with_credits(pro_api_key):
             target="https://example.com/api",
             method="POST",
             payload={},
-            amount=0.10,
+            amount=0.0,
             currency="eur",
             api_key=pro_api_key,
         )
 
     assert "proof" in result
-    assert result["proof"]["certification_fee"]["method"] == "prepaid_credit"
-    assert result["proof"]["certification_fee"]["amount"] == PROOF_PRICE
-    assert result["proof"]["certification_fee"]["status"] == "succeeded"
-    assert result["proof"]["certification_fee"]["transaction_id"].startswith("crd_")
-    assert get_balance(pro_api_key) == pytest.approx(0.90)
+    # Test keys are free — no credit debit
+    assert result["proof"]["certification_fee"]["amount"] == 0.0
+    assert get_balance(pro_api_key) == pytest.approx(initial_balance)
 
 
 @pytest.mark.asyncio
 async def test_proxy_no_credits(pro_api_key):
-    """Proxy should fail with 402 when no credits."""
-    from trust_layer.proxy import execute_proxy, ProxyError
+    """Test key proxy flow succeeds even with zero credits (internal use, no charge)."""
+    from trust_layer.proxy import execute_proxy
 
-    with pytest.raises(ProxyError) as exc_info:
-        await execute_proxy(
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"result": "ok"}
+    mock_response.headers = {}
+
+    mock_client = AsyncMock()
+    mock_client.post.return_value = mock_response
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("httpx.AsyncClient", return_value=mock_client), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+
+        result = await execute_proxy(
             target="https://example.com/api",
             method="POST",
             payload={},
-            amount=0.10,
+            amount=0.0,
             currency="eur",
             api_key=pro_api_key,
         )
-    assert exc_info.value.code == "insufficient_credits"
-    assert exc_info.value.status == 402
+    assert "proof" in result
+    assert result["proof"]["certification_fee"]["amount"] == 0.0
 
 
 # --- API endpoint: /v1/credits/buy ---
