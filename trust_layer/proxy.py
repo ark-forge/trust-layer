@@ -48,6 +48,12 @@ logger = logging.getLogger("trust_layer.proxy")
 # Track active background tasks for graceful shutdown
 _active_tasks: set[asyncio.Task] = set()
 
+# Headers that must never be forwarded from extra_headers to the target service
+_BLOCKED_EXTRA_HEADERS = {
+    "host", "transfer-encoding", "connection", "upgrade",
+    "content-length", "content-type", "x-internal-secret",
+}
+
 
 def _track_task(task: asyncio.Task) -> None:
     """Register a background task and auto-remove it when done."""
@@ -497,6 +503,7 @@ async def execute_proxy(
     agent_identity: Optional[str] = None,
     agent_version: Optional[str] = None,
     provider_payment: Optional[dict] = None,
+    extra_headers: Optional[dict] = None,
 ) -> dict:
     """Execute the full proxy flow: validate → charge → forward → prove."""
 
@@ -564,7 +571,11 @@ async def execute_proxy(
 
     # 5. Hash request
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    request_data = {"target": target, "method": method, "payload": payload, "amount": amount, "currency": currency}
+    # extra_headers inclus dans le hash (font partie du contexte de la requête certifiée)
+    # Les valeurs sensibles (Authorization) sont hashées, pas stockées en clair dans la preuve
+    _safe_extra_headers = {k: "***" for k in (extra_headers or {})} if extra_headers else {}
+    request_data = {"target": target, "method": method, "payload": payload, "amount": amount, "currency": currency,
+                    **({"extra_headers_keys": sorted(_safe_extra_headers.keys())} if _safe_extra_headers else {})}
 
     # 6. Charge via payment provider (skip for free tier)
     target_domain = urlparse(target).hostname or "unknown"
@@ -662,6 +673,18 @@ async def execute_proxy(
 
     try:
         fwd_headers = {"X-Internal-Secret": INTERNAL_SECRET} if INTERNAL_SECRET else {}
+        # Merge extra_headers with hardening: blocklist, type/size validation
+        if extra_headers and isinstance(extra_headers, dict):
+            if len(extra_headers) > 10:
+                raise ProxyError("invalid_request", "extra_headers: max 10 headers allowed", 400)
+            for k, v in extra_headers.items():
+                if not isinstance(k, str) or not isinstance(v, str):
+                    raise ProxyError("invalid_request", "extra_headers: keys and values must be strings", 400)
+                if len(v) > 4096:
+                    raise ProxyError("invalid_request", f"extra_headers: value for '{k}' exceeds 4096 chars", 400)
+                if k.lower() in _BLOCKED_EXTRA_HEADERS:
+                    continue  # silently drop blocked headers
+                fwd_headers[k] = v
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_SECONDS) as client:
             if method == "GET":
                 resp = await client.get(target, params=payload, headers=fwd_headers)
