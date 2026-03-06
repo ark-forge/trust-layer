@@ -313,6 +313,53 @@ print(f"Verify at: {proof['verification_url']}")
 
 ---
 
+#### Mode C — Certifying an action on a third-party API (extra_headers)
+
+Use this when the target API requires its own authentication (GitHub token, Slack token, etc.). Pass the credentials in `extra_headers` — they are forwarded to the target and included in the proof's request hash.
+
+```python
+import requests
+
+TRUST_LAYER_API_KEY = "mcp_free_xxx..."
+GITHUB_TOKEN = "ghp_xxx..."
+
+response = requests.post(
+    "https://arkforge.fr/trust/v1/proxy",
+    headers={
+        "X-Api-Key": TRUST_LAYER_API_KEY,
+        "Content-Type": "application/json"
+    },
+    json={
+        "target": "https://api.github.com/repos/owner/repo/issues/5/comments",
+        "method": "POST",
+        "payload": {"body": "Automated analysis complete — see proof below."},
+        "description": "GitHub comment by autonomous agent",
+        "extra_headers": {
+            "Authorization": f"token {GITHUB_TOKEN}",
+            "Accept": "application/vnd.github+json"
+        }
+    }
+)
+
+result = response.json()
+proof = result['proof']
+print(f"Comment posted. Proof: {proof['verification_url']}")
+```
+
+**What is certified:**
+- The exact payload sent to GitHub (SHA-256 hash of request)
+- GitHub's response confirming the comment was created (SHA-256 hash of response)
+- Timestamp (RFC 3161) + Ed25519 signature
+
+**Constraints on `extra_headers`:**
+- Maximum **10 headers**
+- Keys and values must be **strings**, values ≤ 4096 characters
+- Blocked headers (silently dropped): `Host`, `Transfer-Encoding`, `Connection`, `Upgrade`, `Content-Length`, `Content-Type`, `X-Internal-Secret`
+
+**Security note:** `extra_headers` values are included in the request hash and therefore in the proof's chain hash. This means the token's presence is attested — but the token value itself is **not stored** by Trust Layer (only its hash contribution).
+
+---
+
 #### Mode B — Transaction + payment proof
 
 ```python

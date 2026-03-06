@@ -266,6 +266,31 @@ When `provider_payment.receipt_url` is provided, ArkForge fetches the receipt di
 
 Currently supported PSPs: **Stripe** (`pay.stripe.com`, `receipt.stripe.com`). The parser architecture is extensible — adding a new PSP requires implementing a single `ReceiptParser` subclass.
 
+**Optional body field — forwarded headers (`extra_headers`):**
+
+Headers that Trust Layer will forward to the target API alongside the request. Use this when the target requires authentication or custom headers.
+
+```json
+{
+  "target": "https://api.github.com/repos/owner/repo/issues/5/comments",
+  "method": "POST",
+  "payload": {"body": "Automated analysis complete."},
+  "extra_headers": {
+    "Authorization": "token ghp_xxx",
+    "Accept": "application/vnd.github+json"
+  }
+}
+```
+
+**Constraints:**
+- Maximum **10 headers**
+- Keys and values must be **strings**
+- Values must not exceed **4096 characters**
+- The following headers are **silently dropped** (security):
+  `Host`, `Transfer-Encoding`, `Connection`, `Upgrade`, `Content-Length`, `Content-Type`, `X-Internal-Secret`
+
+`Content-Type` is always `application/json` — it cannot be overridden via `extra_headers`.
+
 **Optional headers:**
 
 | Header | Description |
