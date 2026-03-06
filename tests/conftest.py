@@ -75,6 +75,12 @@ def _isolate_data(tmp_path, monkeypatch):
     import trust_layer.rekor as rekor_mod
     monkeypatch.setattr(rekor_mod, "REKOR_URL", "https://rekor.test.internal")
 
+    # Redis isolation — force fallback JSON pour tous les tests existants.
+    # Les tests Redis-spécifiques mockent get_redis() explicitement.
+    import trust_layer.redis_client as redis_mod
+    monkeypatch.setattr(redis_mod, "_redis_client", None)
+    monkeypatch.setattr(redis_mod, "_redis_checked", True)
+
 
 @pytest.fixture
 def test_api_key(tmp_path):
