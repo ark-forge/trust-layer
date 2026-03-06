@@ -72,7 +72,7 @@ Or open it in a browser — each proof has a public HTML verification page.
 - **Free tier** — 500 proofs/month, no credit card required
 - **Agent identity** — optional `X-Agent-Identity` / `X-Agent-Version` headers, mismatch detection across calls
 - **Triptyque de la Preuve** — 3-level watermarking on every transaction (see below)
-- **Rate limiting** — daily cap (all keys) + monthly quota (Free: 500/month, Pro: 5 000/month, Enterprise: 50 000/month)
+- **Rate limiting** — daily cap of **500 proofs/day** (all keys, all plans) + monthly quota (Free: 500/month, Pro: 5 000/month, Enterprise: 50 000/month)
 - **Overage billing (opt-in)** — Pro/Enterprise keys can opt in to overage billing: proofs beyond the monthly quota are debited from prepaid credits at a lower per-proof rate (€0.01 Pro, €0.005 Enterprise), up to a monthly cap chosen by the user (€5–€100)
 - **Email** — welcome + proof receipts via Resend (SMTP relay, DKIM-signed, `noreply@arkforge.fr`)
 - **Proof Specification** — open spec with test vectors for independent verification ([ark-forge/proof-spec](https://github.com/ark-forge/proof-spec))
@@ -709,6 +709,32 @@ For enterprises with specific regulatory requirements:
 | eIDAS-qualified timestamps (QTSP) | Supported via custom TSA config — not included in standard plans. [Contact us](mailto:contact@arkforge.fr) |
 | On-premise deployment | Self-host with your own signing key and TSA pool — see Self-hosting section |
 | Volume above 50,000 proofs/month | Negotiated contract — [contact us](mailto:contact@arkforge.fr) |
+
+## Proxy limits
+
+All limits apply to `POST /v1/proxy`.
+
+| Limit | Value | Behaviour when exceeded |
+|-------|-------|------------------------|
+| **Target protocol** | HTTPS only | `invalid_target` 400 |
+| **Methods** | GET or POST | `invalid_request` 400 |
+| **Payload format** | JSON only (`application/json`) | `invalid_request` 400 |
+| **Response timeout** | **120 seconds** | `proxy_timeout` 504 — proof still issued |
+| **Response stored / hashed** | **1 MB** | Response truncated at 1 MB before hashing — proof covers truncated content |
+| **Daily cap** | **500 proofs/day** (all plans) | `rate_limited` 429 |
+| **Monthly quota** | 500 / 5 000 / 50 000 (Free / Pro / Enterprise) | `rate_limited` 429 — unless overage opt-in |
+| **`extra_headers` count** | Max 10 | `invalid_request` 400 |
+| **`extra_headers` value length** | Max 4 096 chars per value | `invalid_request` 400 |
+| **Idempotency cache** | 512 KB per cached response | Cached response truncated at 512 KB |
+
+**Not supported by the proxy:**
+- Binary payloads (`multipart/form-data`, raw bytes)
+- Streaming / chunked responses (full response collected before proof generation)
+- WebSocket upgrades (`Upgrade` header is blocked)
+- HTTP targets (HTTPS only)
+- Private / reserved IP ranges (SSRF guard — see Security section)
+
+**Receipt fetching** (`provider_payment.receipt_url`) has separate limits: 500 KB max, 3 redirects, 10s timeout. These apply only to PSP receipt fetching, not to the target API call.
 
 ## Security
 

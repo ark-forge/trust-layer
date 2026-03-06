@@ -467,6 +467,36 @@ Open `https://arkforge.fr/trust/v/{proof_id}` in a browser for a human-readable 
 
 ---
 
+## Proxy limits
+
+| Limit | Value | Error when exceeded |
+|-------|-------|---------------------|
+| **Target protocol** | HTTPS only | `invalid_target` 400 |
+| **Methods** | `GET` or `POST` | `invalid_request` 400 |
+| **Payload format** | JSON only | `invalid_request` 400 |
+| **Response timeout** | **120 seconds** | `proxy_timeout` 504 — proof still issued |
+| **Response stored / hashed** | **1 MB** max | Truncated at 1 MB — proof covers truncated content |
+| **Daily cap** | **500 proofs/day** (all plans) | `rate_limited` 429 |
+| **Monthly quota** | 500 / 5 000 / 50 000 (Free / Pro / Enterprise) | `rate_limited` 429 (unless overage enabled) |
+| **`extra_headers` count** | Max 10 | `invalid_request` 400 |
+| **`extra_headers` value length** | Max 4 096 chars | `invalid_request` 400 |
+
+**Unsupported by the proxy:**
+
+| Feature | Status |
+|---------|--------|
+| Binary payloads (`multipart/form-data`, raw bytes) | Not supported — JSON only |
+| Streaming / Server-Sent Events | Not supported — full response collected before proof |
+| WebSocket (`Upgrade` header) | Not supported — blocked |
+| HTTP (non-TLS) targets | Not supported — HTTPS required |
+| Private IPs / localhost | Blocked — SSRF protection |
+
+**Note on response truncation:** if the target API returns more than 1 MB, the stored response is truncated. The proof's `response_hash` covers the truncated version. The full upstream response is not retrievable from Trust Layer — only the first 1 MB is stored.
+
+**Note on the 120s timeout:** long-running target APIs (ML inference, batch jobs) may hit the timeout. In that case, Trust Layer returns `proxy_timeout` (504) but still issues a proof capturing the attempt. If this is a recurring issue, consider wrapping your target API in an async job pattern and calling Trust Layer only when the result is ready.
+
+---
+
 ## Verify a proof
 
 **Public URL:**
