@@ -294,6 +294,7 @@ async def proxy_endpoint(
     method = body.get("method", "POST")
     description = body.get("description", "")
     provider_payment = body.get("provider_payment")
+    extra_headers = body.get("extra_headers")  # Optional: headers forwarded to target API
 
     if not target:
         return _error_response("invalid_target", "Missing 'target' field", 400)
@@ -303,6 +304,8 @@ async def proxy_endpoint(
         return _error_response("invalid_request", "'method' must be 'GET' or 'POST'", 400)
     if not isinstance(currency, str):
         return _error_response("invalid_request", "'currency' must be a string", 400)
+    if extra_headers is not None and not isinstance(extra_headers, dict):
+        return _error_response("invalid_request", "'extra_headers' must be a JSON object or null", 400)
 
     # Amount is recalculated inside execute_proxy based on plan + overage status.
     # Pass 0.0 here — execute_proxy determines the real debit amount.
@@ -322,6 +325,7 @@ async def proxy_endpoint(
             agent_identity=x_agent_identity,
             agent_version=x_agent_version,
             provider_payment=provider_payment,
+            extra_headers=extra_headers,
         )
     except ProxyError as e:
         return JSONResponse(status_code=e.status, content=e.to_dict())
