@@ -380,3 +380,137 @@ async def test_execute_proxy_scrubs_secret_from_response(test_api_key):
     assert "X-Internal-Secret" not in response_body.get("headers", {})
     # Chain hash still present — integrity not broken
     assert result["proof"]["hashes"]["chain"]
+
+
+@pytest.mark.asyncio
+async def test_execute_proxy_extra_headers_forwarded(test_api_key):
+    """Authorization header in extra_headers is forwarded to the target service."""
+    add_credits(test_api_key, 10.00, "pi_test_extra_fwd")
+
+    captured_headers = {}
+
+    async def mock_post(url, json=None, headers=None, **kwargs):
+        captured_headers.update(headers or {})
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"ok": True}
+        mock_resp.headers = {}
+        return mock_resp
+
+    mock_client = AsyncMock()
+    mock_client.post = mock_post
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("httpx.AsyncClient", return_value=mock_client), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+
+        await execute_proxy(
+            target="https://example.com/api",
+            method="POST",
+            payload={},
+            amount=PROOF_PRICE,
+            currency="eur",
+            api_key=test_api_key,
+            extra_headers={"Authorization": "token ghp_xxx"},
+        )
+
+    assert captured_headers.get("Authorization") == "token ghp_xxx"
+
+
+@pytest.mark.asyncio
+async def test_execute_proxy_extra_headers_blocks_internal_secret(test_api_key):
+    """X-Internal-Secret in extra_headers is silently dropped — never forwarded."""
+    add_credits(test_api_key, 10.00, "pi_test_extra_secret")
+
+    captured_headers = {}
+
+    async def mock_post(url, json=None, headers=None, **kwargs):
+        captured_headers.update(headers or {})
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"ok": True}
+        mock_resp.headers = {}
+        return mock_resp
+
+    mock_client = AsyncMock()
+    mock_client.post = mock_post
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("httpx.AsyncClient", return_value=mock_client), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+
+        await execute_proxy(
+            target="https://example.com/api",
+            method="POST",
+            payload={},
+            amount=PROOF_PRICE,
+            currency="eur",
+            api_key=test_api_key,
+            extra_headers={"X-Internal-Secret": "INJECTED"},
+        )
+
+    # The real INTERNAL_SECRET may or may not be set, but "INJECTED" must never appear
+    assert captured_headers.get("X-Internal-Secret") != "INJECTED"
+
+
+@pytest.mark.asyncio
+async def test_execute_proxy_extra_headers_blocks_hop_by_hop(test_api_key):
+    """Hop-by-hop headers (Host, Transfer-Encoding) in extra_headers are silently dropped."""
+    add_credits(test_api_key, 10.00, "pi_test_extra_hop")
+
+    captured_headers = {}
+
+    async def mock_post(url, json=None, headers=None, **kwargs):
+        captured_headers.update(headers or {})
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"ok": True}
+        mock_resp.headers = {}
+        return mock_resp
+
+    mock_client = AsyncMock()
+    mock_client.post = mock_post
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("httpx.AsyncClient", return_value=mock_client), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+
+        await execute_proxy(
+            target="https://example.com/api",
+            method="POST",
+            payload={},
+            amount=PROOF_PRICE,
+            currency="eur",
+            api_key=test_api_key,
+            extra_headers={"Host": "evil.com", "Transfer-Encoding": "chunked"},
+        )
+
+    assert "Host" not in captured_headers
+    assert "Transfer-Encoding" not in captured_headers
+
+
+@pytest.mark.asyncio
+async def test_execute_proxy_extra_headers_max_count(test_api_key):
+    """More than 10 extra_headers raises ProxyError invalid_request."""
+    add_credits(test_api_key, 10.00, "pi_test_extra_max")
+
+    too_many = {f"X-Custom-{i}": f"value{i}" for i in range(11)}
+
+    with pytest.raises(ProxyError) as exc_info:
+        with patch("httpx.AsyncClient"), \
+             patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+            await execute_proxy(
+                target="https://example.com/api",
+                method="POST",
+                payload={},
+                amount=PROOF_PRICE,
+                currency="eur",
+                api_key=test_api_key,
+                extra_headers=too_many,
+            )
+
+    assert exc_info.value.code == "invalid_request"
+    assert exc_info.value.status == 400
