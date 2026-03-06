@@ -1,8 +1,8 @@
 """Tests for rate limiting."""
 
 from unittest.mock import patch
-from trust_layer.rate_limit import check_rate_limit, get_usage
-from trust_layer.config import FREE_TIER_MONTHLY_LIMIT, PRO_MONTHLY_LIMIT, ENTERPRISE_MONTHLY_LIMIT
+from trust_layer.rate_limit import check_rate_limit, get_usage, get_daily_limit
+from trust_layer.config import FREE_TIER_MONTHLY_LIMIT, PRO_MONTHLY_LIMIT, ENTERPRISE_MONTHLY_LIMIT, DAILY_LIMITS_PER_PLAN
 
 
 def test_rate_limit_allows_within_limit():
@@ -98,3 +98,23 @@ def test_pro_key_monthly_blocks():
         assert allowed is False
         assert remaining == 0
         assert reason == "monthly_quota"
+
+
+def test_daily_limit_per_plan():
+    """Daily caps are coherent with monthly quotas — each plan has its own limit."""
+    assert get_daily_limit("mcp_free_any") == DAILY_LIMITS_PER_PLAN["free"]      # 100
+    assert get_daily_limit("mcp_pro_any") == DAILY_LIMITS_PER_PLAN["pro"]        # 500
+    assert get_daily_limit("mcp_ent_any") == DAILY_LIMITS_PER_PLAN["enterprise"] # 5 000
+    assert get_daily_limit("mcp_test_any") == DAILY_LIMITS_PER_PLAN["test"]      # 100
+
+    # Plans are coherent: daily_cap ≤ monthly_quota
+    assert DAILY_LIMITS_PER_PLAN["free"] <= FREE_TIER_MONTHLY_LIMIT
+    assert DAILY_LIMITS_PER_PLAN["pro"] <= PRO_MONTHLY_LIMIT
+    assert DAILY_LIMITS_PER_PLAN["enterprise"] <= ENTERPRISE_MONTHLY_LIMIT
+
+    # Auto-resolution (no explicit limit=) uses plan-specific cap
+    usage = get_usage("mcp_pro_dyn_limit")
+    assert usage["daily"]["limit"] == DAILY_LIMITS_PER_PLAN["pro"]
+
+    usage = get_usage("mcp_ent_dyn_limit")
+    assert usage["daily"]["limit"] == DAILY_LIMITS_PER_PLAN["enterprise"]

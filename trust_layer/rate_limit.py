@@ -7,6 +7,7 @@ from datetime import datetime, timezone, timedelta
 from .config import (
     RATE_LIMITS_FILE, RATE_LIMIT_PER_KEY_PER_DAY, FREE_TIER_MONTHLY_LIMIT,
     OVERAGE_PRICES, _PRO_MONTHLY_LIMIT, _ENTERPRISE_MONTHLY_LIMIT,
+    DAILY_LIMITS_PER_PLAN,
 )
 from .keys import is_free_key, get_key_plan, validate_api_key
 from .persistence import load_json, save_json
@@ -19,6 +20,13 @@ _ALERT_THRESHOLD = 0.80  # send alert when usage crosses this fraction
 # Prevents TOCTOU races when concurrent threads call check_rate_limit simultaneously.
 _RATE_LIMIT_LOCK = threading.Lock()
 
+
+def get_daily_limit(api_key: str) -> int:
+    """Return the daily cap for this API key based on its plan."""
+    plan = get_key_plan(api_key)
+    return DAILY_LIMITS_PER_PLAN.get(plan, RATE_LIMIT_PER_KEY_PER_DAY)
+
+
 # Monthly quotas per plan (None = no monthly quota, daily cap only)
 _MONTHLY_LIMITS = {
     "free": FREE_TIER_MONTHLY_LIMIT,
@@ -28,13 +36,15 @@ _MONTHLY_LIMITS = {
 }
 
 
-def check_rate_limit(api_key: str, limit: int = RATE_LIMIT_PER_KEY_PER_DAY) -> tuple[bool, int, bool, str]:
+def check_rate_limit(api_key: str, limit: int | None = None) -> tuple[bool, int, bool, str]:
     """Check if API key is within limits.
 
     Returns (allowed, remaining, is_overage, block_reason).
     block_reason: '' (allowed), 'daily_cap', 'monthly_quota', 'overage_cap'
     is_overage: True when the proof is beyond the monthly quota but within overage cap.
     """
+    if limit is None:
+        limit = get_daily_limit(api_key)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     month = datetime.now(timezone.utc).strftime("%Y-%m")
     key_id = api_key[:16]
@@ -239,8 +249,10 @@ def _maybe_send_overage_alerts(api_key: str, entry: dict, plan: str):
         logger.warning("Overage alert skipped: %s", e)
 
 
-def get_usage(api_key: str, limit: int = RATE_LIMIT_PER_KEY_PER_DAY) -> dict:
+def get_usage(api_key: str, limit: int | None = None) -> dict:
     """Get current usage for an API key."""
+    if limit is None:
+        limit = get_daily_limit(api_key)
     limits = load_json(RATE_LIMITS_FILE, {})
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     month = datetime.now(timezone.utc).strftime("%Y-%m")
@@ -283,7 +295,7 @@ def get_usage(api_key: str, limit: int = RATE_LIMIT_PER_KEY_PER_DAY) -> dict:
     return result
 
 
-def check_quota_alerts(limit: int = RATE_LIMIT_PER_KEY_PER_DAY) -> list[dict]:
+def check_quota_alerts(limit: int | None = None) -> list[dict]:
     """Check all keys for >80% daily quota usage. Returns list of alerts."""
     limits = load_json(RATE_LIMITS_FILE, {})
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -292,14 +304,25 @@ def check_quota_alerts(limit: int = RATE_LIMIT_PER_KEY_PER_DAY) -> list[dict]:
         if entry.get("date") != today:
             continue
         used = entry.get("count", 0)
-        if used >= limit * 0.8:
+        # Derive plan from key_id prefix (first 16 chars of the full key)
+        if limit is not None:
+            key_limit = limit  # explicit override (tests)
+        elif key_id.startswith("mcp_free_"):
+            key_limit = DAILY_LIMITS_PER_PLAN["free"]
+        elif key_id.startswith("mcp_ent_"):
+            key_limit = DAILY_LIMITS_PER_PLAN["enterprise"]
+        elif key_id.startswith("mcp_test_"):
+            key_limit = DAILY_LIMITS_PER_PLAN["test"]
+        else:
+            key_limit = DAILY_LIMITS_PER_PLAN["pro"]
+        if used >= key_limit * 0.8:
             alerts.append({
                 "key_prefix": key_id,
                 "used": used,
-                "limit": limit,
-                "pct": round(used / limit * 100, 1),
+                "limit": key_limit,
+                "pct": round(used / key_limit * 100, 1),
             })
-            logger.info("API key %s at %d%% of daily quota (%d/%d)", key_id, round(used / limit * 100), used, limit)
+            logger.info("API key %s at %d%% of daily quota (%d/%d)", key_id, round(used / key_limit * 100), used, key_limit)
     return alerts
 
 

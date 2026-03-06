@@ -66,7 +66,7 @@ from .config import (
     MIN_CREDIT_PURCHASE,
     MAX_CREDIT_PURCHASE,
     PRO_SETUP_MIN_AMOUNT,
-    RATE_LIMIT_PER_KEY_PER_DAY,
+    RATE_LIMIT_PER_KEY_PER_DAY, DAILY_LIMITS_PER_PLAN,
     FREE_TIER_MONTHLY_LIMIT,
     PRO_MONTHLY_LIMIT,
     ENTERPRISE_MONTHLY_LIMIT,
@@ -97,7 +97,7 @@ from .credits import add_credits, get_balance
 from .proofs import load_proof, store_proof, get_public_proof, verify_proof_integrity
 from .proxy import execute_proxy, ProxyError, drain_background_tasks, _track_task, _log_background_task
 from .templates import render_proof_page
-from .rate_limit import get_usage
+from .rate_limit import get_usage, get_daily_limit
 from .email_notify import send_welcome_email
 from .timestamps import submit_hash
 from .reputation import get_reputation, get_public_reputation
@@ -1117,6 +1117,7 @@ async def pricing():
             "free": {
                 "price": "0 EUR/month",
                 "monthly_quota": FREE_TIER_MONTHLY_LIMIT,
+                "daily_cap": DAILY_LIMITS_PER_PLAN["free"],
                 "overage": None,
                 "witnesses": "3 (Ed25519, RFC 3161 TSA, Sigstore Rekor)",
                 "setup": f"{TRUST_LAYER_BASE_URL}/v1/keys/free-signup",
@@ -1125,6 +1126,7 @@ async def pricing():
             "pro": {
                 "price": "29 EUR/month",
                 "monthly_quota": PRO_MONTHLY_LIMIT,
+                "daily_cap": DAILY_LIMITS_PER_PLAN["pro"],
                 "overage": f"{PRO_OVERAGE_PRICE} EUR/proof (opt-in)",
                 "witnesses": "3 (Ed25519, RFC 3161 TSA, Sigstore Rekor)",
                 "setup": f"{TRUST_LAYER_BASE_URL}/v1/keys/setup",
@@ -1140,6 +1142,7 @@ async def pricing():
             "enterprise": {
                 "price": "149 EUR/month",
                 "monthly_quota": ENTERPRISE_MONTHLY_LIMIT,
+                "daily_cap": DAILY_LIMITS_PER_PLAN["enterprise"],
                 "overage": f"{ENTERPRISE_OVERAGE_PRICE} EUR/proof (opt-in)",
                 "witnesses": "3 (Ed25519, RFC 3161 QTSP eIDAS, Sigstore Rekor)",
                 "setup": f"{TRUST_LAYER_BASE_URL}/v1/keys/enterprise-setup",

@@ -72,7 +72,7 @@ Or open it in a browser — each proof has a public HTML verification page.
 - **Free tier** — 500 proofs/month, no credit card required
 - **Agent identity** — optional `X-Agent-Identity` / `X-Agent-Version` headers, mismatch detection across calls
 - **Triptyque de la Preuve** — 3-level watermarking on every transaction (see below)
-- **Rate limiting** — daily cap of **500 proofs/day** (all keys, all plans) + monthly quota (Free: 500/month, Pro: 5 000/month, Enterprise: 50 000/month)
+- **Rate limiting** — daily cap per plan (Free: 100/day, Pro: 500/day, Enterprise: 5 000/day) + monthly quota (Free: 500/month, Pro: 5 000/month, Enterprise: 50 000/month)
 - **Overage billing (opt-in)** — Pro/Enterprise keys can opt in to overage billing: proofs beyond the monthly quota are debited from prepaid credits at a lower per-proof rate (€0.01 Pro, €0.005 Enterprise), up to a monthly cap chosen by the user (€5–€100)
 - **Email** — welcome + proof receipts via Resend (SMTP relay, DKIM-signed, `noreply@arkforge.fr`)
 - **Proof Specification** — open spec with test vectors for independent verification ([ark-forge/proof-spec](https://github.com/ark-forge/proof-spec))
@@ -689,12 +689,12 @@ Free keys (`mcp_free_*`) do not use credits — they have a monthly quota of 500
 
 ## Plans and API key prefixes
 
-| Prefix | Plan | Monthly price | Quota | Overage (opt-in) | Witnesses |
-|--------|------|---------------|-------|-----------------|-----------|
-| `mcp_free_*` | Free | Free | 500 proofs/month | Not available | 3 (Ed25519, RFC 3161 TSA, Sigstore Rekor) |
-| `mcp_pro_*` | Pro | €29/month | 5,000 proofs/month | 0.01 EUR/proof (€5–€100 cap) | 3 (Ed25519, RFC 3161 TSA, Sigstore Rekor) |
-| `mcp_ent_*` | Enterprise | €149/month | 50,000 proofs/month | 0.005 EUR/proof (€5–€100 cap) | 3 (Ed25519, RFC 3161 TSA, Sigstore Rekor) |
-| `mcp_test_*` | Test | Stripe test mode | 100 proofs/day | Not available | 3 (Ed25519, RFC 3161 TSA, Sigstore Rekor) |
+| Prefix | Plan | Monthly price | Monthly quota | Daily cap | Overage (opt-in) | Witnesses |
+|--------|------|---------------|--------------|-----------|-----------------|-----------|
+| `mcp_free_*` | Free | Free | 500/month | 100/day | Not available | 3 (Ed25519, RFC 3161 TSA, Sigstore Rekor) |
+| `mcp_pro_*` | Pro | €29/month | 5,000/month | 500/day | 0.01 EUR/proof (€5–€100 cap) | 3 (Ed25519, RFC 3161 TSA, Sigstore Rekor) |
+| `mcp_ent_*` | Enterprise | €149/month | 50,000/month | 5,000/day | 0.005 EUR/proof (€5–€100 cap) | 3 (Ed25519, RFC 3161 TSA, Sigstore Rekor) |
+| `mcp_test_*` | Test | Stripe test mode | — | 100/day | Not available | 3 (Ed25519, RFC 3161 TSA, Sigstore Rekor) |
 
 The proxy auto-selects the right plan, witnesses, and rate limits based on the API key prefix. Free tier skips Stripe entirely (no credit card required). Pro and Enterprise keys are created automatically after Stripe subscription checkout. Test mode uses Stripe test keys (card `4242 4242 4242 4242`).
 
@@ -721,7 +721,7 @@ All limits apply to `POST /v1/proxy`.
 | **Payload format** | JSON only (`application/json`) | `invalid_request` 400 |
 | **Response timeout** | **120 seconds** | `proxy_timeout` 504 — proof still issued |
 | **Response stored / hashed** | **1 MB** | Response truncated at 1 MB before hashing — proof covers truncated content |
-| **Daily cap** | **500 proofs/day** (all plans) | `rate_limited` 429 |
+| **Daily cap** | Free: **100/day** · Pro: **500/day** · Enterprise: **5 000/day** | `rate_limited` 429 |
 | **Monthly quota** | 500 / 5 000 / 50 000 (Free / Pro / Enterprise) | `rate_limited` 429 — unless overage opt-in |
 | **`extra_headers` count** | Max 10 | `invalid_request` 400 |
 | **`extra_headers` value length** | Max 4 096 chars per value | `invalid_request` 400 |
