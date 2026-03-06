@@ -71,6 +71,12 @@ def _isolate_data(tmp_path, monkeypatch):
     # DNS rebinding mock — prevent real DNS resolution in proxy tests
     monkeypatch.setattr(proxy_mod, "_check_no_private_dns", AsyncMock(return_value=None))
 
+    # Redis isolation — force fallback JSON pour tous les tests existants.
+    # Les tests Redis-spécifiques mockent get_redis() explicitement.
+    import trust_layer.redis_client as redis_mod
+    monkeypatch.setattr(redis_mod, "_redis_client", None)
+    monkeypatch.setattr(redis_mod, "_redis_checked", True)
+
     # Rekor — isolate to prevent real network calls in tests
     import trust_layer.rekor as rekor_mod
     monkeypatch.setattr(rekor_mod, "REKOR_URL", "https://rekor.test.internal")

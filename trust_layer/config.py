@@ -145,6 +145,9 @@ CORS_ALLOWED_ORIGINS = [
 # --- Trust Layer URL ---
 TRUST_LAYER_BASE_URL = os.environ.get("TRUST_LAYER_BASE_URL", "https://arkforge.fr/trust")
 
+# --- Redis ---
+REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0")
+
 # --- RFC 3161 Timestamp Authority pool ---
 # Tried in order — first success wins. All are free public endpoints.
 # Primary: FreeTSA (community), Secondary: DigiCert (WebTrust), Tertiary: Sectigo (WebTrust).
