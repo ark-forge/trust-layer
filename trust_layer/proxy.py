@@ -17,6 +17,7 @@ from .config import (
     MAX_AMOUNT,
     PROOF_PRICE,
     OVERAGE_PRICES,
+    PRO_OVERAGE_PRICE,
     PROXY_TIMEOUT_SECONDS,
     MAX_RESPONSE_STORE_BYTES,
     IDEMPOTENCY_DIR,
@@ -550,11 +551,11 @@ async def execute_proxy(
     if is_free:
         amount = 0.0
     elif is_overage:
-        amount = OVERAGE_PRICES.get(plan, PROOF_PRICE)
+        amount = OVERAGE_PRICES.get(plan, PRO_OVERAGE_PRICE)  # fallback to Pro rate, never 0.10
     elif plan in ("pro", "enterprise"):
         amount = 0.0  # Subscription covers within-quota proofs
     else:
-        amount = PROOF_PRICE  # test keys: pay-per-use
+        amount = 0.0  # test keys: internal use, no charge
 
     # Subscription proofs (pro/enterprise within quota) require no credit debit
     is_subscription = not is_free and not is_overage and plan in ("pro", "enterprise")
