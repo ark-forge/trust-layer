@@ -145,6 +145,7 @@ pytest tests/ -v
 | `CORS_ALLOWED_ORIGINS` | No | `https://arkforge.fr,https://www.arkforge.fr` | Comma-separated CORS allowed origins |
 | `KEYS_FERNET_KEY_FILE` | No | `/opt/claude-ceo/config/keys_fernet.key` | Path to Fernet key for `api_keys.json` encryption at rest. Generate: `python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. If absent, keys are stored unencrypted (warning logged). |
 | `KEYS_FERNET_KEY` | No | — | Fernet key as base64 string (env var alternative to `KEYS_FERNET_KEY_FILE`). Takes precedence over the file. |
+| `REDIS_URL` | No | `redis://127.0.0.1:6379/0` | Redis connection URL for atomic rate limiting (hot path). If Redis is unavailable, falls back to JSON + file lock automatically. |
 
 ### Signing key
 
@@ -179,13 +180,13 @@ location /trust/ {
 ```ini
 [Unit]
 Description=ArkForge Trust Layer
-After=network.target
+After=network.target redis-server.service
 
 [Service]
 User=arkforge
 WorkingDirectory=/opt/trust-layer
 EnvironmentFile=/opt/trust-layer/.env
-ExecStart=/opt/trust-layer/.venv/bin/uvicorn trust_layer.app:app --host 127.0.0.1 --port 8100
+ExecStart=/opt/trust-layer/.venv/bin/uvicorn trust_layer.app:app --host 127.0.0.1 --port 8100 --workers 4
 Restart=always
 
 [Install]

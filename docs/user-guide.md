@@ -736,7 +736,7 @@ result = agent.execute_task("https://provider.com/api", {"task": "analyze"})
 |------|------|---------------|------------|
 | **Free** | Free | 500 proofs/month | `mcp_free_*` |
 | **Pro** | €29/month (+ opt-in overage €0.01/proof) | 5,000 proofs/month | `mcp_pro_*` |
-| **Enterprise** | €149/month (+ opt-in overage €0.005/proof) | 50,000 proofs/month | `mcp_enterprise_*` |
+| **Enterprise** | €149/month (+ opt-in overage €0.005/proof) | 50,000 proofs/month | `mcp_ent_*` |
 | **Test** | Stripe test mode | 100 proofs/day | `mcp_test_*` |
 
 Mode B can use a **Free key** — certification only, payment is external, no monthly quota consumed.
@@ -759,6 +759,7 @@ Mode B can use a **Free key** — certification only, payment is external, no mo
 - [ ] Add `X-Api-Key` header
 - [ ] Wrap payload: `{"target": "...", "payload": {...}}`
 - [ ] If Mode B: add `provider_payment`
+- [ ] If Mode C: add `extra_headers` with target API credentials
 
 ### Step 4 — Test
 - [ ] Successful call (status 200)?
@@ -781,4 +782,4 @@ Mode B can use a **Free key** — certification only, payment is external, no mo
 
 ---
 
-*Last updated: 2026-03-04*
+*Last updated: 2026-03-06*

@@ -25,6 +25,19 @@ Agent → Trust Layer (certification + provider_payment)
         └─ Payment proof included
 
 Use case: financial audit, compliance, non-repudiation
+
+
+┌──────────────────────────────────────────────────────┐
+│ MODE C — Certified action on a third-party API       │
+└──────────────────────────────────────────────────────┘
+
+Agent → Trust Layer (certification + extra_headers)
+        └─ Trust Layer forwards headers to target API
+        └─ Proof: request (incl. auth) + response + timestamp
+        └─ Token value hashed, not stored
+
+Use case: certified GitHub comments, Slack messages,
+          any API requiring its own auth token
 ```
 
 ---
@@ -73,6 +86,27 @@ response = requests.post(
         "payload": {...}
     }
 )
+```
+
+#### Mode C (certified action — extra_headers)
+
+```python
+response = requests.post(
+    "https://arkforge.fr/trust/v1/proxy",
+    headers={"X-Api-Key": "mcp_xxx..."},
+    json={
+        "target": "https://api.github.com/repos/owner/repo/issues/5/comments",
+        "method": "POST",
+        "payload": {"body": "Automated analysis complete."},
+        "extra_headers": {
+            "Authorization": "token ghp_xxx",
+            "Accept": "application/vnd.github+json"
+        }
+    }
+)
+# Constraints: max 10 headers, values ≤ 4096 chars
+# Blocked: Host, Transfer-Encoding, Connection, Upgrade,
+#          Content-Length, Content-Type, X-Internal-Secret
 ```
 
 #### Mode B (transaction + payment)
