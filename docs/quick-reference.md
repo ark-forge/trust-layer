@@ -130,7 +130,7 @@ if 'provider_payment' in result['proof']:
 |---|------|-----|------------|------|
 | **Key prefix** | `mcp_free_*` | `mcp_pro_*` | `mcp_ent_*` | `mcp_test_*` |
 | **Monthly price** | Free | €29/month | €149/month | Stripe test mode |
-| **Monthly quota** | 500 proofs | 5,000 proofs | 50,000 proofs | 100/day |
+| **Monthly quota** | 500/month | 5,000/month | 50,000/month | 100/day (no monthly quota) |
 | **Overage (opt-in)** | — | 0.01 EUR/proof | 0.005 EUR/proof | — |
 | **Stripe** | — | Live | Live | Test mode |
 | **Card** | None | Real card | Real card | `4242 4242 4242 4242` |

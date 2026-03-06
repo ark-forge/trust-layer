@@ -476,7 +476,7 @@ Open `https://arkforge.fr/trust/v/{proof_id}` in a browser for a human-readable 
 | **Payload format** | JSON only | `invalid_request` 400 |
 | **Response timeout** | **120 seconds** | `proxy_timeout` 504 — proof still issued |
 | **Response stored / hashed** | **1 MB** max | Truncated at 1 MB — proof covers truncated content |
-| **Daily cap** | Free: **100/day** · Pro: **500/day** · Enterprise: **5 000/day** | `rate_limited` 429 |
+| **Daily cap** | None for Free/Pro/Enterprise — full quota usable at any time. Test keys: **100/day** | `rate_limited` 429 (test keys only) |
 | **Monthly quota** | 500 / 5 000 / 50 000 (Free / Pro / Enterprise) | `rate_limited` 429 (unless overage enabled) |
 | **`extra_headers` count** | Max 10 | `invalid_request` 400 |
 | **`extra_headers` value length** | Max 4 096 chars | `invalid_request` 400 |
