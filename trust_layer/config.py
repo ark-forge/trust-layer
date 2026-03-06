@@ -111,13 +111,15 @@ FREE_TIER_MONTHLY_LIMIT = 500         # Free: 500 proofs/month
 PRO_MONTHLY_LIMIT = 5_000             # Pro €29/month: 5 000 proofs/month
 ENTERPRISE_MONTHLY_LIMIT = 50_000     # Enterprise €149/month: 50 000 proofs/month
 
-# Daily caps per plan — coherent with monthly quota (monthly / 10 × burst factor)
-# At this rate a client can burst for 10 days before hitting monthly quota.
+# Daily caps per plan.
+# Free/Pro/Enterprise: set to monthly quota — the monthly counter fires first,
+# the daily cap never adds a constraint beyond what is already sold.
+# Test keys: hard 100/day guard (no monthly quota, prevents infinite runaway loops).
 DAILY_LIMITS_PER_PLAN = {
-    "free":       100,    # 500/month  → ~17/day avg, 100/day burst
-    "pro":        500,    # 5 000/month → ~167/day avg, 500/day burst
-    "enterprise": 5_000,  # 50 000/month → ~1 667/day avg, 5 000/day burst
-    "test":       100,    # no monthly quota — daily cap is the only guard
+    "free":       FREE_TIER_MONTHLY_LIMIT,   # 500  — daily cap = monthly quota
+    "pro":        PRO_MONTHLY_LIMIT,          # 5 000 — daily cap = monthly quota
+    "enterprise": ENTERPRISE_MONTHLY_LIMIT,   # 50 000 — daily cap = monthly quota
+    "test":       100,                        # hard daily guard only
 }
 # Overage rates (credits billed when monthly quota exceeded)
 PRO_OVERAGE_PRICE = 0.01              # EUR per proof over 5 000

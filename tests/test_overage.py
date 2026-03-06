@@ -503,19 +503,21 @@ async def test_proxy_daily_cap_429():
     """Daily cap → 429 message distinct de monthly_quota."""
     from trust_layer.proxy import execute_proxy, ProxyError
     from trust_layer.persistence import load_json, save_json
-    from trust_layer.config import RATE_LIMITS_FILE, RATE_LIMIT_PER_KEY_PER_DAY
+    from trust_layer.config import RATE_LIMITS_FILE, DAILY_LIMITS_PER_PLAN
     from datetime import datetime, timezone
     key = _pro_key("px6")
     from trust_layer.credits import add_credits
     add_credits(key, 5.0, "pi_dcap")
-    # Pre-fill rate limit at exactly the daily cap
+    # Pre-fill daily counter at the Pro daily cap (= monthly quota)
+    # month_count is kept below monthly quota so the daily cap fires first
+    pro_daily_cap = DAILY_LIMITS_PER_PLAN["pro"]
     key_id = key[:16]
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     month = datetime.now(timezone.utc).strftime("%Y-%m")
     limits = load_json(RATE_LIMITS_FILE, {})
     limits[key_id] = {
-        "date": today, "count": RATE_LIMIT_PER_KEY_PER_DAY,
-        "month": month, "month_count": RATE_LIMIT_PER_KEY_PER_DAY,
+        "date": today, "count": pro_daily_cap,
+        "month": month, "month_count": 0,
     }
     save_json(RATE_LIMITS_FILE, limits)
 
