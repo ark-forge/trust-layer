@@ -145,6 +145,7 @@ pytest tests/ -v
 | `CORS_ALLOWED_ORIGINS` | No | `https://arkforge.fr,https://www.arkforge.fr` | Comma-separated CORS allowed origins |
 | `KEYS_FERNET_KEY_FILE` | No | `/opt/claude-ceo/config/keys_fernet.key` | Path to Fernet key for `api_keys.json` encryption at rest. Generate: `python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. If absent, keys are stored unencrypted (warning logged). |
 | `KEYS_FERNET_KEY` | No | — | Fernet key as base64 string (env var alternative to `KEYS_FERNET_KEY_FILE`). Takes precedence over the file. |
+| `REDIS_URL` | No | `redis://127.0.0.1:6379/0` | Redis connection URL for atomic rate limiting (hot path). If Redis is unavailable, falls back to JSON + file lock automatically. |
 
 ### Signing key
 
@@ -179,13 +180,13 @@ location /trust/ {
 ```ini
 [Unit]
 Description=ArkForge Trust Layer
-After=network.target
+After=network.target redis-server.service
 
 [Service]
 User=arkforge
 WorkingDirectory=/opt/trust-layer
 EnvironmentFile=/opt/trust-layer/.env
-ExecStart=/opt/trust-layer/.venv/bin/uvicorn trust_layer.app:app --host 127.0.0.1 --port 8100
+ExecStart=/opt/trust-layer/.venv/bin/uvicorn trust_layer.app:app --host 127.0.0.1 --port 8100 --workers 4
 Restart=always
 
 [Install]
@@ -735,6 +736,19 @@ All limits apply to `POST /v1/proxy`.
 - Private / reserved IP ranges (SSRF guard — see Security section)
 
 **Receipt fetching** (`provider_payment.receipt_url`) has separate limits: 500 KB max, 3 redirects, 10s timeout. These apply only to PSP receipt fetching, not to the target API call.
+
+### Payload transparency requirement
+
+ArkForge hashes and certifies **what it receives** — it does not decrypt content. This has one consequence depending on the encryption layer used:
+
+| Encryption layer | ArkForge behaviour | Proof attests |
+|------------------|--------------------|---------------|
+| **TLS / HTTPS only** (standard REST APIs) | Terminates TLS, sees plaintext JSON, hashes content | Semantic content (e.g. `qty=1` was sent, `"1 confirmed"` was returned) |
+| **Application-layer encryption** (payload encrypted before reaching ArkForge) | Hashes the ciphertext as-is | That a specific ciphertext was transmitted — not the plaintext content |
+
+**In practice:** standard REST APIs (GitHub, Stripe, OpenAI, etc.) use HTTPS-only transport — ArkForge sees and certifies the plaintext JSON. Application-layer encryption is rare in B2B API integrations.
+
+**If your target API uses end-to-end payload encryption:** the proof remains cryptographically valid (it certifies integrity of the ciphertext over the wire), but cannot attest to the semantic content without the decryption key. In this case, ArkForge proves *that* a call happened and *that* the ciphertext was not tampered with — not *what* the plaintext said.
 
 ## Security
 
