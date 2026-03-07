@@ -737,6 +737,19 @@ All limits apply to `POST /v1/proxy`.
 
 **Receipt fetching** (`provider_payment.receipt_url`) has separate limits: 500 KB max, 3 redirects, 10s timeout. These apply only to PSP receipt fetching, not to the target API call.
 
+### Payload transparency requirement
+
+ArkForge hashes and certifies **what it receives** — it does not decrypt content. This has one consequence depending on the encryption layer used:
+
+| Encryption layer | ArkForge behaviour | Proof attests |
+|------------------|--------------------|---------------|
+| **TLS / HTTPS only** (standard REST APIs) | Terminates TLS, sees plaintext JSON, hashes content | Semantic content (e.g. `qty=1` was sent, `"1 confirmed"` was returned) |
+| **Application-layer encryption** (payload encrypted before reaching ArkForge) | Hashes the ciphertext as-is | That a specific ciphertext was transmitted — not the plaintext content |
+
+**In practice:** standard REST APIs (GitHub, Stripe, OpenAI, etc.) use HTTPS-only transport — ArkForge sees and certifies the plaintext JSON. Application-layer encryption is rare in B2B API integrations.
+
+**If your target API uses end-to-end payload encryption:** the proof remains cryptographically valid (it certifies integrity of the ciphertext over the wire), but cannot attest to the semantic content without the decryption key. In this case, ArkForge proves *that* a call happened and *that* the ciphertext was not tampered with — not *what* the plaintext said.
+
 ## Security
 
 ### SSRF protection
