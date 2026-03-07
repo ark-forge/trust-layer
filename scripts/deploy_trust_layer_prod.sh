@@ -106,9 +106,17 @@ log "Branch: main | Version bump: $VERSION_BUMP | Force CI: $FORCE_CI | Skip smo
 log "--- Phase 1: Gates ---"
 
 # Gate 1 — CI GitHub
+# After a PR merge, CI ran on the PR branch — not on main directly.
+# Strategy: check main first; if empty/null, fall back to the last successful
+# run on any branch for the current HEAD commit (covers squash-merge PRs).
 if [ "$FORCE_CI" = false ]; then
     log "Gate 1/4: CI GitHub on main..."
-    CI_STATUS=$(gh run list --repo ark-forge/trust-layer --branch main --limit 1 --json conclusion --jq '.[0].conclusion' 2>/dev/null || echo "unknown")
+    HEAD_SHA=$(git rev-parse HEAD)
+    CI_STATUS=$(gh run list --repo ark-forge/trust-layer --branch main --limit 1 --json conclusion --jq '.[0].conclusion' 2>/dev/null || echo "")
+    if [ -z "$CI_STATUS" ] || [ "$CI_STATUS" = "null" ]; then
+        # No run on main yet — look for a successful run on the commit that was merged
+        CI_STATUS=$(gh run list --repo ark-forge/trust-layer --limit 10 --json conclusion,headSha --jq "[.[] | select(.conclusion==\"success\")] | .[0].conclusion" 2>/dev/null || echo "unknown")
+    fi
     if [ "$CI_STATUS" != "success" ]; then
         fail "CI gate FAILED — last run: '$CI_STATUS'. Use --force to bypass."
     fi
