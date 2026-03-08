@@ -81,6 +81,12 @@ def _isolate_data(tmp_path, monkeypatch):
     monkeypatch.setattr(redis_mod, "_redis_client", None)
     monkeypatch.setattr(redis_mod, "_redis_checked", True)
 
+    # Email isolation — la vault charge smtp.password dans os.environ même si
+    # SETTINGS_ENV_PATH=/dev/null. On neutralise _send_email au niveau du module
+    # pour éviter tout envoi SMTP réel (Resend) pendant les tests.
+    import trust_layer.email_notify as email_mod
+    monkeypatch.setattr(email_mod, "_send_email", lambda *a, **kw: None)
+
 
 @pytest.fixture
 def test_api_key(tmp_path):
