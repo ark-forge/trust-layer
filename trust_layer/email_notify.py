@@ -37,27 +37,32 @@ def _send_email(to: str, subject: str, body: str):
 
 
 def send_welcome_email(email: str, api_key: str):
-    """Send welcome email with API key after card setup."""
+    """Send welcome email with API key after free signup."""
     subject = "Your ArkForge Trust Layer API Key"
     body = f"""Welcome to ArkForge Trust Layer!
 
 Your API key: {api_key}
 
-Quick start — pay any API with one curl:
+Create your first proof right now (copy-paste this):
 
   curl -X POST https://arkforge.fr/trust/v1/proxy \\
-    -H "Authorization: Bearer {api_key}" \\
+    -H "X-API-Key: {api_key}" \\
     -H "Content-Type: application/json" \\
-    -d '{{"target": "https://any-api.com/endpoint",
-         "amount": 0.50,
-         "payload": {{"key": "value"}}}}'
+    -d '{{"target": "https://httpbin.org/post",
+         "payload": {{"test": "my first proof"}}}}'
 
-How it works:
-  1. You send a request with a target URL, amount, and payload
-  2. ArkForge charges your card, forwards the payload to the target
-  3. You get back the response + a cryptographic proof
+You'll get back the API response + a cryptographic proof with:
+  - Ed25519 digital signature
+  - SHA-256 hash chain
+  - RFC 3161 timestamp
 
 Verify any proof: https://arkforge.fr/trust/v1/proof/<proof_id>
+
+Your free plan: 500 proofs/month, no credit card needed.
+Check usage anytime:
+
+  curl https://arkforge.fr/trust/v1/usage \\
+    -H "X-API-Key: {api_key}"
 
 Docs: https://arkforge.fr/trust
 Support: contact@arkforge.fr
