@@ -16,7 +16,7 @@ response = requests.post("https://provider.com/api", json={...})
 
 **After:**
 ```python
-response = requests.post("https://arkforge.fr/trust/v1/proxy",
+response = requests.post("https://arkforge.tech/trust/v1/proxy",
     headers={"X-Api-Key": "mcp_xxx..."},
     json={"target": "https://provider.com/api", "payload": {...}})
 # → You have the result + a verifiable cryptographic proof
@@ -35,7 +35,7 @@ Trust Layer is designed for agents that run without human intervention. Here is 
 The first time, a human opens a browser, enters a card, and completes the Stripe Checkout. The card is saved in Stripe for future charges.
 
 ```bash
-curl -X POST https://arkforge.fr/trust/v1/keys/setup \
+curl -X POST https://arkforge.tech/trust/v1/keys/setup \
   -d '{"email": "agent@example.com", "amount": 10}'
 # → {"checkout_url": "https://checkout.stripe.com/c/pay/cs_live_..."}
 # Open the URL, enter card → key delivered by email
@@ -60,14 +60,14 @@ class AutonomousAgent:
     def ensure_budget(self):
         """Recharge automatically if balance is low."""
         usage = requests.get(
-            "https://arkforge.fr/trust/v1/usage",
+            "https://arkforge.tech/trust/v1/usage",
             headers=self.headers
         ).json()
 
         balance = usage['credit_balance']
         if balance < self.min_balance:
             result = requests.post(
-                "https://arkforge.fr/trust/v1/credits/buy",
+                "https://arkforge.tech/trust/v1/credits/buy",
                 headers=self.headers,
                 json={"amount": self.recharge_amount}
             ).json()
@@ -77,7 +77,7 @@ class AutonomousAgent:
     def execute(self, target, payload):
         self.ensure_budget()
         return requests.post(
-            "https://arkforge.fr/trust/v1/proxy",
+            "https://arkforge.tech/trust/v1/proxy",
             headers=self.headers,
             json={"target": target, "payload": payload}
         ).json()
@@ -146,7 +146,7 @@ Use this if you want to prove both that a transaction took place **and** that a 
 #### Option A — Free key (500 proofs/month)
 
 ```bash
-curl -X POST https://arkforge.fr/trust/v1/keys/free-signup \
+curl -X POST https://arkforge.tech/trust/v1/keys/free-signup \
   -H "Content-Type: application/json" \
   -d '{"email": "you@example.com"}'
 ```
@@ -169,7 +169,7 @@ No credit card required.
 ##### B.1 — Test mode (for development)
 
 ```bash
-curl -X POST https://arkforge.fr/trust/v1/keys/setup \
+curl -X POST https://arkforge.tech/trust/v1/keys/setup \
   -H "Content-Type: application/json" \
   -d '{
     "email": "you@example.com",
@@ -199,7 +199,7 @@ curl -X POST https://arkforge.fr/trust/v1/keys/setup \
 ##### B.2 — Pro production (€29/month, 5,000 proofs/month)
 
 ```bash
-curl -X POST https://arkforge.fr/trust/v1/keys/setup \
+curl -X POST https://arkforge.tech/trust/v1/keys/setup \
   -H "Content-Type: application/json" \
   -d '{
     "email": "you@example.com",
@@ -233,7 +233,7 @@ curl -X POST https://arkforge.fr/trust/v1/keys/setup \
 Open the Stripe Billing Portal to update your payment method, download invoices, or cancel:
 
 ```bash
-curl -X POST https://arkforge.fr/trust/v1/keys/portal \
+curl -X POST https://arkforge.tech/trust/v1/keys/portal \
   -H "X-Api-Key: mcp_pro_xxx..." \
   -H "Content-Type: application/json" \
   -d '{}'
@@ -268,7 +268,7 @@ TRUST_LAYER_API_KEY = "mcp_free_xxx..."  # or mcp_test_xxx or mcp_pro_xxx
 TARGET_API = "https://provider.com/api/service"
 
 response = requests.post(
-    "https://arkforge.fr/trust/v1/proxy",
+    "https://arkforge.tech/trust/v1/proxy",
     headers={
         "X-Api-Key": TRUST_LAYER_API_KEY,
         "Content-Type": "application/json"
@@ -324,7 +324,7 @@ TRUST_LAYER_API_KEY = "mcp_free_xxx..."
 GITHUB_TOKEN = "ghp_xxx..."
 
 response = requests.post(
-    "https://arkforge.fr/trust/v1/proxy",
+    "https://arkforge.tech/trust/v1/proxy",
     headers={
         "X-Api-Key": TRUST_LAYER_API_KEY,
         "Content-Type": "application/json"
@@ -389,7 +389,7 @@ TRUST_LAYER_API_KEY = "mcp_free_xxx..."
 TARGET_API = "https://provider.com/api/service"
 
 response = requests.post(
-    "https://arkforge.fr/trust/v1/proxy",
+    "https://arkforge.tech/trust/v1/proxy",
     headers={
         "X-Api-Key": TRUST_LAYER_API_KEY,
         "Content-Type": "application/json"
@@ -451,7 +451,7 @@ An `_arkforge_attestation` field is injected into `service_response.body`:
 {
   "_arkforge_attestation": {
     "id": "prf_20260302_135727_5b47d5",
-    "seal": "https://arkforge.fr/trust/v1/proof/prf_20260302_135727_5b47d5",
+    "seal": "https://arkforge.tech/trust/v1/proof/prf_20260302_135727_5b47d5",
     "status": "VERIFIED_TRANSACTION"
   }
 }
@@ -463,7 +463,7 @@ Every proxy response includes `X-ArkForge-Proof`, `X-ArkForge-Verified`, `X-ArkF
 
 **Level 3 — Visual Stamp (HTML proof page)**
 
-Open `https://arkforge.fr/trust/v/{proof_id}` in a browser for a human-readable verification page with a colored badge (green = verified).
+Open `https://arkforge.tech/trust/v/{proof_id}` in a browser for a human-readable verification page with a colored badge (green = verified).
 
 ---
 
@@ -503,12 +503,12 @@ Open `https://arkforge.fr/trust/v/{proof_id}` in a browser for a human-readable 
 
 **Public URL:**
 ```
-https://arkforge.fr/trust/v/prf_20260302_135727_5b47d5
+https://arkforge.tech/trust/v/prf_20260302_135727_5b47d5
 ```
 
 **Or via API:**
 ```bash
-curl https://arkforge.fr/trust/v1/proof/prf_20260302_135727_5b47d5
+curl https://arkforge.tech/trust/v1/proof/prf_20260302_135727_5b47d5
 ```
 
 **2 independent witnesses:**
@@ -519,7 +519,7 @@ curl https://arkforge.fr/trust/v1/proof/prf_20260302_135727_5b47d5
 
 ```bash
 # Fetch the proof
-curl -s https://arkforge.fr/trust/v1/proof/prf_xxx > proof.json
+curl -s https://arkforge.tech/trust/v1/proof/prf_xxx > proof.json
 
 # Extract fields
 REQUEST_HASH=$(jq -r '.hashes.request' proof.json | sed 's/sha256://')
@@ -567,7 +567,7 @@ These emails are sent to the address used during key setup. They include a ready
 ### Check quota usage
 
 ```bash
-curl https://arkforge.fr/trust/v1/usage \
+curl https://arkforge.tech/trust/v1/usage \
   -H "X-Api-Key: mcp_pro_xxx..."
 ```
 
@@ -587,7 +587,7 @@ curl https://arkforge.fr/trust/v1/usage \
 After the initial setup, credits can be purchased programmatically — the card saved during checkout is charged automatically.
 
 ```bash
-curl -X POST https://arkforge.fr/trust/v1/credits/buy \
+curl -X POST https://arkforge.tech/trust/v1/credits/buy \
   -H "X-Api-Key: mcp_pro_xxx..." \
   -H "Content-Type: application/json" \
   -d '{"amount": 10.00}'
@@ -615,7 +615,7 @@ your prepaid credits at the per-proof overage rate, up to a monthly cap you choo
 **Enable overage billing:**
 
 ```bash
-curl -X POST https://arkforge.fr/trust/v1/keys/overage \
+curl -X POST https://arkforge.tech/trust/v1/keys/overage \
   -H "X-Api-Key: mcp_pro_xxx..." \
   -H "Content-Type: application/json" \
   -d '{"enabled": true, "cap_eur": 20.00}'
@@ -641,14 +641,14 @@ Response:
 **Check overage status:**
 
 ```bash
-curl https://arkforge.fr/trust/v1/keys/overage \
+curl https://arkforge.tech/trust/v1/keys/overage \
   -H "X-Api-Key: mcp_pro_xxx..."
 ```
 
 **Monitor usage with overage section:**
 
 ```bash
-curl https://arkforge.fr/trust/v1/usage \
+curl https://arkforge.tech/trust/v1/usage \
   -H "X-Api-Key: mcp_pro_xxx..."
 ```
 
@@ -671,7 +671,7 @@ Response includes an `overage` section when enabled:
 **Disable overage billing (effective immediately):**
 
 ```bash
-curl -X POST https://arkforge.fr/trust/v1/keys/overage \
+curl -X POST https://arkforge.tech/trust/v1/keys/overage \
   -H "X-Api-Key: mcp_pro_xxx..." \
   -H "Content-Type: application/json" \
   -d '{"enabled": false, "cap_eur": 20.0}'
@@ -694,13 +694,13 @@ class AutonomousAgent:
 
     def ensure_budget(self):
         usage = requests.get(
-            "https://arkforge.fr/trust/v1/usage",
+            "https://arkforge.tech/trust/v1/usage",
             headers=self.headers
         ).json()
 
         if usage['credit_balance'] < self.min_balance:
             requests.post(
-                "https://arkforge.fr/trust/v1/credits/buy",
+                "https://arkforge.tech/trust/v1/credits/buy",
                 headers=self.headers,
                 json={"amount": 10.0}
             )
@@ -708,7 +708,7 @@ class AutonomousAgent:
     def execute_task(self, target, payload):
         self.ensure_budget()
         return requests.post(
-            "https://arkforge.fr/trust/v1/proxy",
+            "https://arkforge.tech/trust/v1/proxy",
             headers=self.headers,
             json={"target": target, "payload": payload}
         ).json()
@@ -757,7 +757,7 @@ Mode B can use a **Free key** — certification only, payment is external, no mo
 - [ ] If Mode B: Stripe account configured?
 
 ### Step 3 — Code
-- [ ] Replace upstream URL with `https://arkforge.fr/trust/v1/proxy`
+- [ ] Replace upstream URL with `https://arkforge.tech/trust/v1/proxy`
 - [ ] Add `X-Api-Key` header
 - [ ] Wrap payload: `{"target": "...", "payload": {...}}`
 - [ ] If Mode B: add `provider_payment`

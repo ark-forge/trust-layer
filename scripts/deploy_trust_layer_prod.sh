@@ -21,7 +21,7 @@ set -euo pipefail
 # --- Configuration ---
 REPO_DIR="/opt/claude-ceo/workspace/arkforge-trust-layer"
 SERVICE="arkforge-trust-layer"
-HEALTH_URL="https://arkforge.fr/trust/v1/health"
+HEALTH_URL="https://arkforge.tech/trust/v1/health"
 PROOF_SPEC_DIR="/opt/claude-ceo/workspace/proof-spec"
 AGENT_CLIENT_DIR="/opt/claude-ceo/workspace/agent-client"
 SETTINGS_ENV="/opt/claude-ceo/config/settings.env"

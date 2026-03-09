@@ -22,7 +22,7 @@ import urllib.request
 
 # ── Config ────────────────────────────────────────────────────
 parser = argparse.ArgumentParser()
-parser.add_argument("--base-url", default="https://arkforge.fr/trust")
+parser.add_argument("--base-url", default="https://arkforge.tech/trust")
 parser.add_argument("--ovh-host", default="ubuntu@51.91.99.178")
 parser.add_argument("--expected-version", default="", help="Expected version string (e.g. 0.5.4)")
 args = parser.parse_args()

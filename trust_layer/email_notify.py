@@ -45,7 +45,7 @@ Your API key: {api_key}
 
 Create your first proof right now (copy-paste this):
 
-  curl -X POST https://arkforge.fr/trust/v1/proxy \\
+  curl -X POST https://arkforge.tech/trust/v1/proxy \\
     -H "X-API-Key: {api_key}" \\
     -H "Content-Type: application/json" \\
     -d '{{"target": "https://httpbin.org/post",
@@ -56,15 +56,15 @@ You'll get back the API response + a cryptographic proof with:
   - SHA-256 hash chain
   - RFC 3161 timestamp
 
-Verify any proof: https://arkforge.fr/trust/v1/proof/<proof_id>
+Verify any proof: https://arkforge.tech/trust/v1/proof/<proof_id>
 
 Your free plan: 500 proofs/month, no credit card needed.
 Check usage anytime:
 
-  curl https://arkforge.fr/trust/v1/usage \\
+  curl https://arkforge.tech/trust/v1/usage \\
     -H "X-API-Key: {api_key}"
 
-Docs: https://arkforge.fr/trust
+Docs: https://arkforge.tech/trust
 Support: contact@arkforge.fr
 """
     try:
@@ -90,7 +90,7 @@ def send_quota_alert_email(email: str, api_key: str, used: int, limit: int, peri
         period_label = "daily"
         upgrade_hint = (
             "Buy more credits to keep your agent running:\n"
-            "  curl -X POST https://arkforge.fr/trust/v1/credits/buy \\\n"
+            "  curl -X POST https://arkforge.tech/trust/v1/credits/buy \\\n"
             f"    -H 'Authorization: Bearer {api_key}' \\\n"
             "    -H 'Content-Type: application/json' \\\n"
             "    -d '{\"amount\": 10}'"
@@ -106,11 +106,11 @@ Your API key has used {used}/{limit} proofs ({pct}%) of your {period_label} quot
 {upgrade_hint}
 
 Check your usage anytime:
-  curl https://arkforge.fr/trust/v1/usage \\
+  curl https://arkforge.tech/trust/v1/usage \\
     -H "Authorization: Bearer {api_key}"
 
 {'=' * 50}
-ArkForge Trust Layer — https://arkforge.fr/trust
+ArkForge Trust Layer — https://arkforge.tech/trust
 """
     try:
         _send_email(email, subject, body)
@@ -178,7 +178,7 @@ VERIFY
 {'=' * 50}
 This is an automated proof of an agent-to-agent transaction.
 Anyone can verify this proof independently at the URL above.
-Service: ArkForge Trust Layer (https://arkforge.fr/trust)
+Service: ArkForge Trust Layer (https://arkforge.tech/trust)
 """
     try:
         _send_email(email, subject, body)
@@ -201,18 +201,18 @@ Your agent will stop working when credits reach zero.
 
 Recharge now (no browser required):
 
-  curl -X POST https://arkforge.fr/trust/v1/credits/buy \\
+  curl -X POST https://arkforge.tech/trust/v1/credits/buy \\
     -H "X-Api-Key: {api_key}" \\
     -H "Content-Type: application/json" \\
     -d '{{"amount": 10}}'
 
 Or check your balance:
 
-  curl https://arkforge.fr/trust/v1/usage \\
+  curl https://arkforge.tech/trust/v1/usage \\
     -H "X-Api-Key: {api_key}"
 
 {'=' * 50}
-ArkForge Trust Layer — https://arkforge.fr/trust
+ArkForge Trust Layer — https://arkforge.tech/trust
 """
     try:
         _send_email(email, subject, body)
@@ -240,11 +240,11 @@ is billed from your prepaid credits at the overage rate.
   Monthly cap:     {cap:.2f} EUR
 
 Check your current usage:
-  curl https://arkforge.fr/trust/v1/usage \\
+  curl https://arkforge.tech/trust/v1/usage \\
     -H "X-Api-Key: {api_key}"
 
 To disable overage billing:
-  curl -X POST https://arkforge.fr/trust/v1/keys/overage \\
+  curl -X POST https://arkforge.tech/trust/v1/keys/overage \\
     -H "X-Api-Key: {api_key}" \\
     -H "Content-Type: application/json" \\
     -d '{{"enabled": false, "cap_eur": {cap:.2f}}}'
@@ -253,7 +253,7 @@ When you reach your cap ({cap:.2f} EUR), requests will be blocked until
 you increase the cap or wait for the next monthly reset.
 
 {'=' * 50}
-ArkForge Trust Layer — https://arkforge.fr/trust
+ArkForge Trust Layer — https://arkforge.tech/trust
 """
     try:
         _send_email(email, subject, body)
@@ -277,25 +277,25 @@ Your agent may stop working soon when the cap is reached.
 
 Options:
   1. Increase your monthly cap:
-     curl -X POST https://arkforge.fr/trust/v1/keys/overage \\
+     curl -X POST https://arkforge.tech/trust/v1/keys/overage \\
        -H "X-Api-Key: {api_key}" \\
        -H "Content-Type: application/json" \\
        -d '{{"enabled": true, "cap_eur": {min(cap * 2, 100):.2f}}}'
 
   2. Buy more prepaid credits:
-     curl -X POST https://arkforge.fr/trust/v1/credits/buy \\
+     curl -X POST https://arkforge.tech/trust/v1/credits/buy \\
        -H "X-Api-Key: {api_key}" \\
        -H "Content-Type: application/json" \\
        -d '{{"amount": 10}}'
 
   3. Disable overage (requests will be rejected at quota):
-     curl -X POST https://arkforge.fr/trust/v1/keys/overage \\
+     curl -X POST https://arkforge.tech/trust/v1/keys/overage \\
        -H "X-Api-Key: {api_key}" \\
        -H "Content-Type: application/json" \\
        -d '{{"enabled": false, "cap_eur": {cap:.2f}}}'
 
 {'=' * 50}
-ArkForge Trust Layer — https://arkforge.fr/trust
+ArkForge Trust Layer — https://arkforge.tech/trust
 """
     try:
         _send_email(email, subject, body)
@@ -315,13 +315,13 @@ All requests beyond the monthly quota are now blocked (HTTP 429)
 until you take one of the following actions:
 
   1. Increase your monthly cap (max 100 EUR):
-     curl -X POST https://arkforge.fr/trust/v1/keys/overage \\
+     curl -X POST https://arkforge.tech/trust/v1/keys/overage \\
        -H "X-Api-Key: {api_key}" \\
        -H "Content-Type: application/json" \\
        -d '{{"enabled": true, "cap_eur": {min(cap * 2, 100):.2f}}}'
 
   2. Buy more prepaid credits:
-     curl -X POST https://arkforge.fr/trust/v1/credits/buy \\
+     curl -X POST https://arkforge.tech/trust/v1/credits/buy \\
        -H "X-Api-Key: {api_key}" \\
        -H "Content-Type: application/json" \\
        -d '{{"amount": 10}}'
@@ -332,7 +332,7 @@ until you take one of the following actions:
   Cap:              {cap:.2f} EUR
 
 {'=' * 50}
-ArkForge Trust Layer — https://arkforge.fr/trust
+ArkForge Trust Layer — https://arkforge.tech/trust
 """
     try:
         _send_email(email, subject, body)
@@ -352,7 +352,7 @@ Your agent's API calls are currently being rejected (HTTP 402).
 
 Recharge now to resume operations:
 
-  curl -X POST https://arkforge.fr/trust/v1/credits/buy \\
+  curl -X POST https://arkforge.tech/trust/v1/credits/buy \\
     -H "X-Api-Key: {api_key}" \\
     -H "Content-Type: application/json" \\
     -d '{{"amount": 10}}'
@@ -361,7 +361,7 @@ This will charge the card saved during your initial setup.
 10 EUR = 100 proofs.
 
 {'=' * 50}
-ArkForge Trust Layer — https://arkforge.fr/trust
+ArkForge Trust Layer — https://arkforge.tech/trust
 """
     try:
         _send_email(email, subject, body)

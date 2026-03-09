@@ -152,12 +152,12 @@ WEBHOOK_IDEMPOTENCY_FILE = DATA_DIR / "webhook_idempotency.jsonl"
 # --- CORS allowed origins ---
 CORS_ALLOWED_ORIGINS = [
     o.strip()
-    for o in os.environ.get("CORS_ALLOWED_ORIGINS", "https://arkforge.fr,https://www.arkforge.fr").split(",")
+    for o in os.environ.get("CORS_ALLOWED_ORIGINS", "https://arkforge.tech,https://arkforge.fr,https://www.arkforge.fr").split(",")
     if o.strip()
 ]
 
 # --- Trust Layer URL ---
-TRUST_LAYER_BASE_URL = os.environ.get("TRUST_LAYER_BASE_URL", "https://arkforge.fr/trust")
+TRUST_LAYER_BASE_URL = os.environ.get("TRUST_LAYER_BASE_URL", "https://arkforge.tech/trust")
 
 # --- Redis ---
 REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0")
