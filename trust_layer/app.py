@@ -1384,4 +1384,4 @@ async def agent_disputes(agent_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8092, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=8092, log_level="info")  # nosec B104

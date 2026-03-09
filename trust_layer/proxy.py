@@ -261,7 +261,7 @@ def validate_target_url(target: str) -> str:
     if not hostname:
         raise ProxyError("invalid_target", "Invalid target URL: no hostname", 400)
 
-    if hostname in ("localhost", "0.0.0.0"):
+    if hostname in ("localhost", "0.0.0.0"):  # nosec B104
         raise ProxyError("invalid_target", f"Target hostname '{hostname}' is not allowed", 400)
 
     # Check for private IPs
