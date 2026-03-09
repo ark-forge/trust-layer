@@ -52,6 +52,7 @@ class FailoverReadOnlyMiddleware(BaseHTTPMiddleware):
                 )
         return await call_next(request)
 
+import re
 from . import __version__
 from collections import defaultdict
 from .config import (
@@ -98,6 +99,7 @@ from .proofs import load_proof, store_proof, get_public_proof, verify_proof_inte
 from .proxy import execute_proxy, ProxyError, drain_background_tasks, _track_task, _log_background_task
 from .templates import render_proof_page
 from .rate_limit import get_usage, get_daily_limit
+from .redis_client import get_redis
 from .email_notify import send_welcome_email
 from .timestamps import submit_hash
 from .reputation import get_reputation, get_public_reputation
@@ -106,16 +108,102 @@ from .disputes import create_dispute, get_agent_disputes
 logger = logging.getLogger("trust_layer.app")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 
-# --- Proof access tracking (in-memory for abuse detection, JSONL for persistence) ---
-_proof_access_counts: dict[str, list[float]] = defaultdict(list)  # IP -> list of timestamps
+# --- Log sanitization: redact secrets before they reach journald ---
+_LOG_REDACT = [
+    re.compile(r"(Authorization:\s*)\S{10,}", re.IGNORECASE),
+    re.compile(r"(Bearer\s+)\S{10,}", re.IGNORECASE),
+    re.compile(r"(X-Api-Key:\s*)\S{10,}", re.IGNORECASE),
+    re.compile(r"(sk[-_](?:live|test)[-_])\w{20,}"),
+    re.compile(r"(ghp_)\w{30,}"),
+    re.compile(r"(mcp_(?:free|pro|ent|test)_)\w{20,}"),
+]
+
+
+class _SensitiveDataFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            for pat in _LOG_REDACT:
+                record.msg = pat.sub(r"\g<1>[REDACTED]", record.msg)
+        if record.args:
+            try:
+                safe = tuple(
+                    pat.sub(r"\g<1>[REDACTED]", str(a)) if isinstance(a, str) else a
+                    for a in (record.args if isinstance(record.args, tuple) else (record.args,))
+                    for pat in [_LOG_REDACT[0]]  # apply first pattern as sample — full loop below
+                )
+                # Full redaction on all args
+                redacted = []
+                for a in (record.args if isinstance(record.args, tuple) else (record.args,)):
+                    if isinstance(a, str):
+                        for pat in _LOG_REDACT:
+                            a = pat.sub(r"\g<1>[REDACTED]", a)
+                    redacted.append(a)
+                record.args = tuple(redacted) if isinstance(record.args, tuple) else redacted[0]
+            except Exception:
+                pass
+        return True
+
+
+_sensitive_filter = _SensitiveDataFilter()
+for _log_name in ("uvicorn", "uvicorn.access", "uvicorn.error", "trust_layer", "fastapi"):
+    logging.getLogger(_log_name).addFilter(_sensitive_filter)
+logging.getLogger().addFilter(_sensitive_filter)
+
+# --- Proof access tracking (Redis-backed, in-memory fallback) ---
+_proof_access_counts: dict[str, list[float]] = defaultdict(list)  # fallback only
 _ABUSE_THRESHOLD = 100  # max requests per hour per IP
+_ABUSE_WINDOW = 3600
+
+# --- Failed auth rate limiting (brute-force protection on API key endpoints) ---
+# Redis-backed: shared across all uvicorn workers. In-memory fallback if Redis unavailable.
+_failed_auth_fallback: dict[str, list[float]] = defaultdict(list)
+_FAILED_AUTH_MAX = 10      # max failures in window before lockout
+_FAILED_AUTH_WINDOW = 300  # sliding window seconds (5 min)
+
+
+def _is_auth_locked(ip: str) -> bool:
+    """Returns True if IP has exceeded failed auth threshold. Redis-first, in-memory fallback."""
+    try:
+        r = get_redis()
+        if r is not None:
+            count = r.get(f"failed_auth:{ip}")
+            return int(count) >= _FAILED_AUTH_MAX if count else False
+    except Exception:
+        pass
+    # Fallback: in-memory sliding window
+    import time as _time
+    cutoff = _time.time() - _FAILED_AUTH_WINDOW
+    _failed_auth_fallback[ip] = [t for t in _failed_auth_fallback[ip] if t > cutoff]
+    return len(_failed_auth_fallback[ip]) >= _FAILED_AUTH_MAX
+
+
+def _record_failed_auth(ip: str):
+    """Increment failed auth counter for IP. Redis-first, in-memory fallback."""
+    try:
+        r = get_redis()
+        if r is not None:
+            key = f"failed_auth:{ip}"
+            count = r.incr(key)
+            if count == 1:
+                r.expire(key, _FAILED_AUTH_WINDOW)
+            logger.warning("Failed auth from IP %s (count=%d, via Redis)", ip, count)
+            return
+    except Exception:
+        pass
+    # Fallback
+    import time as _time
+    _failed_auth_fallback[ip].append(_time.time())
+    logger.warning("Failed auth from IP %s (count=%d, in-memory)", ip, len(_failed_auth_fallback[ip]))
 
 
 def _restore_abuse_counters():
-    """Restore sliding window abuse counters from JSONL log (last 1h entries)."""
+    """Restore in-memory abuse counters from JSONL (fallback path only — Redis skips this)."""
     import time
+    r = get_redis()
+    if r is not None:
+        return  # Redis persists across restarts — no need to restore
     now = time.time()
-    cutoff = now - 3600
+    cutoff = now - _ABUSE_WINDOW
     restored = 0
     try:
         with open(PROOF_ACCESS_LOG, "r") as f:
@@ -162,14 +250,25 @@ def _log_proof_access(proof_id: str, ip: str, user_agent: str):
     except OSError as e:
         logger.debug("Proof access log write failed: %s", e)
 
-    # Abuse detection: track per-IP access rate (sliding 1h window)
-    timestamps = _proof_access_counts[ip]
-    timestamps.append(now)
-    # Prune entries older than 1 hour
-    cutoff = now - 3600
-    _proof_access_counts[ip] = [t for t in timestamps if t > cutoff]
-    if len(_proof_access_counts[ip]) > _ABUSE_THRESHOLD:
-        logger.warning("ABUSE DETECTED: IP %s made %d proof requests in 1h", ip, len(_proof_access_counts[ip]))
+    # Abuse detection: Redis-first, in-memory fallback
+    try:
+        r = get_redis()
+        if r is not None:
+            key = f"proof_abuse:{ip}"
+            count = r.incr(key)
+            if count == 1:
+                r.expire(key, _ABUSE_WINDOW)
+            if count > _ABUSE_THRESHOLD:
+                logger.warning("ABUSE DETECTED: IP %s made %d proof requests in 1h (Redis)", ip, count)
+        else:
+            raise RuntimeError("Redis unavailable")
+    except Exception:
+        timestamps = _proof_access_counts[ip]
+        timestamps.append(now)
+        cutoff = now - _ABUSE_WINDOW
+        _proof_access_counts[ip] = [t for t in timestamps if t > cutoff]
+        if len(_proof_access_counts[ip]) > _ABUSE_THRESHOLD:
+            logger.warning("ABUSE DETECTED: IP %s made %d proof requests in 1h (in-memory)", ip, len(_proof_access_counts[ip]))
 
 
 async def _recover_pending_tsa():
@@ -278,9 +377,20 @@ async def proxy_endpoint(
     x_agent_version: Optional[str] = Header(None),
 ):
     """The core endpoint — charge, forward, prove."""
+    client_ip = request.headers.get("x-real-ip") or (request.client.host if request.client else "unknown")
+
+    if _is_auth_locked(client_ip):
+        return _error_response("rate_limited", "Too many failed authentication attempts. Try again in 5 minutes.", 429)
+
     api_key = _get_api_key(authorization, x_api_key)
     if not api_key:
+        _record_failed_auth(client_ip)
         return _error_response("invalid_api_key", "API key required. Use Authorization: Bearer <key>", 401)
+
+    key_info = validate_api_key(api_key)
+    if not key_info:
+        _record_failed_auth(client_ip)
+        return _error_response("invalid_api_key", "Invalid or inactive API key", 401)
 
     try:
         body = await request.json()
@@ -309,7 +419,6 @@ async def proxy_endpoint(
 
     # Amount is recalculated inside execute_proxy based on plan + overage status.
     # Pass 0.0 here — execute_proxy determines the real debit amount.
-    key_info = validate_api_key(api_key)
     amount = 0.0
 
     try:
@@ -369,8 +478,18 @@ async def get_proof(proof_id: str, request: Request):
     if not _PROOF_ID_RE.match(proof_id):
         return _error_response("invalid_request", "Invalid proof ID format", 400)
 
-    # Log access for security monitoring
-    client_ip = request.client.host if request.client else "unknown"
+    # Abuse check — block before serving if IP exceeded threshold
+    client_ip = request.headers.get("x-real-ip") or (request.client.host if request.client else "unknown")
+    try:
+        r = get_redis()
+        if r is not None:
+            count = r.get(f"proof_abuse:{client_ip}")
+            if count and int(count) > _ABUSE_THRESHOLD:
+                logger.warning("ABUSE BLOCKED: IP %s blocked on proof access (%s req/h)", client_ip, count)
+                return _error_response("rate_limited", "Too many proof requests. Try again later.", 429)
+    except Exception:
+        pass
+
     user_agent = request.headers.get("user-agent", "")
     _log_proof_access(proof_id, client_ip, user_agent)
 
