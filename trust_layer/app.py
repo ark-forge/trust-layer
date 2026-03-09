@@ -496,8 +496,8 @@ async def setup_key(request: Request):
             payment_method_types=["card"],
             customer=customer.id,
             line_items=[{"price": price_id, "quantity": 1}],
-            success_url=f"https://arkforge.fr/{lang}/tl-pro-success.html?session_id={{CHECKOUT_SESSION_ID}}",
-            cancel_url=f"https://arkforge.fr/{lang}/pricing.html",
+            success_url=f"https://arkforge.tech/{lang}/tl-pro-success.html?session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"https://arkforge.tech/{lang}/pricing.html",
             metadata={
                 "product": f"trust_layer_{plan_name}_subscription",
                 "email": email,
@@ -584,7 +584,7 @@ async def billing_portal(
     try:
         portal_session = stripe.billing_portal.Session.create(
             customer=customer_id,
-            return_url=f"https://arkforge.fr/{lang}/pricing.html",
+            return_url=f"https://arkforge.tech/{lang}/pricing.html",
             api_key=sk,
         )
         return {
