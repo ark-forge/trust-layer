@@ -356,7 +356,7 @@ print(f"Comment posted. Proof: {proof['verification_url']}")
 - Keys and values must be **strings**, values ≤ 4096 characters
 - Blocked headers (silently dropped): `Host`, `Transfer-Encoding`, `Connection`, `Upgrade`, `Content-Length`, `Content-Type`, `X-Internal-Secret`
 
-**Security note:** `extra_headers` values are included in the request hash and therefore in the proof's chain hash. This means the token's presence is attested — but the token value itself is **not stored** by Trust Layer (only its hash contribution).
+**Security note:** `extra_headers` values are forwarded in transit through ArkForge infrastructure and are visible in memory during request processing. They are never logged or stored — only header *names* are recorded in the proof hash (values are replaced with `***`). This means the proof attests that a given header was present, without revealing its value.
 
 ---
 
