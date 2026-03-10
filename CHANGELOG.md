@@ -180,3 +180,14 @@ _(initial 1.1.x series — internal stabilisation)_
 ## [Unreleased]
 
 _Next changes will appear here automatically._
+
+---
+
+## [1.2.1] — 2026-03-10
+
+### Security
+- **cryptography 43.0.0 → 46.0.5** — closes 3 Dependabot alerts:
+  - HIGH: subgroup attack via missing validation on SECT curves (fixed in 46.0.5)
+  - MEDIUM: vulnerable OpenSSL bundled in wheels (fixed in 43.0.1)
+  - LOW: vulnerable OpenSSL bundled in wheels (fixed in 44.0.1)
+  `cryptography` is not directly used by Trust Layer code (Fernet key derivation only) — no API change.

@@ -1,10 +1,10 @@
-# Pinned production dependencies (2026-03-09)
+# Pinned production dependencies (2026-03-10)
 # Update via: pip install -U <pkg> && pip freeze > requirements.txt
 fastapi==0.128.7
 uvicorn==0.41.0
 httpx==0.28.1
 stripe==14.3.0
-cryptography==43.0.0
+cryptography==46.0.5
 redis==7.2.0
 pydantic==2.12.5
 pydantic-settings==2.13.0
