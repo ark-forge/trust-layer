@@ -179,6 +179,18 @@ _(initial 1.1.x series — internal stabilisation)_
 
 ## [Unreleased]
 
+## [1.2.1] — 2026-03-10
+
+### Fixed
+- cryptography 43.0.0 → 46.0.5 — 3 Dependabot CVEs
+
+### Documentation
+- CHANGELOG.md + auto-update on release
+
+### Tests
+- branch chain_hash by algorithm field (legacy vs canonical_json)
+
+---
 _Next changes will appear here automatically._
 
 ---
