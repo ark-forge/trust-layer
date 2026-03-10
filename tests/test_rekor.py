@@ -126,8 +126,8 @@ def test_submit_once_409_conflict_returns_existing_entry(ec_keypair):
     assert result["existing_uuid_xyz"]["logIndex"] == 5000
 
 
-def test_submit_once_409_no_body_returns_none(ec_keypair):
-    """_submit_once on HTTP 409 with no parseable body returns None (graceful)."""
+def test_submit_once_409_no_body_returns_sentinel(ec_keypair):
+    """_submit_once on HTTP 409 with no parseable body returns a sentinel dict (entry anchored)."""
     chain_hash = "f0" * 32
 
     fake_response = MagicMock()
@@ -137,7 +137,9 @@ def test_submit_once_409_no_body_returns_none(ec_keypair):
     with patch("trust_layer.rekor.httpx.post", return_value=fake_response):
         result = _submit_once(chain_hash, ec_keypair)
 
-    assert result is None
+    assert result is not None
+    assert "_already_exists" in result
+    assert result["_already_exists"]["status"] == "conflict_entry_exists"
 
 
 def test_submit_once_http_error_returns_none(ec_keypair):

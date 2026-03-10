@@ -131,7 +131,8 @@ def _submit_once(chain_hash_hex: str, ec_key=None) -> Optional[dict]:
                         return {uuid: data}
             except Exception:
                 pass
-            return None
+            # Parsing failed but entry exists — return a sentinel so caller knows it's anchored
+            return {"_already_exists": {"status": "conflict_entry_exists", "hash": chain_hash_hex}}
 
         if resp.status_code not in (200, 201):
             logger.warning("Rekor returned HTTP %d for hash %s...", resp.status_code, chain_hash_hex[:16])

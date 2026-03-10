@@ -114,12 +114,37 @@ def test_get_public_proof_strips_sensitive():
 # --- New tests for spec_version, upstream_timestamp, signature fields ---
 
 def test_generate_proof_includes_spec_version():
-    """spec_version must be present in every proof."""
+    """spec_version must be present in every proof — current: 1.2 (canonical JSON chain hash)."""
     proof = generate_proof(
         {"target": "https://example.com"}, {"result": "ok"},
         {"transaction_id": "pi_spec"}, "2026-02-26T10:00:00Z",
     )
-    assert proof.get("spec_version") == "1.1"
+    assert proof.get("spec_version") == "1.2"
+
+
+def test_chain_hash_canonical_json_no_preimage_ambiguity():
+    """Spec 1.2: two different inputs must NOT produce the same chain hash.
+
+    Regression test for the preimage ambiguity fixed in spec 1.2.
+    With legacy concatenation:
+        payment_id="pi_abc" + timestamp="2026-03-10" == payment_id="pi_abc2026" + timestamp="-03-10"
+    With canonical JSON this collision is impossible (field boundaries are explicit).
+    """
+    base = {
+        "request_data": {"target": "https://example.com"},
+        "response_data": {"result": "ok"},
+        "timestamp_a": "2026-03-10",
+        "timestamp_b": "-03-10",
+    }
+    proof_a = generate_proof(
+        base["request_data"], base["response_data"],
+        {"transaction_id": "pi_abc"}, base["timestamp_a"],
+    )
+    proof_b = generate_proof(
+        base["request_data"], base["response_data"],
+        {"transaction_id": "pi_abc2026"}, base["timestamp_b"],
+    )
+    assert proof_a["hashes"]["chain"] != proof_b["hashes"]["chain"]
 
 
 def test_chain_hash_without_upstream_timestamp():

@@ -328,18 +328,18 @@ class TestChainHashWithReceipt:
         )
 
     def test_chain_hash_with_receipt_is_v2(self):
-        """Proof with receipt_content_hash must be spec v2.0."""
+        """Proof with receipt_content_hash must be spec v2.1."""
         args = self._make_proof_args()
         proof = generate_proof(**args, receipt_content_hash="deadbeef" * 8)
         assert proof["spec_version"] == SPEC_VERSION_RECEIPT
-        assert proof["spec_version"] == "2.0"
+        assert proof["spec_version"] == "2.1"
 
     def test_chain_hash_without_receipt_is_v1(self):
-        """Proof without receipt_content_hash must remain spec v1.1 (backward compat)."""
+        """Proof without receipt_content_hash must be spec v1.2 (canonical JSON chain hash)."""
         args = self._make_proof_args()
         proof = generate_proof(**args)
         assert proof["spec_version"] == SPEC_VERSION
-        assert proof["spec_version"] == "1.1"
+        assert proof["spec_version"] == "1.2"
 
     def test_chain_hash_differs_with_receipt(self):
         """Adding receipt_content_hash must change the chain hash."""
@@ -349,16 +349,23 @@ class TestChainHashWithReceipt:
         assert proof_without["hashes"]["chain"] != proof_with["hashes"]["chain"]
 
     def test_chain_hash_without_receipt_unchanged(self):
-        """Chain hash without receipt must match the old v1.1 formula exactly."""
+        """Chain hash without receipt must match the v1.2 canonical JSON formula exactly."""
         args = self._make_proof_args()
         proof = generate_proof(**args)
 
-        # Manually compute expected chain hash (v1.1 formula)
+        # Manually compute expected chain hash (v1.2 canonical JSON formula)
         from trust_layer.proofs import canonical_json
         req_hash = sha256_hex(canonical_json(args["request_data"]))
         resp_hash = sha256_hex(canonical_json(args["response_data"]))
-        chain_input = req_hash + resp_hash + "pi_test" + "2026-02-28T12:00:00Z" + "abc123" + "api.example.com"
-        expected = sha256_hex(chain_input)
+        chain_data = {
+            "request_hash": req_hash,
+            "response_hash": resp_hash,
+            "transaction_id": "pi_test",
+            "timestamp": "2026-02-28T12:00:00Z",
+            "buyer_fingerprint": "abc123",
+            "seller": "api.example.com",
+        }
+        expected = sha256_hex(canonical_json(chain_data))
 
         assert proof["_raw_chain_hash"] == expected
 
@@ -387,16 +394,25 @@ class TestChainHashWithReceipt:
         assert verify_proof_integrity(proof_record) is True
 
     def test_verify_integrity_old_proofs_still_work(self):
-        """v1.1 proofs without provider_payment must still verify."""
+        """v1.1 proofs (legacy concatenation) must still verify — backward compat."""
+        from trust_layer.proofs import canonical_json
         args = self._make_proof_args()
-        proof = generate_proof(**args)
+        # Build a real legacy v1.1 proof using the old string concatenation formula
+        req_hash = sha256_hex(canonical_json(args["request_data"]))
+        resp_hash = sha256_hex(canonical_json(args["response_data"]))
+        chain_input = req_hash + resp_hash + "pi_test" + "2026-02-28T12:00:00Z" + "abc123" + "api.example.com"
+        chain_hash = sha256_hex(chain_input)
         proof_record = {
             "proof_id": "prf_old",
             "spec_version": "1.1",
-            "hashes": proof["hashes"],
-            "parties": proof["parties"],
-            "certification_fee": proof["certification_fee"],
-            "timestamp": proof["timestamp"],
+            "hashes": {
+                "request": f"sha256:{req_hash}",
+                "response": f"sha256:{resp_hash}",
+                "chain": f"sha256:{chain_hash}",
+            },
+            "parties": {"buyer_fingerprint": "abc123", "seller": "api.example.com"},
+            "certification_fee": {"transaction_id": "pi_test"},
+            "timestamp": "2026-02-28T12:00:00Z",
         }
         assert verify_proof_integrity(proof_record) is True
 
@@ -511,7 +527,7 @@ class TestProxyIntegration:
         assert pe["receipt_content_hash"] is not None
         assert pe["receipt_content_hash"].startswith("sha256:")
         assert pe["verification_status"] == "fetched"
-        assert proof["spec_version"] == "2.0"
+        assert proof["spec_version"] == "2.1"
 
     def test_proxy_without_provider_payment_unchanged(self, client):
         api_key = self._setup_free_key(client)
@@ -541,7 +557,7 @@ class TestProxyIntegration:
         data = resp.json()
         proof = data.get("proof", {})
         assert proof.get("provider_payment") is None
-        assert proof["spec_version"] == "1.1"
+        assert proof["spec_version"] == "1.2"
 
     def test_public_proof_endpoint_includes_provider_payment(self, client):
         """Verify that GET /v1/proof/{proof_id} returns provider_payment."""

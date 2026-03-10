@@ -10,8 +10,11 @@ from typing import Optional
 from .config import PROOFS_DIR
 from .persistence import save_json, load_json
 
-SPEC_VERSION = "1.1"
-SPEC_VERSION_RECEIPT = "2.0"
+SPEC_VERSION = "1.2"          # canonical_json chain hash (fixed preimage ambiguity)
+SPEC_VERSION_RECEIPT = "2.1"  # canonical_json chain hash + receipt evidence
+
+# Legacy spec versions that used concatenation — still verified for backward compat
+_LEGACY_SPEC_VERSIONS = {"1.0", "1.1", "2.0", None}
 
 
 def canonical_json(data: dict) -> str:
@@ -49,14 +52,22 @@ def generate_proof(
     request_hash = sha256_hex(canonical_json(request_data))
     response_hash = sha256_hex(canonical_json(response_data))
 
-    # Chain hash does NOT include identity — identity is metadata, not integrity
+    # Chain hash — canonical JSON eliminates preimage ambiguity from variable-length concat.
+    # spec_version 1.2+ uses this method. Legacy 1.0/1.1/2.0 used raw string concatenation.
     payment_intent_id = payment_data.get("transaction_id", "")
-    chain_input = request_hash + response_hash + payment_intent_id + timestamp + buyer_fingerprint + seller
+    chain_data: dict = {
+        "request_hash": request_hash,
+        "response_hash": response_hash,
+        "transaction_id": payment_intent_id,
+        "timestamp": timestamp,
+        "buyer_fingerprint": buyer_fingerprint,
+        "seller": seller,
+    }
     if upstream_timestamp:
-        chain_input += upstream_timestamp
+        chain_data["upstream_timestamp"] = upstream_timestamp
     if receipt_content_hash:
-        chain_input += receipt_content_hash
-    chain_hash = sha256_hex(chain_input)
+        chain_data["receipt_content_hash"] = receipt_content_hash
+    chain_hash = sha256_hex(canonical_json(chain_data))
 
     # Spec version: 2.0 if receipt evidence is included, 1.1 otherwise
     spec_version = SPEC_VERSION_RECEIPT if receipt_content_hash else SPEC_VERSION
@@ -120,21 +131,39 @@ def verify_proof_integrity(proof: dict) -> bool:
     payment_intent_id = payment.get("transaction_id", "")
     buyer_fingerprint = parties.get("buyer_fingerprint", "")
     seller = parties.get("seller", "")
-    chain_input = request_hash + response_hash + payment_intent_id + timestamp + buyer_fingerprint + seller
 
+    spec_version = proof.get("spec_version")
     upstream_timestamp = proof.get("upstream_timestamp")
-    if upstream_timestamp:
-        chain_input += upstream_timestamp
 
     # Receipt content hash (spec v2.0+)
     pe = proof.get("provider_payment") or {}
     receipt_content_hash = pe.get("receipt_content_hash", "")
     if receipt_content_hash:
-        # Strip "sha256:" prefix if present
         receipt_content_hash = receipt_content_hash.replace("sha256:", "")
-        chain_input += receipt_content_hash
 
-    computed_chain = sha256_hex(chain_input)
+    if spec_version in _LEGACY_SPEC_VERSIONS:
+        # Legacy: raw string concatenation (spec 1.0, 1.1, 2.0 and unversioned proofs)
+        chain_input = request_hash + response_hash + payment_intent_id + timestamp + buyer_fingerprint + seller
+        if upstream_timestamp:
+            chain_input += upstream_timestamp
+        if receipt_content_hash:
+            chain_input += receipt_content_hash
+        computed_chain = sha256_hex(chain_input)
+    else:
+        # Current: canonical JSON (spec 1.2+) — eliminates preimage ambiguity
+        chain_data: dict = {
+            "request_hash": request_hash,
+            "response_hash": response_hash,
+            "transaction_id": payment_intent_id,
+            "timestamp": timestamp,
+            "buyer_fingerprint": buyer_fingerprint,
+            "seller": seller,
+        }
+        if upstream_timestamp:
+            chain_data["upstream_timestamp"] = upstream_timestamp
+        if receipt_content_hash:
+            chain_data["receipt_content_hash"] = receipt_content_hash
+        computed_chain = sha256_hex(canonical_json(chain_data))
 
     return computed_chain == expected_chain
 
