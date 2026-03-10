@@ -106,18 +106,35 @@ def test_chain_hash(vector):
     response_hash = sha256_hex(canonical_json(inp["response"]))
     buyer_fingerprint = sha256_hex(inp["api_key"])
 
-    chain_input = (
-        request_hash
-        + response_hash
-        + inp["payment_intent_id"]
-        + inp["timestamp"]
-        + buyer_fingerprint
-        + inp["seller"]
-    )
-    if inp.get("upstream_timestamp"):
-        chain_input += inp["upstream_timestamp"]
-    if inp.get("receipt_content_hash"):
-        chain_input += inp["receipt_content_hash"]
-    chain_hash = sha256_hex(chain_input)
+    algorithm = vector.get("algorithm", "legacy")
+
+    if algorithm == "canonical_json":
+        chain_data = {
+            "buyer_fingerprint": buyer_fingerprint,
+            "request_hash": request_hash,
+            "response_hash": response_hash,
+            "seller": inp["seller"],
+            "timestamp": inp["timestamp"],
+            "transaction_id": inp["payment_intent_id"],
+        }
+        if inp.get("upstream_timestamp"):
+            chain_data["upstream_timestamp"] = inp["upstream_timestamp"]
+        if inp.get("receipt_content_hash"):
+            chain_data["receipt_content_hash"] = inp["receipt_content_hash"]
+        chain_hash = sha256_hex(canonical_json(chain_data))
+    else:
+        chain_input = (
+            request_hash
+            + response_hash
+            + inp["payment_intent_id"]
+            + inp["timestamp"]
+            + buyer_fingerprint
+            + inp["seller"]
+        )
+        if inp.get("upstream_timestamp"):
+            chain_input += inp["upstream_timestamp"]
+        if inp.get("receipt_content_hash"):
+            chain_input += inp["receipt_content_hash"]
+        chain_hash = sha256_hex(chain_input)
 
     assert chain_hash == expected["chain_hash"], f"Chain hash mismatch for {vector['name']}"
