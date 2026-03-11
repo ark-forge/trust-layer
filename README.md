@@ -6,13 +6,13 @@ Not a log. Not a trace. A proof.
 
 ```bash
 # One curl. Instant. No card required.
-curl -X POST https://arkforge.tech/trust/v1/keys/free-signup \
+curl -X POST https://trust.arkforge.tech/v1/keys/free-signup \
   -H "Content-Type: application/json" \
   -d '{"email": "you@example.com"}'
 # → {"api_key": "mcp_free_xxxx...", "plan": "free", "limit": "500 proofs/month"}
 ```
 
-[![Live](https://img.shields.io/badge/live-arkforge.fr-green)](https://arkforge.tech/trust/v1/health)
+[![Live](https://img.shields.io/badge/live-arkforge.fr-green)](https://trust.arkforge.tech/v1/health)
 [![Spec](https://img.shields.io/badge/proof--spec-open-blue)](https://github.com/ark-forge/proof-spec)
 [![License: MIT](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
 
@@ -55,7 +55,7 @@ Agent  →  POST /v1/proxy  →  ArkForge  →  Upstream API
 | RFC 3161 Timestamp | Proof existed at the claimed time | Any RFC 3161 verifier |
 | Sigstore Rekor | Chain hash in a public append-only log | [search.sigstore.dev](https://search.sigstore.dev) |
 
-See a live proof: [example transaction](https://arkforge.tech/trust/v/prf_20260303_161853_4d0904)
+See a live proof: [example transaction](https://trust.arkforge.tech/v1/proof/prf_20260303_161853_4d0904)
 
 ---
 
@@ -64,7 +64,7 @@ See a live proof: [example transaction](https://arkforge.tech/trust/v/prf_202603
 ### Step 1 — Free API key (no card)
 
 ```bash
-curl -X POST https://arkforge.tech/trust/v1/keys/free-signup \
+curl -X POST https://trust.arkforge.tech/v1/keys/free-signup \
   -H "Content-Type: application/json" \
   -d '{"email": "you@example.com"}'
 # → {"api_key": "mcp_free_xxxx...", "plan": "free", "limit": "500 proofs/month"}
@@ -73,7 +73,7 @@ curl -X POST https://arkforge.tech/trust/v1/keys/free-signup \
 ### Step 2 — Make a certified API call
 
 ```bash
-curl -X POST https://arkforge.tech/trust/v1/proxy \
+curl -X POST https://trust.arkforge.tech/v1/proxy \
   -H "X-Api-Key: mcp_free_xxxx..." \
   -H "Content-Type: application/json" \
   -d '{
@@ -87,7 +87,7 @@ ArkForge forwards your request, fingerprints the exchange (SHA-256), signs it (E
 ### Step 3 — Verify
 
 ```bash
-curl https://arkforge.tech/trust/v1/proof/prf_20260227_110211_a27069
+curl https://trust.arkforge.tech/v1/proof/prf_20260227_110211_a27069
 ```
 
 Or open it in a browser — every proof has a public HTML verification page with a color-coded badge.
@@ -246,7 +246,7 @@ All values concatenated as raw UTF-8 strings, no separator. Canonical JSON: `jso
 ### Verify any proof in one command
 
 ```bash
-PROOF=$(curl -s https://arkforge.tech/trust/v1/proof/prf_...)
+PROOF=$(curl -s https://trust.arkforge.tech/v1/proof/prf_...)
 
 REQUEST_HASH=$(echo "$PROOF" | jq -r '.hashes.request' | sed 's/sha256://')
 RESPONSE_HASH=$(echo "$PROOF" | jq -r '.hashes.response' | sed 's/sha256://')
@@ -291,14 +291,14 @@ score = floor(success_rate × confidence) − penalties
 The score is signed with ArkForge's Ed25519 key. Cached 1 hour, recomputed lazily.
 
 ```bash
-curl https://arkforge.tech/trust/v1/agent/{agent_id}/reputation
+curl https://trust.arkforge.tech/v1/agent/{agent_id}/reputation
 ```
 
 ---
 
 ## Self-hosting
 
-> Self-hosted instances provide cryptographic integrity but carry no independent third-party attestation. For proofs verifiable by external parties, use the hosted service at [arkforge.fr/trust](https://arkforge.tech/trust).
+> Self-hosted instances provide cryptographic integrity but carry no independent third-party attestation. For proofs verifiable by external parties, use the hosted service at [arkforge.tech/trust](https://arkforge.tech/trust).
 
 ```bash
 git clone https://github.com/ark-forge/trust-layer.git
@@ -317,7 +317,7 @@ pytest tests/ -v
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `TRUST_LAYER_BASE_URL` | Yes | Public base URL (e.g. `https://arkforge.tech/trust`) |
+| `TRUST_LAYER_BASE_URL` | Yes | Public base URL (e.g. `https://trust.arkforge.tech`) |
 | `STRIPE_LIVE_SECRET_KEY` | Yes | Stripe live secret key |
 | `STRIPE_TL_WEBHOOK_SECRET` | Yes | Stripe webhook signing secret |
 | `REDIS_URL` | No | Redis for atomic rate limiting (falls back to file lock if absent) |
@@ -365,7 +365,7 @@ chmod 600 .signing_key.pem .env
 - **SSRF protection** — private IP ranges, loopback, link-local, cloud IMDS (`169.254.x.x`) all blocked before DNS resolution. DNS rebinding guard re-checks resolved addresses.
 - **Receipt fetching** — only whitelisted PSP domains (Stripe), HTTPS only, 500 KB max, 10s timeout.
 - **Encryption at rest** — `api_keys.json` encrypted with AES-128 (Fernet). Proof files contain only SHA-256 hashes, never payload content.
-- **Security smoke test** — 55 checks covering auth bypass, SSRF vectors, path traversal, webhook replay, input validation: `python3 scripts/security_smoke_test.py --url https://arkforge.tech/trust --key mcp_free_xxx`
+- **Security smoke test** — 55 checks covering auth bypass, SSRF vectors, path traversal, webhook replay, input validation: `python3 scripts/security_smoke_test.py --url https://trust.arkforge.tech --key mcp_free_xxx`
 - **CVE scanning** — `pip-audit` after any dependency update.
 
 ---
@@ -407,7 +407,7 @@ See **[ROADMAP.md](ROADMAP.md)** — current focus: third-party provider onboard
 
 ## Live deployment
 
-[https://arkforge.tech/trust/v1/health](https://arkforge.tech/trust/v1/health)
+[https://trust.arkforge.tech/v1/health](https://trust.arkforge.tech/v1/health)
 
 ## License
 

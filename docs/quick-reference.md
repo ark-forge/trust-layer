@@ -48,21 +48,21 @@ Use case: certified GitHub comments, Slack messages,
 
 ```bash
 # Free (500/month, no card)
-curl -X POST https://arkforge.tech/trust/v1/keys/free-signup \
+curl -X POST https://trust.arkforge.tech/v1/keys/free-signup \
   -d '{"email": "you@example.com"}'
 
 # Pro Test (development)
-curl -X POST https://arkforge.tech/trust/v1/keys/setup \
+curl -X POST https://trust.arkforge.tech/v1/keys/setup \
   -d '{"email": "you@example.com", "plan": "pro", "mode": "test"}'
 # → Open checkout_url, card 4242 4242 4242 4242
 
 # Pro production (€29/month)
-curl -X POST https://arkforge.tech/trust/v1/keys/setup \
+curl -X POST https://trust.arkforge.tech/v1/keys/setup \
   -d '{"email": "you@example.com", "plan": "pro"}'
 # → Open checkout_url, real card → mcp_pro_xxx by email
 
 # Enterprise production (€149/month)
-curl -X POST https://arkforge.tech/trust/v1/keys/setup \
+curl -X POST https://trust.arkforge.tech/v1/keys/setup \
   -d '{"email": "you@example.com", "plan": "enterprise"}'
 # → Open checkout_url, real card → mcp_ent_xxx by email
 ```
@@ -79,7 +79,7 @@ response = requests.post("https://provider.com/api", json={...})
 
 # AFTER
 response = requests.post(
-    "https://arkforge.tech/trust/v1/proxy",
+    "https://trust.arkforge.tech/v1/proxy",
     headers={"X-Api-Key": "mcp_xxx..."},
     json={
         "target": "https://provider.com/api",
@@ -92,7 +92,7 @@ response = requests.post(
 
 ```python
 response = requests.post(
-    "https://arkforge.tech/trust/v1/proxy",
+    "https://trust.arkforge.tech/v1/proxy",
     headers={"X-Api-Key": "mcp_xxx..."},
     json={
         "target": "https://api.github.com/repos/owner/repo/issues/5/comments",
@@ -123,7 +123,7 @@ receipt_url = payment.charges.data[0].receipt_url
 # 2. Certification: attach payment evidence to proxy call
 # Free key is sufficient for Mode B (no credit deduction)
 response = requests.post(
-    "https://arkforge.tech/trust/v1/proxy",
+    "https://trust.arkforge.tech/v1/proxy",
     headers={"X-Api-Key": "mcp_xxx..."},
     json={
         "target": "https://provider.com/api",
@@ -176,22 +176,22 @@ if 'provider_payment' in result['proof']:
 
 ```bash
 # Free signup
-POST https://arkforge.tech/trust/v1/keys/free-signup
+POST https://trust.arkforge.tech/v1/keys/free-signup
 
 # Pro/Test setup
-POST https://arkforge.tech/trust/v1/keys/setup
+POST https://trust.arkforge.tech/v1/keys/setup
 
 # Proxy (Mode A and B)
-POST https://arkforge.tech/trust/v1/proxy
+POST https://trust.arkforge.tech/v1/proxy
 
 # Buy credits (Pro/Test)
-POST https://arkforge.tech/trust/v1/credits/buy
+POST https://trust.arkforge.tech/v1/credits/buy
 
 # Check balance
-GET  https://arkforge.tech/trust/v1/usage
+GET  https://trust.arkforge.tech/v1/usage
 
 # Retrieve a proof
-GET  https://arkforge.tech/trust/v1/proof/{proof_id}
+GET  https://trust.arkforge.tech/v1/proof/{proof_id}
 GET  https://arkforge.tech/trust/v/{proof_id}          # short URL
 ```
 
@@ -249,7 +249,7 @@ class AutonomousAgent:
 
     def execute(self, target, payload):
         return requests.post(
-            "https://arkforge.tech/trust/v1/proxy",
+            "https://trust.arkforge.tech/v1/proxy",
             headers=self.headers,
             json={"target": target, "payload": payload}
         ).json()
@@ -281,7 +281,7 @@ No browser required after the initial subscription setup.
 
 ```bash
 # Independent chain hash recomputation
-curl -s https://arkforge.tech/trust/v1/proof/prf_xxx > proof.json
+curl -s https://trust.arkforge.tech/v1/proof/prf_xxx > proof.json
 
 REQUEST_HASH=$(jq -r '.hashes.request' proof.json | sed 's/sha256://')
 RESPONSE_HASH=$(jq -r '.hashes.response' proof.json | sed 's/sha256://')
