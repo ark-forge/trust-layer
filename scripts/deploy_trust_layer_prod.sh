@@ -176,17 +176,16 @@ log "Previous commit (rollback point): $PREV_COMMIT"
 # Bump trust_layer/__init__.py (idempotent — skipped if already correct)
 CURRENT_APP_VERSION=$(grep -oP '(?<=__version__ = ")[^"]+' trust_layer/__init__.py 2>/dev/null || echo "")
 if [ "$CURRENT_APP_VERSION" != "$NEW_VERSION" ]; then
+    git pull origin main >> "$LOG_FILE" 2>&1
     sed -i "s/^__version__ = .*/__version__ = \"$NEW_VERSION\"/" trust_layer/__init__.py
     git add trust_layer/__init__.py
     git commit -m "chore: bump version to $NEW_VERSION" >> "$LOG_FILE" 2>&1
     git push origin main >> "$LOG_FILE" 2>&1
     log "Version bumped $CURRENT_APP_VERSION → $NEW_VERSION"
 else
+    git pull origin main >> "$LOG_FILE" 2>&1
     log "Version already at $NEW_VERSION — no bump needed"
 fi
-
-# Pull latest (no-op if we just pushed, ensures consistency)
-git pull origin main >> "$LOG_FILE" 2>&1
 
 NEW_COMMIT=$(git rev-parse HEAD)
 log "Local commit: $NEW_COMMIT"
@@ -417,6 +416,19 @@ fi
 # ============================================================
 log "--- Phase 3: Release ---"
 # NEW_TAG, LAST_TAG, CHANGELOG already computed in Phase 2
+
+# Update CHANGELOG.md before tagging (deploy script pushes via personal token,
+# bypassing branch protection — GITHUB_TOKEN in CI cannot)
+if python3 scripts/update_changelog.py "$NEW_TAG" "$LAST_TAG" >> "$LOG_FILE" 2>&1; then
+    git add CHANGELOG.md
+    git diff --cached --quiet || {
+        git commit -m "docs(changelog): $NEW_TAG [skip ci]" >> "$LOG_FILE" 2>&1
+        git push origin main >> "$LOG_FILE" 2>&1
+        log "CHANGELOG.md committed to main"
+    }
+else
+    log "WARN: update_changelog.py failed — skipping CHANGELOG commit"
+fi
 
 git tag "$NEW_TAG"
 git push origin "$NEW_TAG" >> "$LOG_FILE" 2>&1
