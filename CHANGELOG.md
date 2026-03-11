@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.2.3] — 2026-03-11
+
+### Fixed
+- CI pipeline: validate release workflow produces green run after v1.2.1/v1.2.2 CHANGELOG commit fix.
+
+---
+
 ## [1.2.2] — 2026-03-11
 
 ### Fixed
