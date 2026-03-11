@@ -106,32 +106,23 @@ def build_entry(tag: str, commits: list[str]) -> str:
 
 def update_changelog(entry: str) -> None:
     content = CHANGELOG.read_text(encoding="utf-8")
-    marker = "## [Unreleased]"
-    if marker not in content:
-        # Append at end if marker missing
-        CHANGELOG.write_text(content.rstrip() + "\n\n" + entry, encoding="utf-8")
-        return
-
-    # Insert after the [Unreleased] block (first blank line after it)
     lines = content.splitlines(keepends=True)
     insert_at = None
-    in_unreleased = False
+
+    # Insert after the first "---" separator (end of file header block).
+    # This places new entries right after the header, before existing versions.
     for i, line in enumerate(lines):
-        if line.strip() == marker:
-            in_unreleased = True
-            continue
-        if in_unreleased and line.strip() == "":
+        if line.strip() == "---":
             insert_at = i + 1
             break
 
     if insert_at is None:
-        # Fallback: insert right after the marker line
-        for i, line in enumerate(lines):
-            if line.strip() == marker:
-                insert_at = i + 1
-                break
+        # No separator found — append after header
+        CHANGELOG.write_text(content.rstrip() + "\n\n" + entry, encoding="utf-8")
+        return
 
-    lines.insert(insert_at, entry)
+    entry_block = "\n" + entry
+    lines.insert(insert_at, entry_block)
     CHANGELOG.write_text("".join(lines), encoding="utf-8")
 
 

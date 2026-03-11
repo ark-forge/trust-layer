@@ -6,6 +6,14 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.2.2] — 2026-03-11
+
+### Fixed
+- CI release: CHANGELOG commit moved to deploy script (pre-tag) — avoids branch protection conflict during CI.
+- CI fallback PR path for CHANGELOG commit when API commit is blocked.
+
+---
+
 ## [1.2.1] — 2026-03-11
 
 ### Security
@@ -185,32 +193,3 @@ _(initial 1.1.x series — internal stabilisation)_
 
 ### Added
 - Stripe webhooks: `invoice.paid` and `invoice.payment_failed` handlers.
-
----
-
-## [Unreleased]
-
-## [1.2.1] — 2026-03-10
-
-### Fixed
-- cryptography 43.0.0 → 46.0.5 — 3 Dependabot CVEs
-
-### Documentation
-- CHANGELOG.md + auto-update on release
-
-### Tests
-- branch chain_hash by algorithm field (legacy vs canonical_json)
-
----
-_Next changes will appear here automatically._
-
----
-
-## [1.2.1] — 2026-03-10
-
-### Security
-- **cryptography 43.0.0 → 46.0.5** — closes 3 Dependabot alerts:
-  - HIGH: subgroup attack via missing validation on SECT curves (fixed in 46.0.5)
-  - MEDIUM: vulnerable OpenSSL bundled in wheels (fixed in 43.0.1)
-  - LOW: vulnerable OpenSSL bundled in wheels (fixed in 44.0.1)
-  `cryptography` is not directly used by Trust Layer code (Fernet key derivation only) — no API change.
