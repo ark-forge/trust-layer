@@ -6,6 +6,17 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.2.1] — 2026-03-11
+
+### Security
+- Dependency update: cryptography 43.0.0 → 46.0.5 — patches 3 Dependabot CVEs (cee19b8)
+
+### Tests
+- Conformance: branch chain_hash by `algorithm` field (legacy vs canonical_json) (b28ee18)
+
+---
+
+
 ## [1.2.0] — 2026-03-10
 
 ### Breaking Changes
