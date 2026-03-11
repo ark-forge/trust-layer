@@ -29,7 +29,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: write
 
     steps:
       - uses: actions/checkout@v4
@@ -39,7 +38,7 @@ jobs:
       - name: Get previous tag
         id: prev_tag
         run: |
-          PREV=$(git tag --sort=-creatordate | head -2 | tail -1)
+          PREV=$(git tag --sort=-creatordate | grep -v "^${{ github.ref_name }}$" | head -1)
           echo "tag=${PREV:-$(git rev-list --max-parents=0 HEAD)}" >> "$GITHUB_OUTPUT"
 
       - name: Generate changelog
@@ -51,35 +50,6 @@ jobs:
             echo ""
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Update CHANGELOG.md
-        run: |
-          python3 scripts/update_changelog.py \
-            "${{ github.ref_name }}" \
-            "${{ steps.prev_tag.outputs.tag }}"
-
-      - name: Commit CHANGELOG.md via API
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if git diff --quiet CHANGELOG.md; then
-            echo "No CHANGELOG changes, skipping commit"
-            exit 0
-          fi
-          CONTENT=$(base64 -w0 CHANGELOG.md)
-          SHA=$(gh api repos/${{ github.repository }}/contents/CHANGELOG.md --jq '.sha')
-          gh api repos/${{ github.repository }}/contents/CHANGELOG.md \
-            -X PUT \
-            -f message="docs(changelog): ${{ github.ref_name }} [skip ci]" \
-            -f content="$CONTENT" \
-            -f sha="$SHA" \
-            -f branch="main"
-          echo "CHANGELOG.md committed to main via GitHub API"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
