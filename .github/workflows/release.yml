@@ -63,42 +63,23 @@ jobs:
             "${{ github.ref_name }}" \
             "${{ steps.prev_tag.outputs.tag }}"
 
-      - name: Commit CHANGELOG.md
+      - name: Commit CHANGELOG.md via API
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Use GitHub API to commit — git push blocked by branch protection
-          # NOTE: This works because enforce_admins=false. If enforce_admins
-          # is later set to true, the API commit will fail and the fallback
-          # below creates a PR instead.
           if git diff --quiet CHANGELOG.md; then
-            echo "No CHANGELOG changes to commit"
+            echo "No CHANGELOG changes, skipping commit"
             exit 0
           fi
           CONTENT=$(base64 -w0 CHANGELOG.md)
           SHA=$(gh api repos/${{ github.repository }}/contents/CHANGELOG.md --jq '.sha')
-          if gh api repos/${{ github.repository }}/contents/CHANGELOG.md \
+          gh api repos/${{ github.repository }}/contents/CHANGELOG.md \
             -X PUT \
             -f message="docs(changelog): ${{ github.ref_name }} [skip ci]" \
             -f content="$CONTENT" \
             -f sha="$SHA" \
-            -f branch="main" 2>/dev/null; then
-            echo "CHANGELOG committed directly to main via API"
-          else
-            echo "::warning::API commit failed (branch protection may enforce admins). Creating PR instead."
-            BRANCH="changelog/${{ github.ref_name }}"
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git checkout -b "$BRANCH"
-            git add CHANGELOG.md
-            git commit -m "docs(changelog): ${{ github.ref_name }}"
-            git push origin "$BRANCH"
-            gh pr create \
-              --title "docs(changelog): ${{ github.ref_name }}" \
-              --body "Auto-generated changelog update for ${{ github.ref_name }}. Merge to update CHANGELOG.md on main." \
-              --base main \
-              --head "$BRANCH"
-          fi
+            -f branch="main"
+          echo "CHANGELOG.md committed to main via GitHub API"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
