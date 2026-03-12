@@ -12,10 +12,43 @@ from .config import SMTP_HOST, SMTP_PORT, SMTP_LOGIN, SMTP_USER, SMTP_CONTACT, S
 logger = logging.getLogger("trust_layer.email")
 
 
+_TEST_TLDS = {"invalid", "local", "test", "example", "localhost"}
+# RFC 2606 reserved domains + universally-used test placeholders
+_TEST_DOMAINS = {
+    "example.com", "example.org", "example.net", "example.io",
+    "test.com", "test.org", "test.net",
+    "smoke.invalid", "smoke.local",
+}
+# Local-part prefixes that are never real recipients
+_TEST_LOCAL_PREFIXES = ("smoke_", "smoke-", "noreply", "no-reply", "mailer-daemon")
+
+
+def _is_test_email(to: str) -> tuple[bool, str]:
+    """Return (True, reason) if the address is a test/reserved/fake address."""
+    to = to.strip().lower()
+    if "@" not in to:
+        return True, "invalid_format"
+    local, domain = to.rsplit("@", 1)
+    tld = domain.rsplit(".", 1)[-1] if "." in domain else ""
+    if tld in _TEST_TLDS:
+        return True, f"reserved_tld:.{tld}"
+    if domain in _TEST_DOMAINS:
+        return True, f"reserved_domain:{domain}"
+    if any(local.startswith(p) for p in _TEST_LOCAL_PREFIXES):
+        return True, f"test_local_prefix:{local}"
+    return False, ""
+
+
 def _send_email(to: str, subject: str, body: str):
     """Send a plain-text email via SMTP SSL. Best effort."""
     if not to or not SMTP_PASSWORD:
         logger.warning("Email skipped: %s", "no recipient" if not to else "SMTP not configured")
+        return
+
+    # Block test/reserved/fake addresses — never deliver, never consume quota
+    _blocked, _reason = _is_test_email(to)
+    if _blocked:
+        logger.warning("Email skipped (%s): %s", _reason, to)
         return
 
     msg = MIMEMultipart("alternative")
