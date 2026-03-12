@@ -174,16 +174,16 @@ PREV_COMMIT=$(git rev-parse HEAD)
 log "Previous commit (rollback point): $PREV_COMMIT"
 
 # Bump trust_layer/__init__.py (idempotent — skipped if already correct)
+# Pull first so we don't create a redundant commit if origin already has the bump.
+git pull origin main >> "$LOG_FILE" 2>&1
 CURRENT_APP_VERSION=$(grep -oP '(?<=__version__ = ")[^"]+' trust_layer/__init__.py 2>/dev/null || echo "")
 if [ "$CURRENT_APP_VERSION" != "$NEW_VERSION" ]; then
-    git pull origin main >> "$LOG_FILE" 2>&1
     sed -i "s/^__version__ = .*/__version__ = \"$NEW_VERSION\"/" trust_layer/__init__.py
     git add trust_layer/__init__.py
     git commit -m "chore: bump version to $NEW_VERSION" >> "$LOG_FILE" 2>&1
     git push origin main >> "$LOG_FILE" 2>&1
     log "Version bumped $CURRENT_APP_VERSION → $NEW_VERSION"
 else
-    git pull origin main >> "$LOG_FILE" 2>&1
     log "Version already at $NEW_VERSION — no bump needed"
 fi
 
