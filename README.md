@@ -12,7 +12,7 @@ curl -X POST https://trust.arkforge.tech/v1/keys/free-signup \
 # → {"api_key": "mcp_free_xxxx...", "plan": "free", "limit": "500 proofs/month"}
 ```
 
-[![Live](https://img.shields.io/badge/live-arkforge.fr-green)](https://trust.arkforge.tech/v1/health)
+[![Live](https://img.shields.io/badge/live-arkforge.tech-green)](https://trust.arkforge.tech/v1/health)
 [![Spec](https://img.shields.io/badge/proof--spec-open-blue)](https://github.com/ark-forge/proof-spec)
 [![License: MIT](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
 
