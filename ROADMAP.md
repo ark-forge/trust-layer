@@ -2,17 +2,19 @@
 
 ## Vision
 
-ArkForge is a **digital notary** for agent-to-agent transactions. Like a real-world notary, ArkForge doesn't hold money, doesn't take sides, and doesn't resolve disputes. It **records what happened**, signs it, timestamps it, and stores it immutably. In case of dispute, the proof serves whoever is right.
+ArkForge is an **independent certifying proxy** for AI agent actions. It sits between your agent and any upstream API — LLM provider, MCP server, payment API, or any third-party service — records the exchange from the outside, signs it, timestamps it, and anchors it in a public append-only log. Neither the agent nor the upstream controls the proof.
+
+ArkForge doesn't hold money, doesn't take sides, and doesn't resolve disputes. It **records what happened**. In case of dispute, the proof serves whoever is right.
 
 ## Core principle
 
-A notary records what the parties presented, signs the document, and if someone lied — the notarized document becomes evidence against them.
+Every AI agent action produces a cryptographic receipt — an **Agent Action Receipt (AAR)** — that proves: what was sent, what was received, when it happened, and (optionally) what was paid. The AAR is independently verifiable by any third party without trusting ArkForge's infrastructure.
 
-ArkForge works the same way:
-- The client provides a receipt URL for their payment
+ArkForge works the same way for every call:
+- The client provides a receipt URL for their payment (optional)
 - ArkForge fetches the receipt directly from the PSP (Stripe, blockchain explorer, etc.)
 - ArkForge forwards the request, hashes the response
-- The proof binds everything: verified receipt + request + response + timestamp + signature
+- The proof binds everything: verified receipt + request + response + timestamp + Ed25519 signature + Sigstore Rekor anchor
 - The provider receives the proof and can verify the receipt themselves — that's their responsibility
 
 ArkForge doesn't take sides. The proof serves the truth.
@@ -21,7 +23,7 @@ ArkForge doesn't take sides. The proof serves the truth.
 
 **What works today:**
 
-- Certifying proxy — any HTTPS API call becomes a proven transaction
+- Certifying proxy — any HTTPS API call becomes a proven transaction (Agent Action Receipt)
 - SHA-256 hash chain binding request, response, payment, timestamp, buyer, seller
 - Ed25519 digital signature (origin authentication)
 - RFC 3161 certified timestamps — pool failover: FreeTSA (primary) → DigiCert → Sectigo. Provider recorded per-proof.
@@ -29,6 +31,7 @@ ArkForge doesn't take sides. The proof serves the truth.
 - Stripe payment as witness (Pro plan — ArkForge processes payment directly)
 - Free tier with 3 witnesses (Ed25519, RFC 3161, Sigstore Rekor — no credit card required)
 - **External receipt verification** — clients attach a Stripe receipt URL, ArkForge fetches, hashes, parses, and binds it to the proof (spec v2.0)
+- **MCP tool call certification** — route MCP server outbound calls through `/v1/proxy`; every `tools/call` becomes a signed AAR independently verifiable by the agent's client or auditor
 - Open proof specification with test vectors ([ark-forge/proof-spec](https://github.com/ark-forge/proof-spec))
 
 **Unlocked by Phase 1:** Any client can now prove a payment made to a third-party provider. ArkForge is no longer limited to its own payment processing. Zero provider onboarding required.
@@ -261,11 +264,11 @@ A future spec version (v3.x) could add a `dispute_resolution` object with an arb
 
 | ArkForge IS | ArkForge IS NOT |
 |-------------|-----------------|
-| A digital notary | A marketplace |
-| A certifying proxy | A payment processor |
-| Payment-agnostic | Stripe-dependent |
+| An independent certifying proxy | A marketplace |
+| A proof layer for agent actions | A payment processor |
+| Model-agnostic and vendor-agnostic | Stripe-dependent |
 | Non-custodial | An escrow service |
-| A proof layer | A billing platform |
+| An AAR issuer (Agent Action Receipts) | A billing platform |
 
 ArkForge records, signs, and timestamps. It doesn't hold money, set prices, list providers, or resolve disputes. The proof speaks for itself.
 
