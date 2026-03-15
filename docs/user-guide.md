@@ -107,6 +107,91 @@ while True:
 
 ---
 
+## MCP integration (Model Context Protocol)
+
+MCP is the standard protocol for connecting AI agents to tools. ArkForge certifies each outbound tool call from your MCP server — turning every `tools/call` into a verifiable **Agent Action Receipt (AAR)**.
+
+### How it works
+
+Your MCP server normally calls external APIs directly. You redirect those calls through `POST /v1/proxy`. The rest of your code is unchanged.
+
+```
+Claude / any MCP client
+        │ tools/call
+        ▼
+  Your MCP Server
+        │ HTTP call (redirected)
+        ▼
+  POST /v1/proxy  →  ArkForge  →  External API
+                          ↓
+              Signed proof: tool name + args + response
+              RFC 3161 timestamp + Sigstore Rekor anchor
+```
+
+### Integration pattern
+
+```python
+import httpx
+
+TRUST_LAYER_URL = "https://trust.arkforge.tech/v1/proxy"
+ARKFORGE_API_KEY = "mcp_pro_xxx..."
+
+def certified_call(target_url: str, payload: dict, tool_name: str) -> dict:
+    """Wrap any outbound MCP tool call with a Trust Layer proof."""
+    resp = httpx.post(
+        TRUST_LAYER_URL,
+        headers={"X-Api-Key": ARKFORGE_API_KEY, "X-Agent-Identity": tool_name},
+        json={
+            "target": target_url,
+            "method": "POST",
+            "payload": payload,
+            "description": f"MCP tool call: {tool_name}",
+        },
+        timeout=30,
+    )
+    result = resp.json()
+    proof_id = result["proof"]["id"]
+    # → proof publicly verifiable at https://trust.arkforge.tech/v1/proof/{proof_id}
+    return result["response"]
+```
+
+Replace direct `httpx.post(target_url, ...)` calls in your MCP server with `certified_call(target_url, ...)`. Every tool call is now an AAR.
+
+### What each AAR contains
+
+| Field | Content |
+|-------|---------|
+| `tool_name` | Value of `X-Agent-Identity` header |
+| `request_hash` | SHA-256 of the exact payload sent |
+| `response_hash` | SHA-256 of the exact response received |
+| `timestamp` | RFC 3161 certified (independent TSA) |
+| `signature` | Ed25519, verifiable with ArkForge public key |
+| `rekor_log_id` | Entry in Sigstore public append-only log |
+
+### Multi-tool MCP server example
+
+```python
+# In your MCP server — before
+@server.call_tool()
+async def handle_tool(name: str, arguments: dict):
+    if name == "search_web":
+        return await httpx.post("https://search-api.example.com/search", json=arguments)
+    if name == "send_email":
+        return await httpx.post("https://mail-api.example.com/send", json=arguments)
+
+# After — one line change per tool
+@server.call_tool()
+async def handle_tool(name: str, arguments: dict):
+    if name == "search_web":
+        return certified_call("https://search-api.example.com/search", arguments, "search_web")
+    if name == "send_email":
+        return certified_call("https://mail-api.example.com/send", arguments, "send_email")
+```
+
+Every tool call now has an independent proof your client can verify — without trusting your server logs.
+
+---
+
 ## Two modes
 
 ### Mode A — Transaction proof only

@@ -106,6 +106,43 @@ Agent → POST /v1/proxy (with payment receipt URL) → ArkForge → Provider AP
                                              Proof: request + response + receipt hash + timestamp
 ```
 
+### MCP tool call certification
+
+[Model Context Protocol (MCP)](https://modelcontextprotocol.io) is becoming the standard for connecting AI agents to tools and external services. Every `tools/call` is a real-world action — but MCP has no built-in auditability. ArkForge fills that gap.
+
+Route your MCP server's outbound calls through the Trust Layer proxy. Each tool call produces a signed, timestamped receipt — an **Agent Action Receipt (AAR)** — independently verifiable by your client, your auditor, or a regulator.
+
+```
+Claude / agent
+     │ tools/call
+     ▼
+MCP Server  →  POST /v1/proxy  →  ArkForge  →  External API / service
+                                      ↓
+                         AAR: tool_name + args + result
+                              + Ed25519 signature
+                              + RFC 3161 timestamp
+                              + Sigstore Rekor anchor
+```
+
+**What this gives you:**
+- Proof that tool X was called with args Y and returned Z — not just a log entry
+- Non-repudiation: the MCP server cannot later deny a call, the downstream service cannot deny delivery
+- Portable receipts your client can verify without trusting your infrastructure
+
+**One env var, zero SDK change:**
+
+```bash
+# Before: MCP server calls external APIs directly
+EXTERNAL_API_URL=https://api.example.com
+
+# After: route through Trust Layer
+EXTERNAL_API_URL=https://trust.arkforge.tech/v1/proxy
+ARKFORGE_API_KEY=mcp_pro_xxx...
+ARKFORGE_TARGET=https://api.example.com
+```
+
+**Directly relevant to:** OWASP Top 10 for Agentic Applications 2026 (signed audit logs per tool call), EU AI Act Article 12 (logging for high-risk AI), DORA Article 11.
+
 ### Human auditing an agent
 
 A team deploys an agent in production. The agent routes its LLM and API calls through ArkForge. The team gets a verifiable audit trail: which model, which exact prompt, what response, at what time, at what cost. Unlike internal logs, these proofs are signed and anchored — they cannot be altered after the fact.
