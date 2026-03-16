@@ -436,6 +436,7 @@ class TestChainHashWithReceipt:
 
 class TestPublicProofWithReceipt:
     def test_public_proof_includes_provider_payment(self):
+        """Public proof exposes only redacted provider_payment (hash + status, no receipt_url)."""
         pe = {"type": "stripe", "receipt_url": "https://pay.stripe.com/receipts/test", "receipt_content_hash": "sha256:abc123"}
         proof = {
             "proof_id": "prf_test",
@@ -447,7 +448,14 @@ class TestPublicProofWithReceipt:
             "provider_payment": pe,
         }
         public = get_public_proof(proof)
-        assert public["provider_payment"] == pe
+        pp = public["provider_payment"]
+        # Redacted: only type, receipt_content_hash, verification_status — no receipt_url
+        assert pp["type"] == "stripe"
+        assert pp["receipt_content_hash"] == "sha256:abc123"
+        assert "receipt_url" not in pp
+        # parties and certification_fee not exposed publicly
+        assert "parties" not in public
+        assert "certification_fee" not in public
 
     def test_public_proof_without_provider_payment(self):
         proof = {

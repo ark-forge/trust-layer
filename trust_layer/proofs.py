@@ -169,16 +169,16 @@ def verify_proof_integrity(proof: dict) -> bool:
 
 
 def get_public_proof(proof: dict) -> dict:
-    """Return proof data safe for public access (no raw request/response content)."""
+    """Return proof data safe for public access.
+
+    Sensitive fields (parties, certification_fee, full provider_payment,
+    buyer_reputation_score, buyer_profile_url) are redacted or removed.
+    Use get_full_proof() for authenticated owner access.
+    """
     result = {
         "proof_id": proof.get("proof_id"),
         "spec_version": proof.get("spec_version"),
         "hashes": proof.get("hashes"),
-        "parties": proof.get("parties"),
-        "certification_fee": {
-            k: v for k, v in proof.get("certification_fee", {}).items()
-            if k in ("transaction_id", "amount", "currency", "status", "method")
-        },
         "timestamp_authority": proof.get("timestamp_authority"),
         "timestamp": proof.get("timestamp"),
         "upstream_timestamp": proof.get("upstream_timestamp"),
@@ -186,14 +186,39 @@ def get_public_proof(proof: dict) -> dict:
         "arkforge_signature": proof.get("arkforge_signature"),
         "arkforge_pubkey": proof.get("arkforge_pubkey"),
         "identity_consistent": proof.get("identity_consistent"),
-        "provider_payment": proof.get("provider_payment"),
         "views_count": proof.get("views_count", 0),
         "transaction_success": proof.get("transaction_success"),
         "upstream_status_code": proof.get("upstream_status_code"),
         "disputed": proof.get("disputed"),
         "dispute_id": proof.get("dispute_id"),
-        "buyer_reputation_score": proof.get("buyer_reputation_score"),
-        "buyer_profile_url": proof.get("buyer_profile_url"),
         "transparency_log": proof.get("transparency_log"),
     }
+    # Redact provider_payment: keep only type, hash, verification_status
+    pp = proof.get("provider_payment")
+    if pp:
+        result["provider_payment"] = {
+            "type": pp.get("type"),
+            "receipt_content_hash": pp.get("receipt_content_hash"),
+            "verification_status": pp.get("verification_status"),
+        }
+    else:
+        result["provider_payment"] = None
+    return result
+
+
+def get_full_proof(proof: dict) -> dict:
+    """Return complete proof including sensitive fields — owner-only access.
+
+    Builds on get_public_proof() and restores: parties, certification_fee,
+    full provider_payment, buyer_reputation_score, buyer_profile_url.
+    """
+    result = get_public_proof(proof)
+    result["parties"] = proof.get("parties")
+    result["certification_fee"] = {
+        k: v for k, v in proof.get("certification_fee", {}).items()
+        if k in ("transaction_id", "amount", "currency", "status", "method")
+    }
+    result["provider_payment"] = proof.get("provider_payment")
+    result["buyer_reputation_score"] = proof.get("buyer_reputation_score")
+    result["buyer_profile_url"] = proof.get("buyer_profile_url")
     return result

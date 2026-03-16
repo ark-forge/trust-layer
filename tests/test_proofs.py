@@ -9,6 +9,7 @@ from trust_layer.proofs import (
     load_proof,
     verify_proof_integrity,
     get_public_proof,
+    get_full_proof,
 )
 
 
@@ -103,12 +104,36 @@ def test_get_public_proof_strips_sensitive():
             "method": "stripe",
             "raw": {"should_not_appear": True},
         },
+        "parties": {
+            "buyer_fingerprint": "abc123",
+            "seller": "example.com",
+        },
+        "provider_payment": {
+            "type": "stripe",
+            "receipt_url": "https://stripe.com/receipt/full",
+            "receipt_content_hash": "sha256:hash123",
+            "verification_status": "fetched",
+            "parsed_fields": {"amount": 1.0, "currency": "usd", "status": "paid"},
+        },
+        "buyer_reputation_score": 85,
+        "buyer_profile_url": "https://example.com/agent/123",
         "timestamp": "2026-02-25T15:00:00Z",
         "timestamp_authority": {"status": "verified", "provider": "freetsa.org"},
     }
     public = get_public_proof(proof)
-    assert "raw" not in public.get("certification_fee", {})
-    assert public["certification_fee"]["transaction_id"] == "pi_test"
+    # certification_fee fully removed
+    assert "certification_fee" not in public
+    # parties fully removed
+    assert "parties" not in public
+    # buyer fields removed
+    assert "buyer_reputation_score" not in public
+    assert "buyer_profile_url" not in public
+    # provider_payment redacted: only type, receipt_content_hash, verification_status
+    pp = public.get("provider_payment")
+    assert pp is not None
+    assert set(pp.keys()) == {"type", "receipt_content_hash", "verification_status"}
+    assert "receipt_url" not in pp
+    assert "parsed_fields" not in pp
 
 
 # --- New tests for spec_version, upstream_timestamp, signature fields ---
@@ -258,3 +283,50 @@ def test_get_public_proof_transparency_log_none():
     proof = {"proof_id": "prf_no_rekor", "hashes": {}}
     public = get_public_proof(proof)
     assert public["transparency_log"] is None
+
+
+def test_get_full_proof_includes_all_fields():
+    """get_full_proof restores parties, certification_fee, full provider_payment, buyer fields."""
+    proof = {
+        "proof_id": "prf_full_test",
+        "spec_version": "2.1",
+        "hashes": {"chain": "sha256:abc"},
+        "certification_fee": {
+            "transaction_id": "pi_full",
+            "amount": 0.50,
+            "currency": "eur",
+            "status": "succeeded",
+            "method": "stripe",
+            "receipt_url": "https://stripe.com/receipt/full",
+        },
+        "parties": {
+            "buyer_fingerprint": "fp123",
+            "seller": "example.com",
+            "agent_identity": "test-agent",
+            "agent_version": "1.0",
+        },
+        "provider_payment": {
+            "type": "stripe",
+            "receipt_url": "https://stripe.com/receipt/full",
+            "receipt_content_hash": "sha256:hash456",
+            "verification_status": "fetched",
+            "parsed_fields": {"amount": 1.0, "currency": "usd", "status": "paid", "date": "2026-02-25"},
+        },
+        "buyer_reputation_score": 85,
+        "buyer_profile_url": "https://example.com/agent/123",
+    }
+    full = get_full_proof(proof)
+    # parties present
+    assert full["parties"]["seller"] == "example.com"
+    assert full["parties"]["buyer_fingerprint"] == "fp123"
+    # certification_fee present (filtered to safe keys)
+    assert full["certification_fee"]["amount"] == 0.50
+    assert full["certification_fee"]["transaction_id"] == "pi_full"
+    # provider_payment full (receipt_url and parsed_fields present)
+    pp = full["provider_payment"]
+    assert pp.get("receipt_url") == "https://stripe.com/receipt/full"
+    assert pp.get("parsed_fields") is not None
+    assert pp["parsed_fields"]["amount"] == 1.0
+    # buyer fields present
+    assert full["buyer_reputation_score"] == 85
+    assert full["buyer_profile_url"] == "https://example.com/agent/123"

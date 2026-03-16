@@ -680,3 +680,64 @@ def test_usage_shows_monthly_for_pro(client):
     # overage credits visible
     assert "overage_credits_eur" in data
     assert data["overage_credits_eur"] == 10.0
+
+
+# --- GET /v1/proof/{proof_id}/full ---
+
+def test_proof_full_requires_auth(client, api_key):
+    """GET /v1/proof/{id}/full returns 401 when no API key is provided."""
+    mock_http = _mock_http_client()
+    with patch("httpx.AsyncClient", return_value=mock_http), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+        r = client.post(
+            "/v1/proxy",
+            json={"target": "https://example.com/api", "payload": {}},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+    assert r.status_code == 200
+    proof_id = r.json()["proof"]["proof_id"]
+
+    r2 = client.get(f"/v1/proof/{proof_id}/full")
+    assert r2.status_code == 401
+    assert r2.json()["error"]["code"] == "auth_required"
+
+
+def test_proof_full_wrong_owner(client, api_key):
+    """GET /v1/proof/{id}/full returns 403 when a different valid API key is used."""
+    mock_http = _mock_http_client()
+    with patch("httpx.AsyncClient", return_value=mock_http), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+        r = client.post(
+            "/v1/proxy",
+            json={"target": "https://example.com/api", "payload": {}},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+    assert r.status_code == 200
+    proof_id = r.json()["proof"]["proof_id"]
+
+    other_key = create_api_key("cus_other_owner", "ref_other_owner", "other@test.com", test_mode=True)
+    r2 = client.get(f"/v1/proof/{proof_id}/full", headers={"X-Api-Key": other_key})
+    assert r2.status_code == 403
+    assert r2.json()["error"]["code"] == "forbidden"
+
+
+def test_proof_full_returns_payment(client, api_key):
+    """GET /v1/proof/{id}/full returns 200 with parties and certification_fee for the owner."""
+    mock_http = _mock_http_client()
+    with patch("httpx.AsyncClient", return_value=mock_http), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+        r = client.post(
+            "/v1/proxy",
+            json={"target": "https://example.com/api", "payload": {}},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+    assert r.status_code == 200
+    proof_id = r.json()["proof"]["proof_id"]
+
+    r2 = client.get(f"/v1/proof/{proof_id}/full", headers={"Authorization": f"Bearer {api_key}"})
+    assert r2.status_code == 200
+    data = r2.json()
+    assert data["integrity_verified"] is True
+    assert "parties" in data
+    assert "certification_fee" in data
+    assert data["parties"]["buyer_fingerprint"] != ""

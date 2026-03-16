@@ -76,6 +76,7 @@ from .config import (
     PROOF_ACCESS_LOG,
     ARKFORGE_PUBLIC_KEY,
     WEBHOOK_IDEMPOTENCY_FILE,
+    CONVERSION_EVENTS_LOG,
     CORS_ALLOWED_ORIGINS,
     PRO_OVERAGE_PRICE,
     ENTERPRISE_OVERAGE_PRICE,
@@ -95,7 +96,7 @@ from .keys import (
     get_overage_settings, update_overage_settings, get_key_plan,
 )
 from .credits import add_credits, get_balance
-from .proofs import load_proof, store_proof, get_public_proof, verify_proof_integrity
+from .proofs import load_proof, store_proof, get_public_proof, get_full_proof, verify_proof_integrity, sha256_hex
 from .proxy import execute_proxy, ProxyError, drain_background_tasks, _track_task, _log_background_task
 from .templates import render_proof_page
 from .rate_limit import get_usage, get_daily_limit
@@ -463,6 +464,40 @@ async def proxy_endpoint(
             headers["X-ArkForge-Buyer-Score"] = str(buyer_score)
 
     return JSONResponse(status_code=status_code, content=result, headers=headers)
+
+
+# --- GET /v1/proof/{proof_id}/full ---
+
+@app.get("/v1/proof/{proof_id}/full")
+async def get_proof_full(
+    proof_id: str,
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None),
+):
+    """Authenticated full proof — owner only. Returns all fields including payment details."""
+    api_key = _get_api_key(authorization, x_api_key)
+    if not api_key:
+        return _error_response("auth_required", "API key required", 401)
+    key_info = validate_api_key(api_key)
+    if not key_info:
+        return _error_response("invalid_key", "Invalid API key", 403)
+
+    if not _PROOF_ID_RE.match(proof_id):
+        return _error_response("invalid_request", "Invalid proof ID format", 400)
+    proof = load_proof(proof_id)
+    if not proof:
+        return _error_response("not_found", f"Proof '{proof_id}' not found", 404)
+
+    # Ownership check: sha256(api_key) must match buyer_fingerprint
+    caller_fp = sha256_hex(api_key)
+    proof_fp = proof.get("parties", {}).get("buyer_fingerprint", "")
+    if caller_fp != proof_fp:
+        return _error_response("forbidden", "You are not the owner of this proof", 403)
+
+    full = get_full_proof(proof)
+    full["integrity_verified"] = verify_proof_integrity(proof)
+    return full
 
 
 # --- GET /v1/proof/{proof_id} ---
@@ -958,11 +993,20 @@ def _is_webhook_processed(event_id: str) -> bool:
     return False
 
 
-def _mark_webhook_processed(event_id: str) -> None:
-    """Append event_id to the idempotency log so duplicate deliveries are skipped."""
+def _mark_webhook_processed(event_id: str, *, event_type: str = "", session_id: str = "") -> None:
+    """Append event_id to the idempotency log so duplicate deliveries are skipped.
+
+    Extra fields (event_type, session_id) enable the CEO Gardien to correlate
+    webhook deliveries with Stripe checkout sessions via the rsynced local copy,
+    avoiding unnecessary Stripe Events API calls.
+    """
     if not event_id:
         return
-    entry = {"event_id": event_id, "processed_at": datetime.now(timezone.utc).isoformat()}
+    entry: dict = {"event_id": event_id, "processed_at": datetime.now(timezone.utc).isoformat()}
+    if event_type:
+        entry["event_type"] = event_type
+    if session_id:
+        entry["session_id"] = session_id
     try:
         with open(WEBHOOK_IDEMPOTENCY_FILE, "a") as f:
             f.write(json.dumps(entry) + "\n")
@@ -1037,6 +1081,20 @@ async def stripe_webhook(request: Request):
             except (OSError, RuntimeError) as e:
                 logger.error("Welcome email failed: %s", e)
 
+            # Server-side conversion event (authoritative — Stripe-verified, not fakeable)
+            try:
+                with open(CONVERSION_EVENTS_LOG, "a") as _cel:
+                    _cel.write(json.dumps({
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "event": "checkout_completed",
+                        "product": product or "free",
+                        "email_hash": customer_email[:3] + "***" if customer_email else "",
+                        "subscription_id": subscription_id,
+                        "test_mode": is_test,
+                    }) + "\n")
+            except OSError:
+                pass  # Non-critical — don't break webhook on log failure
+
     elif event_type == "customer.subscription.deleted":
         subscription_id = data.get("id", "")
         deactivate_key_by_ref(subscription_id)
@@ -1067,7 +1125,8 @@ async def stripe_webhook(request: Request):
         # On final failure (attempt_count >= 4 typically), Stripe sets subscription past_due
         # which fires customer.subscription.updated → deactivate_key_by_ref
 
-    _mark_webhook_processed(event_id)
+    _checkout_sid = data.get("id", "") if event_type == "checkout.session.completed" else ""
+    _mark_webhook_processed(event_id, event_type=event_type, session_id=_checkout_sid)
     return {"received": True}
 
 

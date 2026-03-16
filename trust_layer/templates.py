@@ -151,23 +151,11 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
 
     # --- Payment evidence section (conditional) ---
     provider_payment_html = ""
-    if provider_payment and provider_payment.get("receipt_url"):
+    if provider_payment and (provider_payment.get("receipt_content_hash") or provider_payment.get("receipt_url")):
         pe_status = provider_payment.get("verification_status", "unknown")
         pe_color = "#22c55e" if pe_status == "fetched" else "#ef4444"
         pe_label = f"Fetched from {_esc(provider_payment.get('type', 'unknown')).capitalize()}" if pe_status == "fetched" else "Fetch failed"
         pe_hash = _esc(provider_payment.get("receipt_content_hash", ""))
-        pe_url = _esc(provider_payment.get("receipt_url", ""))
-        pe_parsing = provider_payment.get("parsing_status", "not_attempted")
-        pe_fields = provider_payment.get("parsed_fields") or {}
-
-        pe_parsed_rows = ""
-        if pe_fields.get("amount") is not None:
-            currency_display = (pe_fields.get("currency") or "").upper()
-            pe_parsed_rows += f'<div class="row"><span class="label">Amount</span><span class="val">{_esc(str(pe_fields["amount"]))} {_esc(currency_display)}</span></div>'
-        if pe_fields.get("status"):
-            pe_parsed_rows += f'<div class="row"><span class="label">Status</span><span class="val">{_esc(pe_fields["status"])}</span></div>'
-        if pe_fields.get("date"):
-            pe_parsed_rows += f'<div class="row"><span class="label">Date</span><span class="val">{_esc(pe_fields["date"])}</span></div>'
 
         provider_payment_html = f"""
     <div class="card">
@@ -175,8 +163,7 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
         <p style="color:#94a3b8;font-size:0.8rem;margin-bottom:1rem">Paid directly from agent to provider \u2014 not processed by ArkForge</p>
         <div class="row"><span class="label">Verification</span><span class="val" style="color:{pe_color}">{pe_label}</span></div>
         {"" if not pe_hash else f'<div class="row"><span class="label">Receipt hash</span><span class="val" style="font-family:monospace;font-size:0.75rem">{pe_hash}</span></div>'}
-{pe_parsed_rows}
-        {"" if not pe_url else f'<div class="row"><span class="label">Receipt</span><span class="val"><a href="{pe_url}" style="color:#38bdf8;text-decoration:none">View original receipt &#8599;</a></span></div>'}
+        <div class="row"><span class="label">Full details</span><span class="val" style="color:#64748b;font-size:0.85rem">Available to the proof owner via authenticated API.</span></div>
     </div>"""
 
     # --- Dispute alert (conditional) ---

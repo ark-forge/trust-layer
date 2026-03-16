@@ -218,6 +218,8 @@ def test_proof_endpoint_shows_identity(client, api_key):
     r2 = client.get(f"/v1/proof/{proof_id}")
     assert r2.status_code == 200
     proof_data = r2.json()
-    assert proof_data["parties"]["agent_identity"] == "public-test-agent"
+    # parties are private — not exposed in public proof (v1.3.0 privacy split)
+    assert "parties" not in proof_data
+    # identity_consistent is still publicly visible
     assert proof_data["identity_consistent"] is True
     assert proof_data["integrity_verified"] is True

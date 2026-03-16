@@ -6,6 +6,19 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.0] — 2026-03-16
+
+### Changed
+- `GET /v1/proof/{id}` no longer exposes `provider_payment` details (receipt URL, parsed fields), `parties`, `certification_fee`, `buyer_reputation_score`, or `buyer_profile_url` in public responses. Only `receipt_content_hash` and `verification_status` remain visible in `provider_payment`.
+
+### Added
+- `GET /v1/proof/{id}/full` — authenticated endpoint (API key required, owner only). Returns the complete proof including payment details, parties, and certification fee. Ownership verified via `sha256(api_key) == parties.buyer_fingerprint`.
+
+### Security
+- Payment amounts, Stripe receipt URLs, parsed payment fields, buyer/seller identities, and reputation scores are no longer publicly visible on `GET /v1/proof/{id}`.
+
+---
+
 ## [1.2.3] — 2026-03-11
 
 ### Fixed

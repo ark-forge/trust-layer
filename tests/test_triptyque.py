@@ -340,12 +340,15 @@ class TestLevel3VisualStamp:
         assert "#22c55e" in resp.text
         assert "VERIFIED" in resp.text
 
-    def test_html_shows_payment_info(self, client):
-        """HTML page displays payment information."""
+    def test_html_renders_without_payment_details(self, client):
+        """HTML page renders correctly — payment details are private (v1.3.0 privacy split)."""
         pid = self._store_test_proof("prf_20260101_000006_abcdef")
         resp = client.get(f"/v1/proof/{pid}", headers={"Accept": "text/html"})
         assert resp.status_code == 200
-        assert "0.1" in resp.text
+        # Payment amount is no longer exposed in public HTML
+        assert "0.1" not in resp.text
+        # Proof ID is still visible
+        assert pid in resp.text
 
     def test_short_url_redirects(self, client):
         """GET /v/{proof_id} returns 302 redirect to full path."""
