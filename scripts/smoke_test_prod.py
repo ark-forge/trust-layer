@@ -278,9 +278,9 @@ code = d.get("error", {}).get("code", "?") if isinstance(d, dict) else "?"
 chk("SSRF 169.254.169.254 → 400", s == 400, f"code={code}")
 
 s, d = req("POST", "/v1/proxy",
-           {"target": "https://api.anthropic.com/v1/messages", "method": "GET", "payload": {}},
+           {"target": "https://httpbin.org/status/418", "method": "GET", "payload": {}},
            headers={"X-Api-Key": FREE_KEY})
-chk("outbound guard Anthropic → 400/502", s in (400, 502), f"HTTP {s}")
+chk("upstream 4xx still creates proof → 200", s == 200, f"HTTP {s}")
 
 # ── 8. Credits Validation ─────────────────────────────────────
 sec("8. CREDITS")
