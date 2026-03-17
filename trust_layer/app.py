@@ -334,6 +334,9 @@ app = FastAPI(
     description="Certifying proxy for agent-to-agent payments. Pay any API, get cryptographic proof.",
     version=__version__,
     lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 
 app.add_middleware(
