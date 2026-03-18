@@ -455,7 +455,7 @@ async def proxy_endpoint(
     if proof:
         verification_url = proof.get("verification_url", "")
         proof_id = proof.get("proof_id", "")
-        service_ok = "error" not in result
+        service_ok = "error" not in result and proof.get("transaction_success", True)
         if verification_url:
             headers["X-ArkForge-Proof"] = verification_url
         headers["X-ArkForge-Verified"] = "true" if service_ok else "false"

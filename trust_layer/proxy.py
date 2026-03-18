@@ -184,6 +184,8 @@ def _inject_digital_stamp(result: dict, proof_record: dict) -> None:
         return
     if "error" in result:
         return
+    if not proof_record.get("transaction_success", True):
+        return
 
     proof_id = proof_record.get("proof_id", "")
     verification_url = proof_record.get("verification_url", "")
@@ -793,17 +795,11 @@ async def execute_proxy(
     # 14. Build response
     if service_error == "proxy_timeout":
         result = ProxyError("proxy_timeout", "Target service timed out", 504, proof=proof_record).to_dict()
-    elif service_status_code and service_status_code >= 400:
-        result = ProxyError(
-            "service_error",
-            f"Target returned HTTP {service_status_code}",
-            502,
-            proof=proof_record,
-        ).to_dict()
-        result["service_response"] = {"status_code": service_status_code, "body": service_response}
     elif service_error:
         result = ProxyError("service_error", service_error, 502, proof=proof_record).to_dict()
     else:
+        # Upstream responded (2xx or 4xx/5xx) — proof was created, return 200.
+        # The upstream status is recorded in service_response and proof_record.transaction_success.
         result = {
             "proof": proof_record,
             "service_response": {

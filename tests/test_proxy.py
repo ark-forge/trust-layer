@@ -202,7 +202,7 @@ async def test_execute_proxy_full_flow(test_api_key):
 
 @pytest.mark.asyncio
 async def test_execute_proxy_service_error(test_api_key):
-    """Service returns 500 — proof is still returned with no charge (test key)."""
+    """Service returns 500 — proof is still created and returned with 200 (interaction certified)."""
     mock_client = _mock_http_client({"error": "internal server error"}, status_code=500)
 
     with patch("httpx.AsyncClient", return_value=mock_client), \
@@ -217,10 +217,10 @@ async def test_execute_proxy_service_error(test_api_key):
             api_key=test_api_key,
         )
 
-    # Should return error with proof
-    assert "error" in result
-    assert result["error"]["code"] == "service_error"
+    # Upstream 4xx/5xx: proof returned at HTTP 200 — interaction certified regardless of upstream status
     assert "proof" in result
+    assert result["service_response"]["status_code"] == 500
+    assert result["proof"]["transaction_success"] is False
 
 
 @pytest.mark.asyncio
