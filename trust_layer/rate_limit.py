@@ -42,6 +42,7 @@ _MONTHLY_LIMITS = {
     "pro": _PRO_MONTHLY_LIMIT,
     "enterprise": _ENTERPRISE_MONTHLY_LIMIT,
     "test": None,
+    "internal": None,
 }
 
 
@@ -424,6 +425,8 @@ def check_quota_alerts(limit: int | None = None) -> list[dict]:
             key_limit = DAILY_LIMITS_PER_PLAN["enterprise"]
         elif key_id.startswith("mcp_test_"):
             key_limit = DAILY_LIMITS_PER_PLAN["test"]
+        elif key_id.startswith("mcp_int_"):
+            key_limit = DAILY_LIMITS_PER_PLAN["internal"]
         else:
             key_limit = DAILY_LIMITS_PER_PLAN["pro"]
         if used >= key_limit * 0.8:

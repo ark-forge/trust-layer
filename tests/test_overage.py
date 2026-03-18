@@ -74,6 +74,12 @@ def test_enable_overage_test_rejected():
         update_overage_settings(key, enabled=True, cap_eur=20.0, overage_rate=PRO_OVERAGE_PRICE)
 
 
+def test_enable_overage_internal_rejected():
+    key = create_api_key("internal_ceo", "internal_ceo_ref", "", plan="internal")
+    with pytest.raises(ValueError, match="Pro and Enterprise"):
+        update_overage_settings(key, enabled=True, cap_eur=20.0, overage_rate=PRO_OVERAGE_PRICE)
+
+
 def test_disable_overage():
     key = _pro_key("dis1")
     update_overage_settings(key, enabled=True, cap_eur=20.0, overage_rate=PRO_OVERAGE_PRICE)
@@ -151,7 +157,7 @@ def test_overage_disabled_blocks_at_monthly_quota():
     """Quota épuisé + overage off → blocked, reason=monthly_quota."""
     from trust_layer.rate_limit import check_rate_limit
     key = _pro_key("rl1")
-    with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 100, "pro": 1, "enterprise": 50000, "test": None}):
+    with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 100, "pro": 1, "enterprise": 50000, "test": None, "internal": None}):
         allowed, remaining, is_overage, reason = check_rate_limit(key, limit=100)
         assert allowed is True
         allowed, remaining, is_overage, reason = check_rate_limit(key, limit=100)
@@ -165,7 +171,7 @@ def test_overage_enabled_allows_past_quota():
     from trust_layer.rate_limit import check_rate_limit
     key = _pro_key("rl2")
     update_overage_settings(key, enabled=True, cap_eur=10.0, overage_rate=PRO_OVERAGE_PRICE)
-    with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 100, "pro": 1, "enterprise": 50000, "test": None}):
+    with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 100, "pro": 1, "enterprise": 50000, "test": None, "internal": None}):
         check_rate_limit(key, limit=100)  # consume quota
         allowed, remaining, is_overage, reason = check_rate_limit(key, limit=100)
         assert allowed is True
@@ -180,7 +186,7 @@ def test_overage_increments_counters():
     from trust_layer.config import RATE_LIMITS_FILE
     key = _pro_key("rl3")
     update_overage_settings(key, enabled=True, cap_eur=10.0, overage_rate=PRO_OVERAGE_PRICE)
-    with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 100, "pro": 1, "enterprise": 50000, "test": None}):
+    with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 100, "pro": 1, "enterprise": 50000, "test": None, "internal": None}):
         check_rate_limit(key, limit=100)  # quota
         check_rate_limit(key, limit=100)  # overage 1
         check_rate_limit(key, limit=100)  # overage 2
@@ -196,7 +202,7 @@ def test_overage_cap_blocks():
     key = _pro_key("rl4")
     # cap = 0.02 → 2 overages at 0.01
     update_overage_settings(key, enabled=True, cap_eur=OVERAGE_CAP_MIN, overage_rate=PRO_OVERAGE_PRICE)
-    with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 100, "pro": 1, "enterprise": 50000, "test": None}):
+    with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 100, "pro": 1, "enterprise": 50000, "test": None, "internal": None}):
         # Simulate spent close to cap by patching entry directly
         from trust_layer.persistence import load_json, save_json
         from trust_layer.config import RATE_LIMITS_FILE
@@ -242,7 +248,7 @@ def test_overage_cap_partial_proof_blocks():
         "overage_spent_eur": 5.00,  # exact cap
     }
     save_json(RATE_LIMITS_FILE, limits)
-    with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 100, "pro": 1, "enterprise": 50000, "test": None}):
+    with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 100, "pro": 1, "enterprise": 50000, "test": None, "internal": None}):
         allowed, _, _, reason = check_rate_limit(key, limit=100)
     assert allowed is False
     assert reason == "overage_cap"
@@ -303,7 +309,7 @@ def test_rollback_overage_decrements():
     from trust_layer.config import RATE_LIMITS_FILE
     key = _pro_key("rb1")
     update_overage_settings(key, enabled=True, cap_eur=10.0, overage_rate=PRO_OVERAGE_PRICE)
-    with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 100, "pro": 1, "enterprise": 50000, "test": None}):
+    with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 100, "pro": 1, "enterprise": 50000, "test": None, "internal": None}):
         check_rate_limit(key, limit=100)  # quota
         check_rate_limit(key, limit=100)  # overage 1
     limits = load_json(RATE_LIMITS_FILE, {})
@@ -372,7 +378,7 @@ async def test_proxy_overage_debit_pro_price():
     update_overage_settings(key, enabled=True, cap_eur=10.0, overage_rate=PRO_OVERAGE_PRICE)
     balance_before = get_balance(key)
 
-    with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 100, "pro": 0, "enterprise": 50000, "test": None}), \
+    with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 100, "pro": 0, "enterprise": 50000, "test": None, "internal": None}), \
          patch("httpx.AsyncClient", return_value=_mock_http_client()), \
          patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
         result = await execute_proxy(
@@ -394,7 +400,7 @@ async def test_proxy_overage_insufficient_credits_402():
     # No credits added
     update_overage_settings(key, enabled=True, cap_eur=10.0, overage_rate=PRO_OVERAGE_PRICE)
 
-    with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 100, "pro": 0, "enterprise": 50000, "test": None}), \
+    with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 100, "pro": 0, "enterprise": 50000, "test": None, "internal": None}), \
          patch("httpx.AsyncClient", return_value=_mock_http_client()), \
          patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
         with pytest.raises(ProxyError) as exc_info:
@@ -426,7 +432,7 @@ async def test_proxy_overage_insufficient_credits_rollback():
                       "overage_count": 0, "overage_spent_eur": 0.0}
     save_json(RATE_LIMITS_FILE, limits)
 
-    with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 100, "pro": 0, "enterprise": 50000, "test": None}), \
+    with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 100, "pro": 0, "enterprise": 50000, "test": None, "internal": None}), \
          patch("httpx.AsyncClient", return_value=_mock_http_client()), \
          patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
         with pytest.raises(ProxyError):
@@ -459,7 +465,7 @@ async def test_proxy_overage_cap_reached_429():
                       "overage_count": 500, "overage_spent_eur": 5.00}
     save_json(RATE_LIMITS_FILE, limits)
 
-    with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 100, "pro": 1, "enterprise": 50000, "test": None}), \
+    with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 100, "pro": 1, "enterprise": 50000, "test": None, "internal": None}), \
          patch("httpx.AsyncClient", return_value=_mock_http_client()), \
          patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
         with pytest.raises(ProxyError) as exc_info:
@@ -486,7 +492,7 @@ async def test_proxy_no_overage_429_suggests_enable():
     limits[key_id] = {"date": today, "count": 0, "month": month, "month_count": 1}
     save_json(RATE_LIMITS_FILE, limits)
 
-    with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 100, "pro": 1, "enterprise": 50000, "test": None}), \
+    with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 100, "pro": 1, "enterprise": 50000, "test": None, "internal": None}), \
          patch("httpx.AsyncClient", return_value=_mock_http_client()), \
          patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
         with pytest.raises(ProxyError) as exc_info:
@@ -543,7 +549,7 @@ async def test_proxy_credit_log_overage_subtype():
     add_credits(key, 1.0, "pi_ovlog")
     update_overage_settings(key, enabled=True, cap_eur=10.0, overage_rate=PRO_OVERAGE_PRICE)
 
-    with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 100, "pro": 0, "enterprise": 50000, "test": None}), \
+    with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 100, "pro": 0, "enterprise": 50000, "test": None, "internal": None}), \
          patch("httpx.AsyncClient", return_value=_mock_http_client()), \
          patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
         await execute_proxy(

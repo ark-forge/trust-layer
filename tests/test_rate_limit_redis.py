@@ -105,7 +105,7 @@ def test_redis_hot_path_blocks_at_daily_cap():
 def test_redis_hot_path_blocks_at_monthly_quota():
     """Le hot path Redis bascule sur JSON quand quota mensuel épuisé (pas d'overage → blocked)."""
     fake_r = FakeRedis()
-    with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 2, "pro": 5000, "enterprise": 50000, "test": None}), \
+    with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 2, "pro": 5000, "enterprise": 50000, "test": None, "internal": None}), \
          patch("trust_layer.rate_limit.get_redis", return_value=fake_r):
         check_rate_limit("mcp_free_redis_monthly", limit=100)
         check_rate_limit("mcp_free_redis_monthly", limit=100)

@@ -121,6 +121,7 @@ DAILY_LIMITS_PER_PLAN = {
     "pro":        PRO_MONTHLY_LIMIT,          # 5 000 — daily cap = monthly quota
     "enterprise": ENTERPRISE_MONTHLY_LIMIT,   # 50 000 — daily cap = monthly quota
     "test":       100,                        # hard daily guard only
+    "internal":   10_000,                     # CEO internal key — no monthly quota, 10k/day hard cap
 }
 # Overage rates (credits billed when monthly quota exceeded)
 PRO_OVERAGE_PRICE = 0.01              # EUR per proof over 5 000

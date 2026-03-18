@@ -9,6 +9,7 @@ from trust_layer.keys import (
     is_test_key,
     is_free_key,
     is_enterprise_key,
+    is_internal_key,
     get_key_plan,
     load_api_keys,
 )
@@ -108,3 +109,30 @@ def test_create_enterprise_key():
     assert info is not None
     assert info["plan"] == "enterprise"
     assert is_enterprise_key(key)
+
+
+# --- Internal plan ---
+
+def test_generate_internal_key():
+    key = generate_api_key(plan="internal")
+    assert key.startswith("mcp_int_")
+    assert len(key) == 8 + 48  # "mcp_int_" (8) + 24 bytes hex (48)
+
+
+def test_is_internal_key():
+    assert is_internal_key("mcp_int_abc123") is True
+    assert is_internal_key("mcp_pro_abc123") is False
+    assert is_internal_key("mcp_free_abc123") is False
+    assert is_internal_key("mcp_test_abc123") is False
+
+
+def test_get_key_plan_internal():
+    assert get_key_plan("mcp_int_xxx") == "internal"
+
+
+def test_create_internal_key():
+    key = create_api_key("internal_ceo", "internal_ceo", email="", plan="internal")
+    info = validate_api_key(key)
+    assert info is not None
+    assert info["plan"] == "internal"
+    assert is_internal_key(key)

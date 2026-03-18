@@ -77,7 +77,7 @@ def test_test_key_no_monthly_limit():
 def test_free_key_monthly_blocks():
     """Free tier key blocked when monthly limit reached."""
     key = "mcp_free_blocked_m"
-    with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 3, "pro": 5000, "enterprise": 50000, "test": None}):
+    with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 3, "pro": 5000, "enterprise": 50000, "test": None, "internal": None}):
         for i in range(3):
             allowed, _, _, _ = check_rate_limit(key, limit=100)
             assert allowed is True
@@ -90,7 +90,7 @@ def test_free_key_monthly_blocks():
 def test_pro_key_monthly_blocks():
     """Pro key blocked when monthly quota reached."""
     key = "mcp_pro_blocked_monthly"
-    with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 500, "pro": 3, "enterprise": 50000, "test": None}):
+    with patch("trust_layer.rate_limit._MONTHLY_LIMITS", {"free": 500, "pro": 3, "enterprise": 50000, "test": None, "internal": None}):
         for i in range(3):
             allowed, _, _, _ = check_rate_limit(key, limit=100)
             assert allowed is True
@@ -118,3 +118,12 @@ def test_daily_limit_per_plan():
 
     usage = get_usage("mcp_ent_dyn_limit")
     assert usage["daily"]["limit"] == DAILY_LIMITS_PER_PLAN["enterprise"]
+
+    assert get_daily_limit("mcp_int_any") == DAILY_LIMITS_PER_PLAN["internal"]  # 10 000
+
+
+def test_internal_key_no_monthly_limit():
+    """Internal keys have no monthly limit (daily cap only)."""
+    usage = get_usage("mcp_int_nolimit", limit=100)
+    assert usage["plan"] == "internal"
+    assert "monthly" not in usage

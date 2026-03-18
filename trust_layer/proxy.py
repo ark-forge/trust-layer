@@ -530,6 +530,7 @@ async def execute_proxy(
     # (mcp_test_* keys store plan="pro" in metadata but are treated as test/pay-per-use)
     plan = get_key_plan(api_key)
     is_free = plan == "free"
+    is_internal = plan == "internal"
 
     # 3. Check rate limit (must be before amount calculation: overage status affects price)
     allowed, remaining, is_overage, block_reason = check_rate_limit(api_key)
@@ -566,7 +567,7 @@ async def execute_proxy(
 
     # Subscription proofs (pro/enterprise within quota) require no credit debit
     is_subscription = not is_free and not is_overage and plan in ("pro", "enterprise")
-    # Test keys: internal use, no charge (treated like free tier for billing purposes)
+    # Test/internal keys: no charge
     is_test = plan == "test"
 
     # 5. Hash request
@@ -582,13 +583,13 @@ async def execute_proxy(
 
     proof_id_for_debit = generate_proof_id()
 
-    if is_free or is_test:
+    if is_free or is_test or is_internal:
         charge_result = ChargeResult(
-            provider="free_tier",
-            transaction_id="free_tier",
+            provider="free_tier" if (is_free or is_test) else "internal",
+            transaction_id="free_tier" if (is_free or is_test) else "internal",
             amount=0.0,
             currency=currency,
-            status="free_tier",
+            status="free_tier" if (is_free or is_test) else "internal",
             receipt_url=None,
         )
     elif is_subscription:

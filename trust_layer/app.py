@@ -93,7 +93,7 @@ from .config import (
 )
 from .keys import (
     validate_api_key, create_api_key, deactivate_key_by_ref, reactivate_key_by_ref, is_test_key, is_free_key,
-    get_overage_settings, update_overage_settings, get_key_plan,
+    get_overage_settings, update_overage_settings, get_key_plan, is_internal_key,
 )
 from .credits import add_credits, get_balance
 from .proofs import load_proof, store_proof, get_public_proof, get_full_proof, verify_proof_integrity, sha256_hex
@@ -855,6 +855,9 @@ async def buy_credits(
     if is_free_key(api_key):
         return _error_response("invalid_plan", "Free tier keys cannot buy credits. Upgrade to Pro.", 403)
 
+    if is_internal_key(api_key):
+        return _error_response("invalid_plan", "Internal keys do not use prepaid credits.", 403)
+
     try:
         body = await request.json()
     except Exception:
@@ -1282,8 +1285,8 @@ async def usage(
     if not validate_api_key(api_key):
         return _error_response("invalid_api_key", "Invalid or inactive API key", 401)
     result = get_usage(api_key)
-    # Add overage credit balance for subscription plans
-    if not is_free_key(api_key) and not result.get("plan") == "test":
+    # Add overage credit balance for subscription plans (not free/test/internal)
+    if not is_free_key(api_key) and result.get("plan") not in ("test", "internal"):
         balance = get_balance(api_key)
         result["overage_credits_eur"] = round(balance, 4)
     return result
