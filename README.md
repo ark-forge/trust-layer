@@ -96,6 +96,20 @@ Or open it in a browser — every proof has a public HTML verification page with
 
 ## Use cases
 
+### Machine payments (MPP / x402 / agentic billing)
+
+Protocols like Stripe MPP, x402, and ACP let agents pay autonomously for services. ArkForge adds the missing layer: **who authorized the payment, and how to prove it**.
+
+When an agent charges a card or transfers stablecoins autonomously, "the agent did it" is not a compliance answer. PSD2, AML, and the EU AI Act require a verifiable authorization chain — which agent version, which prompt was active, which principal approved the spend. ArkForge certifies that chain at the moment of execution, before the payment settles.
+
+```
+Agent → authorize payment decision → ArkForge certifies (agent version + prompt hash + decision)
+                                          ↓
+                              Stripe MPP / x402 / ACP → provider
+                                          ↓
+                              Proof: authorization + payment receipt + timestamp (tamper-proof)
+```
+
 ### Agent paying a provider
 
 An autonomous agent calls a third-party API and pays for the service. ArkForge certifies the transaction: the exact request, the exact response, the payment evidence, and the timestamp — all bound in one cryptographic proof. The provider cannot deny delivery. The agent cannot deny the request.
@@ -434,6 +448,11 @@ chmod 600 .signing_key.pem .env
 | **Proof Spec** | Open specification + test vectors | [ark-forge/proof-spec](https://github.com/ark-forge/proof-spec) |
 | **MCP EU AI Act** | Compliance scanner — first service sold through ArkForge | [ark-forge/mcp-eu-ai-act](https://github.com/ark-forge/mcp-eu-ai-act) |
 | **Agent Client** | Autonomous buyer — proof-of-concept non-human customer | [ark-forge/arkforge-agent-client](https://github.com/ark-forge/arkforge-agent-client) |
+
+### Listed in
+
+- [TensorBlock/awesome-mcp-servers](https://github.com/TensorBlock/awesome-mcp-servers) — Security category (PR #184, merged March 2026)
+- [OWASP Top 10 for LLM Applications](https://github.com/OWASP/www-project-top-10-for-large-language-model-applications/issues/802) — Contributing to Execution Integrity for Agentic AI
 
 ---
 
