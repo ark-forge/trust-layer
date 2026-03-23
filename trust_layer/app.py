@@ -29,6 +29,25 @@ _FAILOVER_BLOCKED_PATHS = {
 }
 
 
+class HeadToGetMiddleware(BaseHTTPMiddleware):
+    """Convert HEAD requests to GET and strip the response body.
+
+    Starlette 0.20+ no longer generates HEAD handlers automatically for @app.get()
+    routes. This middleware provides RFC 7231-compliant HEAD support globally.
+    """
+    async def dispatch(self, request: Request, call_next):
+        if request.method == "HEAD":
+            # Rewrite scope to GET so the route handler matches
+            request.scope["method"] = "GET"
+            response = await call_next(request)
+            # Return headers only — no body
+            return Response(
+                status_code=response.status_code,
+                headers=dict(response.headers),
+            )
+        return await call_next(request)
+
+
 class FailoverReadOnlyMiddleware(BaseHTTPMiddleware):
     """Bloque les écritures en mode failover pour éviter le split-brain."""
     async def dispatch(self, request: Request, call_next):
@@ -339,6 +358,7 @@ app = FastAPI(
     openapi_url=None,
 )
 
+app.add_middleware(HeadToGetMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ALLOWED_ORIGINS,
