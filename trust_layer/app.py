@@ -1157,6 +1157,7 @@ async def root():
             "agent_disputes": "GET /v1/agent/{agent_id}/disputes",
             "usage": "GET /v1/usage",
             "pubkey": "GET /v1/pubkey",
+            "did": "GET /.well-known/did.json",
             "health": "GET /v1/health",
             "pricing": "GET /v1/pricing",
         },
@@ -1352,6 +1353,44 @@ async def get_pubkey():
     if not ARKFORGE_PUBLIC_KEY:
         return _error_response("not_configured", "Signing key not configured", 503)
     return {"pubkey": ARKFORGE_PUBLIC_KEY, "algorithm": "Ed25519"}
+
+
+# --- GET /.well-known/did.json ---
+
+@app.get("/.well-known/did.json")
+async def get_did_document():
+    """W3C DID Document for did:web:trust.arkforge.tech."""
+    if not TRUST_LAYER_BASE_URL or not ARKFORGE_PUBLIC_KEY:
+        return _error_response("not_configured", "Trust layer not fully configured", 503)
+
+    # did:web strips the https:// scheme
+    did = "did:web:" + TRUST_LAYER_BASE_URL.removeprefix("https://").removeprefix("http://")
+    key_id = f"{did}#key-1"
+
+    # ARKFORGE_PUBLIC_KEY format: "ed25519:<base64url_43chars>"
+    pubkey_b64url = ARKFORGE_PUBLIC_KEY.split(":", 1)[1] if ":" in ARKFORGE_PUBLIC_KEY else ARKFORGE_PUBLIC_KEY
+
+    return {
+        "@context": [
+            "https://www.w3.org/ns/did/v1",
+            "https://w3id.org/security/suites/ed25519-2020/v1",
+        ],
+        "id": did,
+        "verificationMethod": [
+            {
+                "id": key_id,
+                "type": "Ed25519VerificationKey2020",
+                "controller": did,
+                "publicKeyJwk": {
+                    "kty": "OKP",
+                    "crv": "Ed25519",
+                    "x": pubkey_b64url,
+                },
+            }
+        ],
+        "authentication": [key_id],
+        "assertionMethod": [key_id],
+    }
 
 
 # --- GET /v1/stats ---
