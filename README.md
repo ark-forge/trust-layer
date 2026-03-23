@@ -178,7 +178,7 @@ Human client hires agent → agent routes all calls through ArkForge
 ### Core
 - **Execution certification** — every API call produces a cryptographic proof of what was sent, received, and when. Immutable after creation.
 - **Chain hash** — SHA-256 binding of request, response, payment, timestamp, buyer, and seller. Public formula, independently recomputable.
-- **Ed25519 signature** — every proof signed by ArkForge's private key. Public key at `GET /v1/pubkey`.
+- **Ed25519 signature** — every proof signed by ArkForge's private key. Public key at `GET /v1/pubkey` and as a W3C DID Document at `GET /.well-known/did.json` (`did:web:trust.arkforge.tech`).
 - **RFC 3161 timestamps** — certified via a pool of trusted timestamp authorities. First success wins; provider recorded per proof.
 - **Sigstore Rekor** — chain hash registered in the Linux Foundation's append-only public transparency log.
 - **Open proof spec** — deterministic format with test vectors. Any third party can verify a proof without ArkForge's code. [ark-forge/proof-spec](https://github.com/ark-forge/proof-spec)
@@ -235,6 +235,7 @@ For enterprise requirements (eIDAS-qualified timestamps, on-premise deployment, 
 | `GET` | `/v1/proof/{proof_id}/tsr` | Download RFC 3161 timestamp file |
 | `POST` | `/v1/credits/buy` | Buy prepaid overage credits |
 | `GET` | `/v1/pubkey` | ArkForge's Ed25519 public key |
+| `GET` | `/.well-known/did.json` | W3C DID Document (`did:web:trust.arkforge.tech`) |
 | `GET` | `/v1/agent/{agent_id}/reputation` | Agent reputation score (0–100) |
 
 ### POST /v1/proxy — request body

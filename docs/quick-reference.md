@@ -193,6 +193,10 @@ GET  https://trust.arkforge.tech/v1/usage
 # Retrieve a proof
 GET  https://trust.arkforge.tech/v1/proof/{proof_id}
 GET  https://arkforge.tech/trust/v/{proof_id}          # short URL
+
+# Public key / DID
+GET  https://trust.arkforge.tech/v1/pubkey
+GET  https://trust.arkforge.tech/.well-known/did.json  # W3C DID Document
 ```
 
 ---
