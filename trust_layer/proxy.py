@@ -514,6 +514,12 @@ async def execute_proxy(
     if not key_info:
         raise ProxyError("invalid_api_key", "Invalid or inactive API key", 401)
 
+    # DID override: if the key has a cryptographically verified DID, it takes
+    # precedence over any X-Agent-Identity header declared by the caller.
+    verified_did = key_info.get("verified_did")
+    if verified_did:
+        agent_identity = verified_did
+
     # 2. Validate inputs
     currency = validate_currency(currency)
     target = validate_target_url(target)
@@ -726,15 +732,19 @@ async def execute_proxy(
     # Compute identity_consistent flag
     identity_consistent = None
     if agent_identity:
-        agent_path = AGENTS_DIR / f"{api_key[:16]}.json"
-        existing_profile = load_json(agent_path, {})
-        existing_id = existing_profile.get("declared_identity")
-        if existing_id and existing_id != agent_identity:
-            identity_consistent = False
-        elif existing_profile.get("identity_mismatch"):
-            identity_consistent = False
-        else:
+        if key_info.get("verified_did") and agent_identity == key_info["verified_did"]:
+            # Cryptographically proven — never a false positive
             identity_consistent = True
+        else:
+            agent_path = AGENTS_DIR / f"{api_key[:16]}.json"
+            existing_profile = load_json(agent_path, {})
+            existing_id = existing_profile.get("declared_identity")
+            if existing_id and existing_id != agent_identity:
+                identity_consistent = False
+            elif existing_profile.get("identity_mismatch"):
+                identity_consistent = False
+            else:
+                identity_consistent = True
 
     verification_url = f"{TRUST_LAYER_BASE_URL}/v1/proof/{proof_id}"
     proof_record = {

@@ -24,6 +24,8 @@ _FAILOVER_BLOCKED_PATHS = {
     "/v1/keys/portal",
     "/v1/keys/free-signup",
     "/v1/keys/overage",
+    "/v1/keys/bind-did",
+    "/v1/keys/bind-did/confirm",
     "/v1/credits/buy",
     "/v1/disputes",
 }
@@ -124,6 +126,12 @@ from .email_notify import send_welcome_email
 from .timestamps import submit_hash
 from .reputation import get_reputation, get_public_reputation
 from .disputes import create_dispute, get_agent_disputes
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from .did_resolver import (
+    validate_did, resolve_did, extract_ed25519_pubkey_bytes,
+    create_challenge, consume_challenge, check_bind_rate,
+    verify_oatr_delegation, bind_did_to_key, DIDResolutionError,
+)
 
 logger = logging.getLogger("trust_layer.app")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
@@ -855,6 +863,134 @@ async def free_signup(request: Request):
     }
 
 
+# --- POST /v1/keys/bind-did ---
+
+@app.post("/v1/keys/bind-did")
+async def bind_did_initiate(
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None),
+):
+    """Initiate DID binding for the API key.
+
+    Path A (challenge-response): returns a challenge to sign.
+    Path B (OATR delegation): if oatr_issuer_id provided, verifies via registry and binds immediately.
+    """
+    api_key = _get_api_key(authorization, x_api_key)
+    if not api_key:
+        return _error_response("invalid_api_key", "API key required", 401)
+
+    key_info = validate_api_key(api_key)
+    if not key_info:
+        return _error_response("invalid_api_key", "Invalid or inactive API key", 401)
+
+    if not check_bind_rate(api_key):
+        return _error_response("rate_limited", "Too many DID bind attempts. Try again later.", 429)
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    did = body.get("did", "")
+    if not did or not validate_did(did):
+        return _error_response("invalid_did", "A valid did:web or did:key is required", 400)
+
+    oatr_issuer_id = body.get("oatr_issuer_id")
+
+    # Resolve DID (sync function — run in executor to avoid blocking event loop)
+    loop = asyncio.get_running_loop()
+    try:
+        did_doc = await loop.run_in_executor(None, resolve_did, did)
+        pub_bytes = await loop.run_in_executor(None, extract_ed25519_pubkey_bytes, did_doc)
+    except DIDResolutionError as e:
+        status = e.status if e.status in (400, 404) else 503
+        return _error_response("did_resolution_failed", e.message, status)
+
+    # Path B: OATR delegation — verify and bind immediately
+    if oatr_issuer_id:
+        try:
+            valid = await loop.run_in_executor(
+                None, verify_oatr_delegation, did, oatr_issuer_id, pub_bytes
+            )
+        except Exception:
+            valid = False
+
+        if not valid:
+            return _error_response(
+                "oatr_delegation_failed",
+                "OATR issuer not found, inactive, or key does not match DID",
+                400,
+            )
+
+        try:
+            bound_at = await loop.run_in_executor(None, bind_did_to_key, api_key, did)
+        except DIDResolutionError as e:
+            return _error_response("bind_failed", e.message, e.status)
+
+        return JSONResponse({"verified_did": did, "bound_at": bound_at, "method": "oatr_delegation"})
+
+    # Path A: challenge-response
+    challenge = create_challenge(api_key, did, pub_bytes)
+    return JSONResponse({"challenge": challenge, "expires_in": 300})
+
+
+# --- POST /v1/keys/bind-did/confirm ---
+
+@app.post("/v1/keys/bind-did/confirm")
+async def bind_did_confirm(
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None),
+):
+    """Confirm DID binding by submitting a signature over the challenge."""
+    api_key = _get_api_key(authorization, x_api_key)
+    if not api_key:
+        return _error_response("invalid_api_key", "API key required", 401)
+
+    key_info = validate_api_key(api_key)
+    if not key_info:
+        return _error_response("invalid_api_key", "Invalid or inactive API key", 401)
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    challenge = body.get("challenge", "")
+    signature_b64 = body.get("signature", "")
+
+    if not challenge or not signature_b64:
+        return _error_response("missing_fields", "Both 'challenge' and 'signature' are required", 400)
+
+    payload = consume_challenge(challenge)
+    if payload is None:
+        return _error_response("challenge_expired", "Challenge not found or expired", 410)
+
+    if payload["api_key"] != api_key:
+        return _error_response("key_mismatch", "Challenge was issued for a different API key", 400)
+
+    try:
+        import base64
+        padding = 4 - len(signature_b64) % 4
+        if padding != 4:
+            signature_b64 += "=" * padding
+        sig_bytes = base64.urlsafe_b64decode(signature_b64)
+        pub_bytes = bytes.fromhex(payload["pub_bytes_hex"])
+        public_key = Ed25519PublicKey.from_public_bytes(pub_bytes)
+        public_key.verify(sig_bytes, challenge.encode())
+    except Exception:
+        return _error_response("invalid_signature", "Signature verification failed", 400)
+
+    loop = asyncio.get_running_loop()
+    try:
+        bound_at = await loop.run_in_executor(None, bind_did_to_key, api_key, payload["did"])
+    except DIDResolutionError as e:
+        return _error_response("bind_failed", e.message, e.status)
+
+    return JSONResponse({"verified_did": payload["did"], "bound_at": bound_at, "method": "challenge_response"})
+
+
 # --- POST /v1/credits/buy ---
 
 @app.post("/v1/credits/buy")
@@ -1178,6 +1314,8 @@ async def root():
             "usage": "GET /v1/usage",
             "pubkey": "GET /v1/pubkey",
             "did": "GET /.well-known/did.json",
+            "bind_did": "POST /v1/keys/bind-did",
+            "bind_did_confirm": "POST /v1/keys/bind-did/confirm",
             "health": "GET /v1/health",
             "pricing": "GET /v1/pricing",
         },
