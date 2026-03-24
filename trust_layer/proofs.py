@@ -192,6 +192,8 @@ def get_public_proof(proof: dict) -> dict:
         "disputed": proof.get("disputed"),
         "dispute_id": proof.get("dispute_id"),
         "transparency_log": proof.get("transparency_log"),
+        "agent_identity": proof.get("parties", {}).get("agent_identity"),
+        "seller": proof.get("parties", {}).get("seller"),
     }
     # Redact provider_payment: keep only type, hash, verification_status
     pp = proof.get("provider_payment")
