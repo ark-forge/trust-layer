@@ -44,6 +44,7 @@ def generate_proof(
     seller: str = "",
     agent_identity: Optional[str] = None,
     agent_version: Optional[str] = None,
+    agent_identity_verified: Optional[bool] = None,
     upstream_timestamp: Optional[str] = None,
     receipt_content_hash: Optional[str] = None,
     provider_payment: Optional[dict] = None,
@@ -83,6 +84,7 @@ def generate_proof(
             "buyer_fingerprint": buyer_fingerprint,
             "seller": seller,
             "agent_identity": agent_identity,
+            "agent_identity_verified": agent_identity_verified if agent_identity_verified else None,
             "agent_version": agent_version,
         },
         "certification_fee": payment_data,
@@ -193,6 +195,7 @@ def get_public_proof(proof: dict) -> dict:
         "dispute_id": proof.get("dispute_id"),
         "transparency_log": proof.get("transparency_log"),
         "agent_identity": proof.get("parties", {}).get("agent_identity"),
+        "agent_identity_verified": proof.get("parties", {}).get("agent_identity_verified"),
         "seller": proof.get("parties", {}).get("seller"),
     }
     # Redact provider_payment: keep only type, hash, verification_status

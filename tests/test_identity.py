@@ -57,6 +57,7 @@ def test_proof_contains_identity():
     )
     assert proof["parties"]["agent_identity"] == "my-agent-v1"
     assert proof["parties"]["agent_version"] == "1.2.3"
+    assert proof["parties"]["agent_identity_verified"] is None
 
 
 # --- 2. Proof without identity headers ---
@@ -71,6 +72,25 @@ def test_proof_without_identity():
     )
     assert proof["parties"]["agent_identity"] is None
     assert proof["parties"]["agent_version"] is None
+    assert proof["parties"]["agent_identity_verified"] is None
+
+
+# --- 2b. Proof with verified DID ---
+
+def test_proof_with_verified_did():
+    """generate_proof with agent_identity_verified=True → flag present in parties."""
+    proof = generate_proof(
+        request_data={"target": "https://example.com"},
+        response_data={"result": "ok"},
+        payment_data={"transaction_id": "pi_test"},
+        timestamp="2026-01-01T00:00:00Z",
+        buyer_fingerprint="fp_abc",
+        seller="example.com",
+        agent_identity="did:web:example.com",
+        agent_identity_verified=True,
+    )
+    assert proof["parties"]["agent_identity"] == "did:web:example.com"
+    assert proof["parties"]["agent_identity_verified"] is True
 
 
 # --- 3. Shadow profile stores identity ---
