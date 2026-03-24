@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.2] — 2026-03-24
+
+### Added
+- `parties.did_resolution_status` field in proof receipts. `"bound"` when `agent_identity` is a cryptographically verified DID bound via Ed25519 challenge-response or OATR delegation at registration time. `"unverified"` when `agent_identity` is caller-declared without cryptographic verification. Absent if no `agent_identity` is provided.
+
+---
+
 ## [1.3.1] — 2026-03-24
 
 ### Changed

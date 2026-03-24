@@ -518,9 +518,13 @@ async def execute_proxy(
     # precedence over any X-Agent-Identity header declared by the caller.
     verified_did = key_info.get("verified_did")
     agent_identity_verified: Optional[bool] = None
+    did_resolution_status: Optional[str] = None
     if verified_did:
         agent_identity = verified_did
         agent_identity_verified = True
+        did_resolution_status = "bound"
+    elif agent_identity:
+        did_resolution_status = "unverified"
 
     # 2. Validate inputs
     currency = validate_currency(currency)
@@ -728,6 +732,7 @@ async def execute_proxy(
     proof = generate_proof(request_data, response_data, payment_data, timestamp, buyer_fingerprint, seller,
                            agent_identity=agent_identity, agent_version=agent_version,
                            agent_identity_verified=agent_identity_verified,
+                           did_resolution_status=did_resolution_status,
                            upstream_timestamp=upstream_timestamp,
                            receipt_content_hash=receipt_content_hash,
                            provider_payment=provider_payment_record)

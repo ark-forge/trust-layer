@@ -619,3 +619,56 @@ def test_identity_consistent_true_with_verified_did(client, test_api_key, mock_s
         identity_consistent = None  # would check profile
 
     assert identity_consistent is True
+
+
+# ===========================================================================
+# Unit tests — did_resolution_status in proof receipts
+# ===========================================================================
+
+def test_did_resolution_status_bound_with_verified_did():
+    """Proof with verified DID bound to key → did_resolution_status == 'bound'."""
+    from trust_layer.proofs import generate_proof
+    proof = generate_proof(
+        request_data={"url": "https://example.com"},
+        response_data={"status": 200},
+        payment_data={"transaction_id": "pi_test", "amount": 1, "currency": "usd"},
+        timestamp="2026-03-24T00:00:00Z",
+        buyer_fingerprint="abc123",
+        seller="example.com",
+        agent_identity="did:web:trust.arkforge.tech",
+        agent_identity_verified=True,
+        did_resolution_status="bound",
+    )
+    assert proof["parties"]["did_resolution_status"] == "bound"
+    assert proof["parties"]["agent_identity_verified"] is True
+
+
+def test_did_resolution_status_unverified_without_did_binding():
+    """Proof with caller-declared agent_identity (no DID binding) → did_resolution_status == 'unverified'."""
+    from trust_layer.proofs import generate_proof
+    proof = generate_proof(
+        request_data={"url": "https://example.com"},
+        response_data={"status": 200},
+        payment_data={"transaction_id": "pi_test", "amount": 1, "currency": "usd"},
+        timestamp="2026-03-24T00:00:00Z",
+        buyer_fingerprint="abc123",
+        seller="example.com",
+        agent_identity="my-agent-v1",
+        did_resolution_status="unverified",
+    )
+    assert proof["parties"]["did_resolution_status"] == "unverified"
+    assert proof["parties"].get("agent_identity_verified") is None
+
+
+def test_did_resolution_status_absent_without_agent_identity():
+    """Proof without agent_identity → did_resolution_status is None."""
+    from trust_layer.proofs import generate_proof
+    proof = generate_proof(
+        request_data={"url": "https://example.com"},
+        response_data={"status": 200},
+        payment_data={"transaction_id": "pi_test", "amount": 1, "currency": "usd"},
+        timestamp="2026-03-24T00:00:00Z",
+        buyer_fingerprint="abc123",
+        seller="example.com",
+    )
+    assert proof["parties"].get("did_resolution_status") is None
