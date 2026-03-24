@@ -229,7 +229,7 @@ For enterprise requirements (eIDAS-qualified timestamps, on-premise deployment, 
 | `POST` | `/v1/keys/portal` | Open Stripe Billing Portal |
 | `POST` | `/v1/keys/overage` | Enable/disable overage billing |
 | `GET` | `/v1/usage` | Usage stats and credit balance |
-| `GET` | `/v1/proof/{proof_id}` | Retrieve proof (JSON or HTML) — includes `agent_identity` and `seller`; `buyer_fingerprint` omitted |
+| `GET` | `/v1/proof/{proof_id}` | Retrieve proof (JSON or HTML) — includes `agent_identity`, `agent_identity_verified`, and `seller`; `buyer_fingerprint` omitted |
 | `GET` | `/v1/proof/{proof_id}/full` | Full proof with payment details — API key + owner required |
 | `GET` | `/v/{proof_id}` | Short URL — redirect to proof |
 | `GET` | `/v1/proof/{proof_id}/tsr` | Download RFC 3161 timestamp file |
