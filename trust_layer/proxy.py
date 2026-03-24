@@ -517,8 +517,10 @@ async def execute_proxy(
     # DID override: if the key has a cryptographically verified DID, it takes
     # precedence over any X-Agent-Identity header declared by the caller.
     verified_did = key_info.get("verified_did")
+    agent_identity_verified: Optional[bool] = None
     if verified_did:
         agent_identity = verified_did
+        agent_identity_verified = True
 
     # 2. Validate inputs
     currency = validate_currency(currency)
@@ -725,6 +727,7 @@ async def execute_proxy(
     proof_id = proof_id_for_debit
     proof = generate_proof(request_data, response_data, payment_data, timestamp, buyer_fingerprint, seller,
                            agent_identity=agent_identity, agent_version=agent_version,
+                           agent_identity_verified=agent_identity_verified,
                            upstream_timestamp=upstream_timestamp,
                            receipt_content_hash=receipt_content_hash,
                            provider_payment=provider_payment_record)
