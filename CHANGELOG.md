@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.1] — 2026-03-24
+
+### Changed
+- `GET /v1/proof/{id}` now includes `agent_identity` and `seller` in public responses. `buyer_fingerprint` remains authenticated-only. Third-party auditors and WG members can verify agent identity without API key access.
+
+---
+
 ## [1.3.0] — 2026-03-16
 
 ### Changed
