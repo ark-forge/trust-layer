@@ -1314,6 +1314,7 @@ async def root():
             "usage": "GET /v1/usage",
             "pubkey": "GET /v1/pubkey",
             "did": "GET /.well-known/did.json",
+            "agent_json": "GET /.well-known/agent.json",
             "bind_did": "POST /v1/keys/bind-did",
             "bind_did_confirm": "POST /v1/keys/bind-did/confirm",
             "health": "GET /v1/health",
@@ -1548,6 +1549,105 @@ async def get_did_document():
         ],
         "authentication": [key_id],
         "assertionMethod": [key_id],
+    }
+
+
+# --- GET /.well-known/agent.json ---
+
+@app.get("/.well-known/agent.json")
+async def get_agent_json():
+    """agent.json v1.4 capability manifest for trust.arkforge.tech."""
+    if not TRUST_LAYER_BASE_URL or not ARKFORGE_PUBLIC_KEY:
+        return _error_response("not_configured", "Trust layer not fully configured", 503)
+
+    origin = TRUST_LAYER_BASE_URL.removeprefix("https://").removeprefix("http://")
+    did = "did:web:" + origin
+    pubkey_b64url = ARKFORGE_PUBLIC_KEY.split(":", 1)[1] if ":" in ARKFORGE_PUBLIC_KEY else ARKFORGE_PUBLIC_KEY
+    base = f"https://{origin}"
+
+    return {
+        "version": "1.4",
+        "origin": origin,
+        "payout_address": "0x0000000000000000000000000000000000000000",
+        "identity": {
+            "did": did,
+            "public_key": pubkey_b64url,
+            "oatr_issuer_id": "arkforge",
+        },
+        "intents": [
+            {
+                "name": "certify_proxy",
+                "description": "Certify an agent-to-agent API call and produce a verifiable execution proof",
+                "endpoint": f"{base}/v1/proxy",
+                "method": "POST",
+                "parameters": {
+                    "target_url": {"type": "string", "description": "URL of the upstream service"},
+                    "payload": {"type": "object", "description": "Request body to forward"},
+                },
+                "returns": {"type": "object", "description": "Upstream response with proof_id and signed receipt"},
+            },
+            {
+                "name": "get_proof",
+                "description": "Retrieve a verifiable execution proof by ID",
+                "endpoint": f"{base}/v1/proof/{{proof_id}}",
+                "method": "GET",
+                "parameters": {
+                    "proof_id": {"type": "string", "description": "Proof identifier (e.g. prf_20260324_...)"},
+                },
+                "returns": {"type": "object", "description": "Proof JSON with chain hash, Ed25519 signature, and TSA timestamps"},
+            },
+            {
+                "name": "bind_did",
+                "description": "Bind a DID to an API key via Ed25519 challenge-response (Path A) or OATR delegation (Path B)",
+                "endpoint": f"{base}/v1/keys/bind-did",
+                "method": "POST",
+                "parameters": {
+                    "did": {"type": "string", "description": "DID to bind (e.g. did:web:example.com)"},
+                    "oatr_issuer_id": {"type": "string", "description": "OATR issuer ID for Path B delegation (optional)"},
+                },
+                "returns": {"type": "object", "description": "Challenge for Ed25519 signing (Path A) or immediate binding (Path B)"},
+            },
+            {
+                "name": "free_signup",
+                "description": "Create a free-tier API key (500 proofs/month, no credit card required)",
+                "endpoint": f"{base}/v1/keys/free-signup",
+                "method": "POST",
+                "parameters": {},
+                "returns": {"type": "object", "description": "API key and usage quota"},
+            },
+        ],
+        "pricing": {
+            "model": "tiered",
+            "free_tier": {"monthly_quota": 500, "per_call_eur": 0.0},
+            "pro": {"monthly_eur": 29.0, "monthly_quota": 5000, "overage_per_call_eur": 0.01},
+            "enterprise": {"monthly_eur": 149.0, "monthly_quota": 50000, "overage_per_call_eur": 0.005},
+        },
+        "commitments": {
+            "schema_version": "1.0",
+            "entries": [
+                {
+                    "type": "proof_format",
+                    "constraint": "All proofs conform to ArkForge Proof Specification v2.1+",
+                    "verifiable": True,
+                    "ref": "https://github.com/ark-forge/proof-spec/blob/main/SPEC.md",
+                },
+                {
+                    "type": "did_binding_verification",
+                    "constraint": "agent_identity_verified=true only when DID bound via Ed25519 challenge-response or OATR delegation; self-declared values always produce agent_identity_verified=false",
+                    "verifiable": True,
+                },
+                {
+                    "type": "audit_immutability",
+                    "constraint": "Proofs are immutable post-creation; chain hash is deterministic and independently recomputable without ArkForge infrastructure",
+                    "verifiable": True,
+                },
+                {
+                    "type": "witness_count",
+                    "constraint": "All proofs carry minimum 3 independent witnesses: Ed25519 signature, RFC 3161 TSA, Sigstore Rekor",
+                    "verifiable": True,
+                },
+            ],
+        },
     }
 
 
