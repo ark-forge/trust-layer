@@ -22,10 +22,10 @@ class StripeProvider:
         customer = stripe.Customer.retrieve(customer_id, api_key=self.sk)
         pm_id = None
 
-        # Check invoice_settings default
-        invoice_settings = customer.get("invoice_settings") or {}
-        if invoice_settings.get("default_payment_method"):
-            pm_id = invoice_settings["default_payment_method"]
+        # Check invoice_settings default (stripe 15: StripeObject no longer inherits dict)
+        invoice_settings = customer.invoice_settings
+        if invoice_settings and invoice_settings.default_payment_method:
+            pm_id = invoice_settings.default_payment_method
 
         # Fallback: list card payment methods
         if not pm_id:

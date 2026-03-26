@@ -386,29 +386,35 @@ def test_webhook_pro_subscription_creates_key(client, monkeypatch):
 
     from trust_layer.credits import get_balance
 
-    event = {
+    # HTTP body (plain dict, JSON-serializable)
+    event_body = {
         "id": "evt_test_webhook_pro_sub_001",
         "type": "checkout.session.completed",
         "livemode": False,
-        "data": {
-            "object": {
-                "customer": "cus_webhook_pro_sub_test",
-                "customer_details": {"email": "webhook_pro_sub@test.com"},
-                "payment_intent": None,
-                "subscription": "sub_pro_test_001",
-                "metadata": {
-                    "product": "trust_layer_pro_subscription",
-                    "email": "webhook_pro_sub@test.com",
-                },
-            }
+        "data": {"object": {}},
+    }
+    # stripe 15: construct_event returns StripeObject (not dict) — mock with attributes
+    inner_object = {
+        "customer": "cus_webhook_pro_sub_test",
+        "customer_details": {"email": "webhook_pro_sub@test.com"},
+        "payment_intent": None,
+        "subscription": "sub_pro_test_001",
+        "metadata": {
+            "product": "trust_layer_pro_subscription",
+            "email": "webhook_pro_sub@test.com",
         },
     }
+    mock_event = MagicMock()
+    mock_event.id = "evt_test_webhook_pro_sub_001"
+    mock_event.type = "checkout.session.completed"
+    mock_event.livemode = False
+    mock_event.data.object.to_dict.return_value = inner_object
 
     with patch("trust_layer.app.send_welcome_email"), \
-         patch("stripe.Webhook.construct_event", return_value=event):
+         patch("stripe.Webhook.construct_event", return_value=mock_event):
         r = client.post(
             "/v1/webhooks/stripe",
-            json=event,
+            json=event_body,
             headers={"Content-Type": "application/json"},
         )
 

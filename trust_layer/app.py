@@ -1202,14 +1202,14 @@ async def stripe_webhook(request: Request):
         raise HTTPException(503, "Webhook secrets not configured — request rejected")
 
     # Idempotency guard — skip duplicate events (Stripe retries on delivery failure)
-    event_id = event.get("id", "")
+    event_id = event.id or ""
     if _is_webhook_processed(event_id):
         logger.info("Duplicate webhook event %s — skipped", event_id)
         return {"received": True}
 
-    event_type = event.get("type", "")
-    data = event.get("data", {}).get("object", {})
-    is_test = not event.get("livemode", True)
+    event_type = event.type or ""
+    data = event.data.object.to_dict()  # stripe 15: StripeObject no longer inherits dict
+    is_test = not event.livemode
 
     logger.info("Stripe webhook: %s (test=%s)", event_type, is_test)
 

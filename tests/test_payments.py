@@ -32,7 +32,8 @@ async def test_stripe_charge_success():
     mock_pm_list = MagicMock()
     mock_pm_list.data = [MagicMock(id="pm_test_card")]
 
-    mock_customer = {"invoice_settings": {"default_payment_method": None}}
+    mock_customer = MagicMock()
+    mock_customer.invoice_settings = None  # stripe 15: dot notation, no .get()
 
     mock_intent = MagicMock()
     mock_intent.id = "pi_test_success"
@@ -67,7 +68,8 @@ async def test_stripe_charge_failed():
 
     mock_pm_list = MagicMock()
     mock_pm_list.data = [MagicMock(id="pm_test_card")]
-    mock_customer = {"invoice_settings": {"default_payment_method": None}}
+    mock_customer = MagicMock()
+    mock_customer.invoice_settings = None  # stripe 15: dot notation, no .get()
 
     mock_intent = MagicMock()
     mock_intent.id = "pi_test_failed"
@@ -95,7 +97,8 @@ async def test_stripe_no_payment_method():
 
     mock_pm_empty = MagicMock()
     mock_pm_empty.data = []
-    mock_customer = {"invoice_settings": {"default_payment_method": None}}
+    mock_customer = MagicMock()
+    mock_customer.invoice_settings = None  # stripe 15: dot notation, no .get()
 
     with patch("stripe.Customer.retrieve", return_value=mock_customer), \
          patch("stripe.PaymentMethod.list", return_value=mock_pm_empty):
