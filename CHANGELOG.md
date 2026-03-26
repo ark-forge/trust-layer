@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.6] — 2026-03-26
+
+### Changed
+- Upgrade stripe 14.4.1 → 15.0.0. Adapted to `StripeObject` no longer inheriting from `dict`: webhook handler uses dot notation (`event.id`, `event.type`, `event.livemode`, `event.data.object.to_dict()`); payment provider uses `customer.invoice_settings` dot notation. Updated test mocks accordingly.
+
+---
+
 ## [1.3.2] — 2026-03-24
 
 ### Added
