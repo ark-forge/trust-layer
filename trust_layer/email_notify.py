@@ -423,6 +423,87 @@ ArkForge Trust Layer — https://arkforge.tech/trust
         logger.warning("Overage cap email failed: %s", e)
 
 
+def send_trial_ended_email(email: str, api_key: str):
+    """Send email when trial ends without conversion (subscription deleted during/after trial)."""
+    subject = "Your ArkForge Trust Layer trial has ended"
+    body = f"""ArkForge Trust Layer — Trial Ended
+
+Your 14-day free trial has ended. No charges were made to your card.
+
+Your API key has been deactivated:
+  {api_key}
+
+To continue using ArkForge Trust Layer, resubscribe anytime:
+  https://arkforge.tech/en/pricing.html
+
+Your proofs remain accessible for 30 days after trial end:
+  https://trust.arkforge.tech/v1/proof/<proof_id>
+
+{'=' * 50}
+ArkForge Trust Layer — https://arkforge.tech/trust
+Support: contact@arkforge.fr
+"""
+    try:
+        _send_email(email, subject, body)
+    except Exception as e:
+        logger.warning("Trial ended email failed: %s", e)
+
+
+def send_subscription_suspended_email(email: str, api_key: str):
+    """Send email when subscription is suspended due to payment failure."""
+    subject = "[ArkForge] API key suspended — payment issue"
+    body = f"""ArkForge Trust Layer — Subscription Suspended
+
+Your API key has been suspended due to a payment issue.
+
+  API key: {api_key}
+
+Your agent's API calls are currently being rejected (HTTP 403).
+
+Update your payment method to reactivate your key:
+
+  curl -X POST https://trust.arkforge.tech/v1/keys/portal \\
+    -H "X-Api-Key: {api_key}"
+
+This will return a Stripe billing portal URL where you can update
+your card and retry the payment. Your key will be reactivated
+automatically once payment succeeds.
+
+{'=' * 50}
+ArkForge Trust Layer — https://arkforge.tech/trust
+Support: contact@arkforge.fr
+"""
+    try:
+        _send_email(email, subject, body)
+    except Exception as e:
+        logger.warning("Subscription suspended email failed: %s", e)
+
+
+def send_subscription_reactivated_email(email: str, api_key: str):
+    """Send email when subscription is reactivated after a payment recovery."""
+    subject = "[ArkForge] API key reactivated — payment received"
+    body = f"""ArkForge Trust Layer — Subscription Reactivated
+
+Good news: your payment was received and your API key is active again.
+
+  API key: {api_key}
+
+Your agent can resume operations immediately.
+
+Check your usage:
+  curl https://trust.arkforge.tech/v1/usage \\
+    -H "X-Api-Key: {api_key}"
+
+{'=' * 50}
+ArkForge Trust Layer — https://arkforge.tech/trust
+Support: contact@arkforge.fr
+"""
+    try:
+        _send_email(email, subject, body)
+    except Exception as e:
+        logger.warning("Subscription reactivated email failed: %s", e)
+
+
 def send_credits_exhausted_email(email: str, api_key: str):
     """Send an alert email when credits are fully exhausted."""
     subject = "[ArkForge] Credits exhausted — agent stopped"

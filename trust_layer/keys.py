@@ -174,6 +174,15 @@ def find_key_by_ref(ref_id: str) -> Optional[str]:
     return None
 
 
+def find_key_info_by_ref(ref_id: str) -> Optional[dict]:
+    """Find key record (active or not) by Stripe ref. Returns dict with '_key' injected."""
+    keys = load_api_keys()
+    for key, info in keys.items():
+        if info.get("stripe_ref_id") == ref_id:
+            return {**info, "_key": key}
+    return None
+
+
 def is_test_key(api_key: str) -> bool:
     """Check if an API key is a test mode key."""
     return api_key.startswith("mcp_test_")

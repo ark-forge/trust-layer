@@ -115,7 +115,7 @@ from .config import (
 )
 from .keys import (
     validate_api_key, create_api_key, deactivate_key_by_ref, reactivate_key_by_ref, is_test_key, is_free_key,
-    get_overage_settings, update_overage_settings, get_key_plan, is_internal_key,
+    get_overage_settings, update_overage_settings, get_key_plan, is_internal_key, find_key_info_by_ref,
 )
 from .credits import add_credits, get_balance
 from .proofs import load_proof, store_proof, get_public_proof, get_full_proof, verify_proof_integrity, sha256_hex
@@ -127,7 +127,13 @@ from .proxy import execute_proxy, ProxyError, drain_background_tasks, _track_tas
 from .templates import render_proof_page
 from .rate_limit import get_usage, get_daily_limit
 from .redis_client import get_redis
-from .email_notify import send_welcome_email, send_welcome_email_pro
+from .email_notify import (
+    send_welcome_email,
+    send_welcome_email_pro,
+    send_trial_ended_email,
+    send_subscription_suspended_email,
+    send_subscription_reactivated_email,
+)
 from .timestamps import submit_hash
 from .reputation import get_reputation, get_public_reputation
 from .disputes import create_dispute, get_agent_disputes
@@ -1328,21 +1334,47 @@ async def stripe_webhook(request: Request):
 
     elif event_type == "customer.subscription.deleted":
         subscription_id = data.get("id", "")
+        key_record = find_key_info_by_ref(subscription_id)
         deactivate_key_by_ref(subscription_id)
+        if key_record:
+            _email = key_record.get("email", "")
+            _api_key = key_record["_key"]
+            trial_end = data.get("trial_end")  # unix timestamp or None
+            in_trial = trial_end and datetime.now(timezone.utc).timestamp() <= float(trial_end)
+            try:
+                if in_trial:
+                    send_trial_ended_email(_email, _api_key)
+                else:
+                    send_subscription_suspended_email(_email, _api_key)
+            except Exception as _e:
+                logger.warning("Subscription deleted email failed: %s", _e)
 
     elif event_type == "customer.subscription.updated":
         subscription_id = data.get("id", "")
         status = data.get("status", "")
         if status in ("canceled", "unpaid", "past_due"):
+            key_record = find_key_info_by_ref(subscription_id)
             deactivate_key_by_ref(subscription_id)
+            if key_record and status in ("past_due", "unpaid"):
+                try:
+                    send_subscription_suspended_email(key_record.get("email", ""), key_record["_key"])
+                except Exception as _e:
+                    logger.warning("Subscription updated email failed: %s", _e)
 
     elif event_type == "invoice.paid":
         # Subscription renewal confirmed — reactivate key if it was suspended for past_due
         subscription_id = data.get("subscription", "")
         billing_reason = data.get("billing_reason", "")
         if subscription_id and billing_reason in ("subscription_cycle", "subscription_update"):
+            key_record = find_key_info_by_ref(subscription_id)
+            was_inactive = key_record and not key_record.get("active", True)
             reactivate_key_by_ref(subscription_id)
             logger.info("Invoice paid (renewal) for sub=%s — key confirmed active", subscription_id)
+            if was_inactive and key_record:
+                try:
+                    send_subscription_reactivated_email(key_record.get("email", ""), key_record["_key"])
+                except Exception as _e:
+                    logger.warning("Subscription reactivated email failed: %s", _e)
 
     elif event_type == "invoice.payment_failed":
         # Payment failed — Stripe will retry; log and let subscription.updated handle deactivation
