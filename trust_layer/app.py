@@ -1,6 +1,7 @@
 """FastAPI app — all routes for the Trust Layer."""
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -118,11 +119,15 @@ from .keys import (
 )
 from .credits import add_credits, get_balance
 from .proofs import load_proof, store_proof, get_public_proof, get_full_proof, verify_proof_integrity, sha256_hex
+from .attestation import (
+    build_attestation, store_attestation, load_attestation,
+    find_by_record_id, attestation_to_encina_response,
+)
 from .proxy import execute_proxy, ProxyError, drain_background_tasks, _track_task, _log_background_task
 from .templates import render_proof_page
 from .rate_limit import get_usage, get_daily_limit
 from .redis_client import get_redis
-from .email_notify import send_welcome_email
+from .email_notify import send_welcome_email, send_welcome_email_pro
 from .timestamps import submit_hash
 from .reputation import get_reputation, get_public_reputation
 from .disputes import create_dispute, get_agent_disputes
@@ -682,7 +687,7 @@ async def setup_key(request: Request):
             customer=customer.id,
             line_items=[{"price": price_id, "quantity": 1}],
             success_url=f"https://arkforge.tech/{lang}/tl-pro-success.html?session_id={{CHECKOUT_SESSION_ID}}",
-            cancel_url=f"https://arkforge.tech/{lang}/pricing.html",
+            cancel_url=f"https://arkforge.tech/{lang}/pricing.html?intent={plan_name}",
             metadata={
                 "product": f"trust_layer_{plan_name}_subscription",
                 "email": email,
@@ -691,6 +696,7 @@ async def setup_key(request: Request):
                 "plan": plan_name,
             },
             subscription_data={
+                "trial_period_days": 14,
                 "metadata": {
                     "product": f"trust_layer_{plan_name}_subscription",
                     "email": email,
@@ -799,6 +805,30 @@ _PROOF_ID_RE = _re.compile(r"^prf_\d{8}_\d{6}_[0-9a-f]{6}$")
 _FREE_SIGNUP_RATE: dict[str, list[float]] = {}  # IP -> timestamps (sliding 1h)
 _FREE_SIGNUP_MAX_PER_HOUR = 5
 
+
+def _classify_referrer_source(referrer: str) -> str:
+    """Classify a raw Referer URL into an acquisition source for attribution."""
+    if not referrer or referrer == "-":
+        return "direct"
+    r = referrer.lower()
+    if "google." in r:
+        return "google_organic"
+    if "t.co/" in r or "twitter.com" in r or "x.com" in r:
+        return "x_twitter"
+    if "dev.to" in r:
+        return "devto"
+    if "news.ycombinator.com" in r:
+        return "hn"
+    if "github.com" in r:
+        return "github"
+    if "linkedin.com" in r:
+        return "linkedin"
+    if "smithery" in r or "glama.ai" in r:
+        return "mcp_directory"
+    if "arkforge" in r:
+        return "direct"
+    return "other"
+
 @app.post("/v1/keys/free-signup")
 async def free_signup(request: Request):
     """Create a free-tier API key with email only — no credit card required."""
@@ -853,6 +883,28 @@ async def free_signup(request: Request):
         send_welcome_email(email, api_key)
     except (OSError, RuntimeError) as e:
         logger.warning("Welcome email failed for free signup %s: %s", email, e)
+
+    # Attribution event: capture referrer + UTM for funnel tracking
+    try:
+        referrer = request.headers.get("referer", "")
+        utm_source = body.get("utm_source", "")
+        utm_medium = body.get("utm_medium", "")
+        utm_campaign = body.get("utm_campaign", "")
+        with open(CONVERSION_EVENTS_LOG, "a") as _cel:
+            _cel.write(json.dumps({
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "event": "signup_attributed",
+                "plan": "free",
+                "email_hash": email[:3] + "***" if email else "",
+                "source": utm_source or _classify_referrer_source(referrer),
+                "utm_source": utm_source,
+                "utm_medium": utm_medium,
+                "utm_campaign": utm_campaign,
+                "referrer": referrer,
+                "client_ip_hash": hashlib.sha256(client_ip.encode()).hexdigest()[:12],
+            }) + "\n")
+    except OSError:
+        pass
 
     return {
         "api_key": api_key,
@@ -1239,7 +1291,11 @@ async def stripe_webhook(request: Request):
                 logger.info("API key created for %s (ref=%s, product=%s)", customer_email, ref_id, product)
 
             try:
-                send_welcome_email(customer_email, api_key)
+                if product in ("trust_layer_pro_subscription", "trust_layer_enterprise_subscription"):
+                    plan_label = metadata.get("plan", "pro")
+                    send_welcome_email_pro(customer_email, api_key, plan_name=plan_label)
+                else:
+                    send_welcome_email(customer_email, api_key)
             except (OSError, RuntimeError) as e:
                 logger.error("Welcome email failed: %s", e)
 
@@ -1252,6 +1308,19 @@ async def stripe_webhook(request: Request):
                         "product": product or "free",
                         "email_hash": customer_email[:3] + "***" if customer_email else "",
                         "subscription_id": subscription_id,
+                        "test_mode": is_test,
+                    }) + "\n")
+                    # Also emit signup_attributed for paid conversions
+                    _cel.write(json.dumps({
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "event": "signup_attributed",
+                        "plan": product.replace("trust_layer_", "").replace("_subscription", "") if product else "pro",
+                        "email_hash": customer_email[:3] + "***" if customer_email else "",
+                        "source": "stripe_checkout",
+                        "utm_source": metadata.get("utm_source", ""),
+                        "utm_medium": metadata.get("utm_medium", ""),
+                        "utm_campaign": metadata.get("utm_campaign", ""),
+                        "referrer": "",
                         "test_mode": is_test,
                     }) + "\n")
             except OSError:
@@ -1740,6 +1809,96 @@ def _dispute_impact_message(dispute: dict) -> str:
 async def agent_disputes(agent_id: str):
     """Public dispute history for an agent. No auth required."""
     return get_agent_disputes(agent_id)
+
+
+# --- POST /attest ---
+
+@app.post("/attest")
+async def attest_endpoint(
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None),
+):
+    """Provider-agnostic execution attestation — Encina HttpAttestationProvider compatible.
+
+    Body: {recordId, recordType, occurredAtUtc, contentHash}
+    Returns: {attestationId, auditRecordId, signature, attestedAtUtc, proofMetadata}
+    Idempotent: same recordId from same API key returns existing receipt.
+    """
+    api_key = _get_api_key(authorization, x_api_key)
+    if not api_key:
+        return _error_response("invalid_api_key", "API key required. Use Authorization: Bearer <key>", 401)
+
+    key_info = validate_api_key(api_key)
+    if not key_info:
+        return _error_response("invalid_api_key", "Invalid or inactive API key", 401)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return _error_response("invalid_request", "Invalid JSON body", 400)
+
+    record_id = body.get("recordId", "")
+    record_type = body.get("recordType", "")
+    occurred_at_utc = body.get("occurredAtUtc", "")
+    content_hash = body.get("contentHash", "")
+
+    if not record_id or not record_type or not occurred_at_utc or not content_hash:
+        missing = [f for f, v in [
+            ("recordId", record_id), ("recordType", record_type),
+            ("occurredAtUtc", occurred_at_utc), ("contentHash", content_hash),
+        ] if not v]
+        return _error_response("invalid_request", f"Missing required fields: {', '.join(missing)}", 400)
+
+    attester_fingerprint = sha256_hex(api_key)
+
+    # Idempotency: same recordId + same API key → return existing receipt
+    existing = find_by_record_id(record_id, f"sha256:{attester_fingerprint}")
+    if existing:
+        return JSONResponse(status_code=200, content=attestation_to_encina_response(existing))
+
+    try:
+        from .config import get_signing_key
+        attestation = build_attestation(
+            record_id=record_id,
+            record_type=record_type,
+            occurred_at_utc=occurred_at_utc,
+            content_hash=content_hash,
+            attester_fingerprint=f"sha256:{attester_fingerprint}",
+            signing_key=get_signing_key(),
+        )
+    except ValueError as e:
+        return _error_response("invalid_request", str(e), 400)
+
+    store_attestation(attestation)
+    return JSONResponse(status_code=200, content=attestation_to_encina_response(attestation))
+
+
+# --- GET /receipt/{attestation_id} ---
+
+@app.get("/receipt/{attestation_id}")
+async def get_receipt_endpoint(
+    attestation_id: str,
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None),
+):
+    """Retrieve a stored attestation receipt by ID.
+
+    Returns: {attestationId, auditRecordId, signature, attestedAtUtc, proofMetadata}
+    """
+    api_key = _get_api_key(authorization, x_api_key)
+    if not api_key:
+        return _error_response("invalid_api_key", "API key required. Use Authorization: Bearer <key>", 401)
+
+    key_info = validate_api_key(api_key)
+    if not key_info:
+        return _error_response("invalid_api_key", "Invalid or inactive API key", 401)
+
+    attestation = load_attestation(attestation_id)
+    if not attestation:
+        return _error_response("not_found", f"Attestation {attestation_id!r} not found", 404)
+
+    return JSONResponse(status_code=200, content=attestation_to_encina_response(attestation))
 
 
 # --- Main ---

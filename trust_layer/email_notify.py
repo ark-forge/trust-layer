@@ -106,6 +106,56 @@ Support: contact@arkforge.fr
         logger.warning("Welcome email failed: %s", e)
 
 
+def send_welcome_email_pro(email: str, api_key: str, plan_name: str = "pro"):
+    """Send welcome email with API key after Pro/Enterprise subscription (with trial mention)."""
+    quotas = {
+        "pro": "5,000 proofs/month",
+        "enterprise": "50,000 proofs/month",
+    }
+    quota_label = quotas.get(plan_name, "5,000 proofs/month")
+    subject = "Your ArkForge Trust Layer Pro API Key"
+    body = f"""Welcome to ArkForge Trust Layer — {plan_name.capitalize()} plan!
+
+Your API key: {api_key}
+
+Your 14-day free trial is active. Your card won't be charged until day 15.
+Cancel anytime during the trial and you won't be billed.
+
+Create your first proof right now (copy-paste this):
+
+  curl -X POST https://trust.arkforge.tech/v1/proxy \\
+    -H "X-Api-Key: {api_key}" \\
+    -H "Content-Type: application/json" \\
+    -d '{{"target": "https://httpbin.org/post",
+         "payload": {{"test": "my first proof"}}}}'
+
+You'll get back the API response + a cryptographic proof with:
+  - Ed25519 digital signature
+  - SHA-256 hash chain
+  - RFC 3161 timestamp
+
+Verify any proof: https://trust.arkforge.tech/v1/proof/<proof_id>
+
+Your plan: {quota_label}
+Check usage anytime:
+
+  curl https://trust.arkforge.tech/v1/usage \\
+    -H "X-Api-Key: {api_key}"
+
+Manage your subscription or cancel anytime:
+
+  curl -X POST https://trust.arkforge.tech/v1/keys/portal \\
+    -H "X-Api-Key: {api_key}"
+
+Docs: https://arkforge.tech/trust
+Support: contact@arkforge.fr
+"""
+    try:
+        _send_email(email, subject, body)
+    except Exception as e:
+        logger.warning("Welcome pro email failed: %s", e)
+
+
 def send_quota_alert_email(email: str, api_key: str, used: int, limit: int, period: str):
     """Send a quota warning email when a key reaches 80% of its limit.
 
