@@ -7,8 +7,10 @@ from pathlib import Path
 BASE_DIR = Path(__file__).parent.parent
 DATA_DIR = BASE_DIR / "data"
 PROOFS_DIR = BASE_DIR / "proofs"
+ATTESTATIONS_DIR = DATA_DIR / "attestations"
 DATA_DIR.mkdir(exist_ok=True)
 PROOFS_DIR.mkdir(exist_ok=True)
+ATTESTATIONS_DIR.mkdir(exist_ok=True)
 
 API_KEYS_FILE = DATA_DIR / "api_keys.json"
 RATE_LIMITS_FILE = DATA_DIR / "rate_limits.json"
