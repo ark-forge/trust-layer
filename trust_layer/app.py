@@ -1424,8 +1424,9 @@ async def root():
     }
 
 
-# --- GET /v1/health ---
+# --- GET /v1/health (+ /health alias) ---
 
+@app.get("/health")
 @app.get("/v1/health")
 async def health():
     from .config import TRUST_LAYER_ENV
