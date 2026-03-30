@@ -552,6 +552,154 @@ Open `https://arkforge.tech/trust/v/{proof_id}` in a browser for a human-readabl
 
 ---
 
+## DID binding — cryptographic agent identity
+
+By default, `agent_identity` in every proof receipt is **caller-declared**: whatever string you pass in `X-Agent-Identity` is recorded verbatim. Trust Layer does not verify it.
+
+DID binding upgrades this to a **cryptographically proven identity**: the agent proves key ownership once at registration, and Trust Layer flows the verified DID into all subsequent receipts automatically.
+
+```
+Without binding:  parties.agent_identity = "my-agent"          (declared, unverified)
+With binding:     parties.agent_identity = "did:web:example.com" (resolved + verified)
+                  parties.agent_identity_verified = true
+```
+
+Opt-in. Existing callers that pass a plain string or nothing are unaffected.
+
+---
+
+### Path A — Challenge-response (did:web, did:key)
+
+Use this when your agent holds its own Ed25519 private key.
+
+**Step 1 — Initiate binding**
+
+```bash
+curl -X POST https://trust.arkforge.tech/v1/keys/bind-did \
+  -H "X-Api-Key: mcp_pro_xxx..." \
+  -H "Content-Type: application/json" \
+  -d '{"did": "did:web:example.com"}'
+```
+
+Response:
+```json
+{
+  "challenge": "arkforge-did-bind-a3f9...",
+  "expires_in": 300
+}
+```
+
+Trust Layer resolves your DID document, extracts the Ed25519 public key, and issues a challenge string that expires in 5 minutes.
+
+**Step 2 — Sign the challenge**
+
+Sign the raw challenge bytes with your Ed25519 private key (no hashing — sign the UTF-8 string directly):
+
+```python
+import base64
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+private_key: Ed25519PrivateKey = ...  # your key
+challenge = "arkforge-did-bind-a3f9..."
+
+sig_bytes = private_key.sign(challenge.encode())
+signature = base64.urlsafe_b64encode(sig_bytes).rstrip(b"=").decode()
+```
+
+**Step 3 — Confirm binding**
+
+```bash
+curl -X POST https://trust.arkforge.tech/v1/keys/bind-did/confirm \
+  -H "X-Api-Key: mcp_pro_xxx..." \
+  -H "Content-Type: application/json" \
+  -d "{\"challenge\": \"arkforge-did-bind-a3f9...\", \"signature\": \"${signature}\"}"
+```
+
+Response:
+```json
+{
+  "verified_did": "did:web:example.com",
+  "bound_at": "2026-03-30T13:00:00+00:00",
+  "method": "challenge_response"
+}
+```
+
+From this point, all proxy calls from this API key include `agent_identity_verified: true` in the proof receipt — without any change to your call code.
+
+---
+
+### Path B — OATR delegation (skip challenge)
+
+If your agent is registered as a Tier 1 issuer in the [Open Agent Trust Registry](https://github.com/FransDevelopment/open-agent-trust-registry), you can bind in one call — no challenge-response needed. Tier 1 registration already proved key control to a stricter standard.
+
+```bash
+curl -X POST https://trust.arkforge.tech/v1/keys/bind-did \
+  -H "X-Api-Key: mcp_pro_xxx..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "did": "did:web:example.com",
+    "oatr_issuer_id": "your-issuer-id"
+  }'
+```
+
+Response:
+```json
+{
+  "verified_did": "did:web:example.com",
+  "bound_at": "2026-03-30T13:00:00+00:00",
+  "method": "oatr_delegation"
+}
+```
+
+Trust Layer fetches the OATR registry manifest, verifies that `oatr_issuer_id` is active (Tier 1) and that the declared Ed25519 key matches the DID-resolved key. No second round-trip required.
+
+---
+
+### Ed25519 key format compatibility
+
+Trust Layer normalizes all incoming public keys to raw 32-byte representation at the verification boundary. The following formats are accepted per DID method:
+
+| DID method | Key field in DID Document | Accepted format | Notes |
+|------------|--------------------------|-----------------|-------|
+| `did:web` | `publicKeyMultibase` | base58btc, prefix `z` | With or without multicodec prefix `0xed01` — both accepted |
+| `did:web` | `publicKeyJwk` | `kty: OKP`, `crv: Ed25519`, `x: <base64url>` | Standard JWK, padding optional |
+| `did:key` | Encoded in the DID itself | base58btc + multicodec `0xed01` (required by spec) | Decoded from `did:key:z<multibase>` directly |
+| `did:oatr` | `public_key` in registry manifest | raw base64url, no padding | Direct byte comparison after decode |
+
+**Verification method types recognized:** `Ed25519VerificationKey2020`, `Ed25519VerificationKey2018`.
+
+All formats resolve to the same 32-byte Ed25519 public key internally. If your DID document uses a different representation than listed above, binding will return `did_resolution_failed`.
+
+---
+
+### Effect on proof receipts
+
+Once bound, every proof receipt from this API key includes:
+
+```json
+{
+  "parties": {
+    "agent_identity": "did:web:example.com",
+    "agent_identity_verified": true
+  }
+}
+```
+
+Without binding:
+
+```json
+{
+  "parties": {
+    "agent_identity": "my-agent",
+    "agent_identity_verified": null
+  }
+}
+```
+
+The `agent_identity_verified` field can be used by verifiers to distinguish cryptographically proven identity from caller-declared strings.
+
+---
+
 ## Proxy limits
 
 | Limit | Value | Error when exceeded |
@@ -869,4 +1017,4 @@ Mode B can use a **Free key** — certification only, payment is external, no mo
 
 ---
 
-*Last updated: 2026-03-06*
+*Last updated: 2026-03-30*
