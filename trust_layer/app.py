@@ -596,6 +596,46 @@ async def get_proof(proof_id: str, request: Request):
     return public
 
 
+# --- GET /v1/proof/{proof_id}/verify — Lightweight verification ---
+
+@app.get("/v1/proof/{proof_id}/verify")
+async def verify_proof_endpoint(proof_id: str):
+    """Lightweight proof verification — no auth, no view increment.
+
+    Returns integrity check result with chain hash and timestamp info.
+    Useful for automated verification pipelines.
+    """
+    if not _PROOF_ID_RE.match(proof_id):
+        return _error_response("invalid_request", "Invalid proof ID format", 400)
+
+    proof = load_proof(proof_id)
+    if not proof:
+        return _error_response("not_found", f"Proof '{proof_id}' not found", 404)
+
+    integrity_ok = verify_proof_integrity(proof)
+    hashes = proof.get("hashes", {})
+    tsa = proof.get("timestamp_authority", {})
+    rekor = proof.get("transparency_log", {})
+    sig = proof.get("arkforge_signature")
+
+    return {
+        "proof_id": proof_id,
+        "integrity_verified": integrity_ok,
+        "chain_hash": hashes.get("chain"),
+        "timestamp": proof.get("timestamp"),
+        "spec_version": proof.get("spec_version"),
+        "timestamp_authority": {
+            "status": tsa.get("status", "none"),
+            "provider": tsa.get("provider"),
+        },
+        "transparency_log": {
+            "status": rekor.get("status", "none") if rekor else "none",
+        },
+        "signature_present": sig is not None,
+        "verification_url": f"{TRUST_LAYER_BASE_URL}/v1/proof/{proof_id}",
+    }
+
+
 # --- GET /v/{proof_id} — Short URL redirect ---
 
 @app.get("/v/{proof_id}")
