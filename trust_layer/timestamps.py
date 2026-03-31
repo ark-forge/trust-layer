@@ -72,15 +72,17 @@ def _submit_hash_once(hash_hex: str, tsa_url: str) -> Optional[bytes]:
                     pass
 
 
-def submit_hash(hash_hex: str) -> Optional[Tuple[bytes, str]]:
+def submit_hash(hash_hex: str, plan: str = "") -> Optional[Tuple[bytes, str]]:
     """Try each TSA server in order. Returns (tsr_bytes, provider) on first success, None if all fail.
 
     Pool order: FreeTSA → DigiCert → Sectigo (all free, WebTrust-certified for DigiCert/Sectigo).
+    Platform plan skips FreeTSA and starts at DigiCert for higher reliability.
     Each server is tried once — no per-server retry. Fast failover.
     """
     from .config import TSA_SERVERS
 
-    for server in TSA_SERVERS:
+    servers = TSA_SERVERS[1:] if plan == "platform" else TSA_SERVERS
+    for server in servers:
         try:
             tsr_bytes = _submit_hash_once(hash_hex, server["url"])
             if tsr_bytes is not None:

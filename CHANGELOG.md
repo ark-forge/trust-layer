@@ -6,6 +6,16 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.15] — 2026-03-31
+
+### Added
+- **Platform plan** — 599 EUR/month, 500,000 proofs/month, for platforms and AI integrators. API key prefix `mcp_plat_`. Overage opt-in at 0.002 EUR/proof.
+- **DigiCert-first TSA routing for Platform keys** — Platform API keys skip FreeTSA and use DigiCert as primary timestamp authority. FreeTSA is a community service with no SLA; DigiCert is WebTrust-certified with enterprise-grade reliability. Fallback chain: DigiCert → Sectigo (unchanged). All other plans retain FreeTSA-first behaviour.
+- Platform plan exposed in `GET /v1/pricing`.
+- Stripe product + price IDs (live and test) added to vault and loaded via `config.py`.
+
+---
+
 ## [1.3.6] — 2026-03-26
 
 ### Changed

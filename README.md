@@ -205,15 +205,18 @@ Every transaction carries the ArkForge mark at three levels:
 
 ## Plans
 
-| Plan | Price | Monthly quota | Overage (opt-in) |
-|------|-------|--------------|-----------------|
-| **Free** | Free | 500 proofs | Not available |
-| **Pro** | €29/month | 5,000 proofs | €0.01/proof (cap €5–€100) |
-| **Enterprise** | €149/month | 50,000 proofs | €0.005/proof (cap €5–€100) |
+| Plan | Price | Monthly quota | Overage (opt-in) | TSA |
+|------|-------|--------------|-----------------|-----|
+| **Free** | Free | 500 proofs | Not available | FreeTSA → DigiCert → Sectigo |
+| **Pro** | €29/month | 5,000 proofs | €0.01/proof (cap €5–€100) | FreeTSA → DigiCert → Sectigo |
+| **Enterprise** | €149/month | 50,000 proofs | €0.005/proof (cap €5–€100) | FreeTSA → DigiCert → Sectigo |
+| **Platform** | €599/month | 500,000 proofs | €0.002/proof (cap €5–€100) | **DigiCert → Sectigo** (FreeTSA skipped) |
 
-API key prefix auto-selects plan, rate limits, and billing mode (`mcp_free_*` / `mcp_pro_*` / `mcp_ent_*`). Overage billing is **disabled by default** — opt in explicitly at `POST /v1/keys/overage`.
+API key prefix auto-selects plan, rate limits, and billing mode (`mcp_free_*` / `mcp_pro_*` / `mcp_ent_*` / `mcp_plat_*`). Overage billing is **disabled by default** — opt in explicitly at `POST /v1/keys/overage`.
 
-For enterprise requirements (eIDAS-qualified timestamps, on-premise deployment, volume above 50k/month): [contact@arkforge.fr](mailto:contact@arkforge.fr)
+Platform plan is designed for platforms and AI integrators embedding Trust Layer in their own products. It routes timestamps through DigiCert directly (WebTrust-certified, enterprise-grade) to handle burst workloads reliably.
+
+For custom requirements (eIDAS-qualified timestamps, on-premise deployment): [contact@arkforge.tech](mailto:contact@arkforge.tech)
 
 ---
 
@@ -225,7 +228,7 @@ For enterprise requirements (eIDAS-qualified timestamps, on-premise deployment, 
 | `GET` | `/v1/pricing` | Plans and limits |
 | `POST` | `/v1/proxy` | Certified proxy call |
 | `POST` | `/v1/keys/free-signup` | Create free API key |
-| `POST` | `/v1/keys/setup` | Subscribe to Pro or Enterprise (Stripe Checkout) |
+| `POST` | `/v1/keys/setup` | Subscribe to Pro, Enterprise, or Platform (Stripe Checkout) |
 | `POST` | `/v1/keys/portal` | Open Stripe Billing Portal |
 | `POST` | `/v1/keys/overage` | Enable/disable overage billing |
 | `GET` | `/v1/usage` | Usage stats and credit balance |

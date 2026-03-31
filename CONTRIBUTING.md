@@ -39,7 +39,7 @@ Conformance tests against the [Proof Specification](https://github.com/ark-forge
 
 ### Security
 
-If you discover a security vulnerability, **do not open a public issue**. Email [contact@arkforge.fr](mailto:contact@arkforge.fr) with details.
+If you discover a security vulnerability, **do not open a public issue**. Email [contact@arkforge.tech](mailto:contact@arkforge.tech) with details.
 
 ### Releases
 

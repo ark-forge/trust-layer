@@ -65,6 +65,11 @@ curl -X POST https://trust.arkforge.tech/v1/keys/setup \
 curl -X POST https://trust.arkforge.tech/v1/keys/setup \
   -d '{"email": "you@example.com", "plan": "enterprise"}'
 # → Open checkout_url, real card → mcp_ent_xxx by email
+
+# Platform production (€599/month — 500k proofs, DigiCert TSA)
+curl -X POST https://trust.arkforge.tech/v1/keys/setup \
+  -d '{"email": "you@example.com", "plan": "platform"}'
+# → Open checkout_url, real card → mcp_plat_xxx by email
 ```
 
 ---

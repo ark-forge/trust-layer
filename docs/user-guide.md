@@ -1013,7 +1013,7 @@ Mode B can use a **Free key** — certification only, payment is external, no mo
 - **Full API reference**: [README.md](../README.md)
 - **Proof specification**: [ark-forge/proof-spec](https://github.com/ark-forge/proof-spec)
 - **Quick reference**: [quick-reference.md](./quick-reference.md)
-- **Support**: contact@arkforge.fr
+- **Support**: contact@arkforge.tech
 
 ---
 

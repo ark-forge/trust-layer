@@ -292,4 +292,4 @@ Spec changes follow [semver](https://semver.org/). Breaking changes (chain hash 
 
 Building an agent that needs verifiable execution? Want to route your API calls through ArkForge? Have a PSP adapter idea?
 
-[Open an issue](https://github.com/ark-forge/trust-layer/issues) or [email us](mailto:contact@arkforge.fr).
+[Open an issue](https://github.com/ark-forge/trust-layer/issues) or [email us](mailto:contact@arkforge.tech).

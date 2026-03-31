@@ -94,13 +94,14 @@ def _log_background_task(proof_id: str, task: str, status: str, detail: str = ""
 
 
 async def _post_proof_background(proof_id: str, proof_record: dict, chain_hash: str,
-                                  verification_url: str, email: str):
+                                  verification_url: str, email: str, plan: str = ""):
     """Background task: TSA + email — none of these block the client response."""
     # RFC 3161 Timestamp (sync but run in thread to avoid blocking event loop)
     try:
         import base64 as _b64
         loop = asyncio.get_running_loop()
-        tsa_result = await loop.run_in_executor(None, submit_hash, chain_hash)
+        from functools import partial
+        tsa_result = await loop.run_in_executor(None, partial(submit_hash, chain_hash, plan=plan))
         if tsa_result:
             tsr_bytes, tsa_provider = tsa_result
             from .config import PROOFS_DIR
@@ -788,7 +789,7 @@ async def execute_proxy(
 
     # 11. Fire-and-forget background tasks (OTS, Archive.org, email)
     email = key_info.get("email", "")
-    task = asyncio.create_task(_post_proof_background(proof_id, proof_record, chain_hash, verification_url, email))
+    task = asyncio.create_task(_post_proof_background(proof_id, proof_record, chain_hash, verification_url, email, plan=get_key_plan(api_key)))
     _track_task(task)
 
     # 13. Update shadow profiles + snapshot reputation (inclut cette transaction)
