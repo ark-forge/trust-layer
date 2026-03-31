@@ -11,7 +11,7 @@ from datetime import datetime, timezone, timedelta
 
 from .config import (
     RATE_LIMITS_FILE, RATE_LIMIT_PER_KEY_PER_DAY, FREE_TIER_MONTHLY_LIMIT,
-    OVERAGE_PRICES, _PRO_MONTHLY_LIMIT, _ENTERPRISE_MONTHLY_LIMIT,
+    OVERAGE_PRICES, _PRO_MONTHLY_LIMIT, _ENTERPRISE_MONTHLY_LIMIT, _PLATFORM_MONTHLY_LIMIT,
     DAILY_LIMITS_PER_PLAN,
 )
 from .keys import is_free_key, get_key_plan, validate_api_key
@@ -41,6 +41,7 @@ _MONTHLY_LIMITS = {
     "free": FREE_TIER_MONTHLY_LIMIT,
     "pro": _PRO_MONTHLY_LIMIT,
     "enterprise": _ENTERPRISE_MONTHLY_LIMIT,
+    "platform": _PLATFORM_MONTHLY_LIMIT,
     "test": None,
     "internal": None,
 }

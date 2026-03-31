@@ -93,8 +93,10 @@ from .config import (
     FREE_TIER_MONTHLY_LIMIT,
     PRO_MONTHLY_LIMIT,
     ENTERPRISE_MONTHLY_LIMIT,
+    PLATFORM_MONTHLY_LIMIT,
     PRO_OVERAGE_PRICE,
     ENTERPRISE_OVERAGE_PRICE,
+    PLATFORM_OVERAGE_PRICE,
     PROOF_ACCESS_LOG,
     ARKFORGE_PUBLIC_KEY,
     WEBHOOK_IDEMPOTENCY_FILE,
@@ -112,6 +114,8 @@ from .config import (
     STRIPE_PRO_PRODUCT_ID,
     STRIPE_ENTERPRISE_PRICE_ID,
     STRIPE_ENTERPRISE_PRICE_ID_TEST,
+    STRIPE_PLATFORM_PRICE_ID,
+    STRIPE_PLATFORM_PRICE_ID_TEST,
 )
 from .keys import (
     validate_api_key, create_api_key, deactivate_key_by_ref, reactivate_key_by_ref, is_test_key, is_free_key,
@@ -699,7 +703,7 @@ async def setup_key(request: Request):
         return _error_response("internal_error", f"Stripe {req_mode} key not configured", 500)
 
     plan = (body.get("plan") or "pro").lower()
-    if plan not in ("pro", "enterprise"):
+    if plan not in ("pro", "enterprise", "platform"):
         plan = "pro"
 
     if plan == "enterprise":
@@ -707,6 +711,11 @@ async def setup_key(request: Request):
         plan_name = "enterprise"
         price_monthly = 149.0
         proofs_per_month = 50000
+    elif plan == "platform":
+        price_id = STRIPE_PLATFORM_PRICE_ID_TEST if req_mode == "test" else STRIPE_PLATFORM_PRICE_ID
+        plan_name = "platform"
+        price_monthly = 599.0
+        proofs_per_month = 500000
     else:
         price_id = STRIPE_PRO_PRICE_ID_TEST if req_mode == "test" else STRIPE_PRO_PRICE_ID
         plan_name = "pro"
@@ -732,7 +741,11 @@ async def setup_key(request: Request):
             payment_method_types=["card"],
             customer=customer.id,
             line_items=[{"price": price_id, "quantity": 1}],
-            success_url=f"https://arkforge.tech/{lang}/tl-pro-success.html?session_id={{CHECKOUT_SESSION_ID}}",
+            success_url=(
+                f"https://arkforge.tech/{lang}/tl-platform-success.html?session_id={{CHECKOUT_SESSION_ID}}"
+                if plan_name == "platform"
+                else f"https://arkforge.tech/{lang}/tl-pro-success.html?session_id={{CHECKOUT_SESSION_ID}}"
+            ),
             cancel_url=f"https://arkforge.tech/{lang}/pricing.html?intent={plan_name}",
             metadata={
                 "product": f"trust_layer_{plan_name}_subscription",
@@ -1331,13 +1344,16 @@ async def stripe_webhook(request: Request):
             elif product == "trust_layer_enterprise_subscription":
                 api_key = create_api_key(customer_id, ref_id, customer_email, test_mode=is_test, plan="enterprise")
                 logger.info("Enterprise subscription activated for %s (sub=%s)", customer_email, subscription_id)
+            elif product == "trust_layer_platform_subscription":
+                api_key = create_api_key(customer_id, ref_id, customer_email, test_mode=is_test, plan="platform")
+                logger.info("Platform subscription activated for %s (sub=%s)", customer_email, subscription_id)
             else:
                 # Fallback : free tier ou checkout inconnu
                 api_key = create_api_key(customer_id, ref_id, customer_email, test_mode=is_test)
                 logger.info("API key created for %s (ref=%s, product=%s)", customer_email, ref_id, product)
 
             try:
-                if product in ("trust_layer_pro_subscription", "trust_layer_enterprise_subscription"):
+                if product in ("trust_layer_pro_subscription", "trust_layer_enterprise_subscription", "trust_layer_platform_subscription"):
                     plan_label = metadata.get("plan", "pro")
                     send_welcome_email_pro(customer_email, api_key, plan_name=plan_label)
                 else:
@@ -1635,6 +1651,23 @@ async def pricing():
                 "credit_card_required": True,
                 "overage_config": {
                     "rate": ENTERPRISE_OVERAGE_PRICE,
+                    "opt_in": True,
+                    "default_cap_eur": OVERAGE_CAP_DEFAULT,
+                    "cap_range": [OVERAGE_CAP_MIN, OVERAGE_CAP_MAX],
+                    "enable_endpoint": "/v1/keys/overage",
+                },
+            },
+            "platform": {
+                "price": "599 EUR/month",
+                "monthly_quota": PLATFORM_MONTHLY_LIMIT,
+                "daily_cap": DAILY_LIMITS_PER_PLAN["platform"],
+                "overage": f"{PLATFORM_OVERAGE_PRICE} EUR/proof (opt-in)",
+                "witnesses": "3 (Ed25519, RFC 3161 QTSP eIDAS, Sigstore Rekor)",
+                "setup": f"{TRUST_LAYER_BASE_URL}/v1/keys/setup?plan=platform",
+                "credit_card_required": True,
+                "target": "platforms & AI integrators",
+                "overage_config": {
+                    "rate": PLATFORM_OVERAGE_PRICE,
                     "opt_in": True,
                     "default_cap_eur": OVERAGE_CAP_DEFAULT,
                     "cap_range": [OVERAGE_CAP_MIN, OVERAGE_CAP_MAX],

@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from .config import API_KEYS_FILE, OVERAGE_CAP_DEFAULT, OVERAGE_CAP_MIN, OVERAGE_CAP_MAX, OVERAGE_PRICES
+from .config import API_KEYS_FILE, OVERAGE_CAP_DEFAULT, OVERAGE_CAP_MIN, OVERAGE_CAP_MAX, OVERAGE_PRICES, PLATFORM_MONTHLY_LIMIT
 from .persistence import load_json, save_json
 
 logger = logging.getLogger("trust_layer.keys")
@@ -88,14 +88,17 @@ def save_api_keys(keys: dict):
 def generate_api_key(test_mode: bool = False, plan: str = "pro") -> str:
     """Generate a new API key with appropriate prefix.
 
-    Plans: 'free' (500/month), 'pro' (€39/month, 5 000/month),
-           'enterprise' (€149/month, 50 000/month), 'test' (internal),
-           'internal' (CEO internal, no monthly quota, 10k/day cap).
+    Plans: 'free' (500/month), 'pro' (€29/month, 5 000/month),
+           'enterprise' (€149/month, 50 000/month),
+           'platform' (€599/month, 500 000/month),
+           'test' (internal), 'internal' (CEO internal, no monthly quota, 10k/day cap).
     """
     if plan == "free":
         prefix = "mcp_free_"
     elif plan == "enterprise":
         prefix = "mcp_ent_"
+    elif plan == "platform":
+        prefix = "mcp_plat_"
     elif plan == "internal":
         prefix = "mcp_int_"
     elif test_mode:
@@ -198,14 +201,21 @@ def is_enterprise_key(api_key: str) -> bool:
     return api_key.startswith("mcp_ent_")
 
 
+def is_platform_key(api_key: str) -> bool:
+    """Check if an API key is a platform tier key."""
+    return api_key.startswith("mcp_plat_")
+
+
 def get_key_plan(api_key: str) -> str:
-    """Return the plan for an API key ('free', 'pro', 'enterprise', 'test', or 'internal')."""
+    """Return the plan for an API key ('free', 'pro', 'enterprise', 'platform', 'test', or 'internal')."""
     if api_key.startswith("mcp_free_"):
         return "free"
     if api_key.startswith("mcp_test_"):
         return "test"
     if api_key.startswith("mcp_ent_"):
         return "enterprise"
+    if api_key.startswith("mcp_plat_"):
+        return "platform"
     if api_key.startswith("mcp_int_"):
         return "internal"
     return "pro"
@@ -236,8 +246,8 @@ def update_overage_settings(api_key: str, enabled: bool, cap_eur: float, overage
     Raises ValueError on invalid input or unsupported plan.
     """
     plan = get_key_plan(api_key)
-    if plan not in ("pro", "enterprise"):
-        raise ValueError(f"Overage billing only available for Pro and Enterprise plans, got '{plan}'")
+    if plan not in ("pro", "enterprise", "platform"):
+        raise ValueError(f"Overage billing only available for Pro, Enterprise and Platform plans, got '{plan}'")
 
     if not isinstance(enabled, bool):
         raise ValueError("'enabled' must be a boolean")

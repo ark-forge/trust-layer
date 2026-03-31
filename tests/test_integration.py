@@ -98,7 +98,7 @@ def test_pricing(client):
 def test_pricing_all_three_plans_present(client):
     r = client.get("/v1/pricing")
     plans = r.json()["plans"]
-    assert set(plans.keys()) == {"free", "pro", "enterprise"}
+    assert set(plans.keys()) == {"free", "pro", "enterprise", "platform"}
 
 
 # --- Proxy ---

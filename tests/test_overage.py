@@ -64,19 +64,19 @@ def test_enable_overage_enterprise():
 
 def test_enable_overage_free_rejected():
     key = _free_key("fr1")
-    with pytest.raises(ValueError, match="Pro and Enterprise"):
+    with pytest.raises(ValueError, match="Pro, Enterprise and Platform"):
         update_overage_settings(key, enabled=True, cap_eur=20.0, overage_rate=PRO_OVERAGE_PRICE)
 
 
 def test_enable_overage_test_rejected():
     key = create_api_key("cus_t1", "ref_t1", "t1@test.com", test_mode=True)
-    with pytest.raises(ValueError, match="Pro and Enterprise"):
+    with pytest.raises(ValueError, match="Pro, Enterprise and Platform"):
         update_overage_settings(key, enabled=True, cap_eur=20.0, overage_rate=PRO_OVERAGE_PRICE)
 
 
 def test_enable_overage_internal_rejected():
     key = create_api_key("internal_ceo", "internal_ceo_ref", "", plan="internal")
-    with pytest.raises(ValueError, match="Pro and Enterprise"):
+    with pytest.raises(ValueError, match="Pro, Enterprise and Platform"):
         update_overage_settings(key, enabled=True, cap_eur=20.0, overage_rate=PRO_OVERAGE_PRICE)
 
 

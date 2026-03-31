@@ -41,11 +41,13 @@ def _load_secrets() -> None:
             "STRIPE_TEST_SECRET_KEY":         _stripe.get("test_secret_key", ""),
             "STRIPE_TL_WEBHOOK_SECRET":       _stripe.get("tl_webhook_secret", ""),
             "STRIPE_TL_WEBHOOK_SECRET_TEST":  _stripe.get("tl_webhook_secret_test", ""),
-            "STRIPE_PRO_PRICE_ID":             _stripe.get("pro_price_id", ""),
-            "STRIPE_PRO_PRICE_ID_TEST":        _stripe.get("pro_price_id_test", ""),
-            "STRIPE_ENTERPRISE_PRICE_ID":      _stripe.get("enterprise_price_id", ""),
-            "STRIPE_ENTERPRISE_PRICE_ID_TEST": _stripe.get("enterprise_price_id_test", ""),
-            "STRIPE_PRO_PRODUCT_ID":           _stripe.get("pro_product_id", ""),
+            "STRIPE_PRO_PRICE_ID":                 _stripe.get("pro_price_id", ""),
+            "STRIPE_PRO_PRICE_ID_TEST":            _stripe.get("pro_price_id_test", ""),
+            "STRIPE_ENTERPRISE_PRICE_ID":          _stripe.get("enterprise_price_id", ""),
+            "STRIPE_ENTERPRISE_PRICE_ID_TEST":     _stripe.get("enterprise_price_id_test", ""),
+            "STRIPE_PLATFORM_PRICE_ID":            _stripe.get("platform_price_id", ""),
+            "STRIPE_PLATFORM_PRICE_ID_TEST":       _stripe.get("platform_price_id_test", ""),
+            "STRIPE_PRO_PRODUCT_ID":               _stripe.get("pro_product_id", ""),
             "SMTP_HOST":                      _smtp.get("host", ""),
             "SMTP_LOGIN":                     _smtp.get("login", ""),
             "SMTP_USER":                      _smtp.get("user", ""),
@@ -86,6 +88,8 @@ STRIPE_PRO_PRICE_ID = os.environ.get("STRIPE_PRO_PRICE_ID", "")        # live
 STRIPE_PRO_PRICE_ID_TEST = os.environ.get("STRIPE_PRO_PRICE_ID_TEST", "")  # test
 STRIPE_ENTERPRISE_PRICE_ID = os.environ.get("STRIPE_ENTERPRISE_PRICE_ID", "")        # live
 STRIPE_ENTERPRISE_PRICE_ID_TEST = os.environ.get("STRIPE_ENTERPRISE_PRICE_ID_TEST", "")  # test
+STRIPE_PLATFORM_PRICE_ID = os.environ.get("STRIPE_PLATFORM_PRICE_ID", "")           # live
+STRIPE_PLATFORM_PRICE_ID_TEST = os.environ.get("STRIPE_PLATFORM_PRICE_ID_TEST", "")  # test
 STRIPE_PRO_PRODUCT_ID = os.environ.get("STRIPE_PRO_PRODUCT_ID", "")
 
 # --- SMTP ---
@@ -113,6 +117,7 @@ RATE_LIMIT_PER_KEY_PER_DAY = 500      # Fallback daily cap (used when plan unkno
 FREE_TIER_MONTHLY_LIMIT = 500         # Free: 500 proofs/month
 PRO_MONTHLY_LIMIT = 5_000             # Pro €29/month: 5 000 proofs/month
 ENTERPRISE_MONTHLY_LIMIT = 50_000     # Enterprise €149/month: 50 000 proofs/month
+PLATFORM_MONTHLY_LIMIT = 500_000      # Platform €599/month: 500 000 proofs/month
 
 # Daily caps per plan.
 # Free/Pro/Enterprise: set to monthly quota — the monthly counter fires first,
@@ -122,12 +127,14 @@ DAILY_LIMITS_PER_PLAN = {
     "free":       FREE_TIER_MONTHLY_LIMIT,   # 500  — daily cap = monthly quota
     "pro":        PRO_MONTHLY_LIMIT,          # 5 000 — daily cap = monthly quota
     "enterprise": ENTERPRISE_MONTHLY_LIMIT,   # 50 000 — daily cap = monthly quota
+    "platform":   PLATFORM_MONTHLY_LIMIT,     # 500 000 — daily cap = monthly quota
     "test":       100,                        # hard daily guard only
     "internal":   10_000,                     # CEO internal key — no monthly quota, 10k/day hard cap
 }
 # Overage rates (credits billed when monthly quota exceeded)
 PRO_OVERAGE_PRICE = 0.01              # EUR per proof over 5 000
 ENTERPRISE_OVERAGE_PRICE = 0.005      # EUR per proof over 50 000
+PLATFORM_OVERAGE_PRICE = 0.002        # EUR per proof over 500 000
 IDEMPOTENCY_TTL_HOURS = 24
 
 # --- Overage billing (opt-in) ---
@@ -141,11 +148,13 @@ OVERAGE_CAP_DEFAULT = 20.00       # EUR default suggested cap
 OVERAGE_PRICES = {
     "pro": PRO_OVERAGE_PRICE,
     "enterprise": ENTERPRISE_OVERAGE_PRICE,
+    "platform": PLATFORM_OVERAGE_PRICE,
 }
 
 # Monthly quotas per plan (None = unlimited daily cap only)
 _PRO_MONTHLY_LIMIT = 5000
 _ENTERPRISE_MONTHLY_LIMIT = 50000
+_PLATFORM_MONTHLY_LIMIT = 500000
 
 # --- Internal Secret (forwarded to upstream services for service-to-service auth) ---
 INTERNAL_SECRET = os.environ.get("TRUST_LAYER_INTERNAL_SECRET", "")
