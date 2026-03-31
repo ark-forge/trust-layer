@@ -1,5 +1,6 @@
 """End-to-end integration tests via FastAPI TestClient."""
 
+import asyncio
 import json
 from datetime import datetime, timezone
 from unittest.mock import patch, AsyncMock, MagicMock
@@ -15,6 +16,7 @@ from trust_layer.config import (
     FREE_TIER_MONTHLY_LIMIT,
     PRO_MONTHLY_LIMIT,
     ENTERPRISE_MONTHLY_LIMIT,
+    PLATFORM_MONTHLY_LIMIT,
     PRO_OVERAGE_PRICE,
     ENTERPRISE_OVERAGE_PRICE,
 )
@@ -747,3 +749,76 @@ def test_proof_full_returns_payment(client, api_key):
     assert "parties" in data
     assert "certification_fee" in data
     assert data["parties"]["buyer_fingerprint"] != ""
+
+
+# ---------------------------------------------------------------------------
+# Platform plan — TSA routing E2E
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def platform_key():
+    """Internal Platform key — mcp_plat_ prefix, subscription quota (no credits needed)."""
+    return create_api_key("cus_internal_arkforge", "ref_internal_platform", "contact@arkforge.tech", plan="platform")
+
+
+def test_platform_key_has_correct_prefix(platform_key):
+    """Platform API key must start with mcp_plat_."""
+    assert platform_key.startswith("mcp_plat_"), f"Expected mcp_plat_ prefix, got: {platform_key[:12]}"
+
+
+def test_platform_key_plan_detection(platform_key):
+    """get_key_plan() must return 'platform' for mcp_plat_ keys."""
+    from trust_layer.keys import get_key_plan
+    assert get_key_plan(platform_key) == "platform"
+
+
+def test_platform_proxy_call_routes_tsa_to_digicert(client, platform_key):
+    """E2E: proxy call with Platform key → background task calls submit_hash(plan='platform')
+    → first TSA attempt must be DigiCert, not FreeTSA."""
+    mock_http = _mock_http_client()
+    tsa_plans_seen = []
+
+    original_submit = __import__("trust_layer.timestamps", fromlist=["submit_hash"]).submit_hash
+
+    def capture_submit_hash(hash_hex, plan=""):
+        tsa_plans_seen.append(plan)
+        return (b"\x30\x82\x00\x01", "digicert.com")
+
+    with patch("httpx.AsyncClient", return_value=mock_http), \
+         patch("trust_layer.proxy.submit_hash", side_effect=capture_submit_hash), \
+         patch("trust_layer.proxy.submit_to_rekor", return_value={"status": "anchored"}), \
+         patch("trust_layer.proxy._log_background_task"):
+        r = client.post(
+            "/v1/proxy",
+            json={"target": "https://example.com/api", "payload": {"input": "test"}},
+            headers={"X-Api-Key": platform_key},
+        )
+
+    assert r.status_code == 200, f"Proxy call failed: {r.json()}"
+    assert tsa_plans_seen == ["platform"], \
+        f"Expected submit_hash called with plan='platform', got: {tsa_plans_seen}"
+
+
+def test_platform_proof_records_digicert_provider(client, platform_key):
+    """E2E: proof stored on disk must show tsa_provider='digicert.com' for Platform key."""
+    from trust_layer.proofs import load_proof
+
+    mock_http = _mock_http_client()
+
+    with patch("httpx.AsyncClient", return_value=mock_http), \
+         patch("trust_layer.proxy.submit_hash", return_value=(b"\x30\x82\x00\x01", "digicert.com")), \
+         patch("trust_layer.proxy.submit_to_rekor", return_value={"status": "anchored"}), \
+         patch("trust_layer.proxy._log_background_task"):
+        r = client.post(
+            "/v1/proxy",
+            json={"target": "https://example.com/api", "payload": {}},
+            headers={"X-Api-Key": platform_key},
+        )
+
+    assert r.status_code == 200
+    proof_id = r.json()["proof"]["proof_id"]
+    proof = load_proof(proof_id)
+    assert proof is not None
+    tsa_provider = proof.get("timestamp_authority", {}).get("provider", "")
+    assert tsa_provider == "digicert.com", \
+        f"Expected digicert.com in proof TSA provider, got: '{tsa_provider}'"

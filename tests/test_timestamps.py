@@ -129,6 +129,62 @@ def test_submit_hash_network_error_then_success():
 
 
 # ---------------------------------------------------------------------------
+# submit_hash — plan-aware TSA routing
+# ---------------------------------------------------------------------------
+
+def test_platform_plan_skips_freetsa():
+    """plan='platform' → first attempt is DigiCert, not FreeTSA."""
+    attempted_urls = []
+
+    def _capture(hash_hex, tsa_url):
+        attempted_urls.append(tsa_url)
+        return _FAKE_TSR
+
+    with patch("trust_layer.timestamps._submit_hash_once", side_effect=_capture):
+        result = submit_hash(_HASH, plan="platform")
+
+    assert result is not None
+    assert "digicert" in attempted_urls[0], f"Expected DigiCert first, got: {attempted_urls[0]}"
+    assert "freetsa" not in attempted_urls[0]
+    assert result[1] == "digicert.com"
+
+
+def test_platform_plan_fallback_to_sectigo():
+    """plan='platform' + DigiCert fails → Sectigo (FreeTSA never tried)."""
+    attempted_urls = []
+
+    def _capture(hash_hex, tsa_url):
+        attempted_urls.append(tsa_url)
+        if "digicert" in tsa_url:
+            return None  # DigiCert fails
+        return _FAKE_TSR  # Sectigo succeeds
+
+    with patch("trust_layer.timestamps._submit_hash_once", side_effect=_capture):
+        result = submit_hash(_HASH, plan="platform")
+
+    assert result is not None
+    assert result[1] == "sectigo.com"
+    assert all("freetsa" not in url for url in attempted_urls), \
+        f"FreeTSA must never be tried for platform: {attempted_urls}"
+
+
+def test_non_platform_plan_uses_freetsa_first():
+    """plan='pro' (and default '') → FreeTSA is first."""
+    for plan in ("pro", "enterprise", "free", ""):
+        attempted_urls = []
+
+        def _capture(hash_hex, tsa_url):
+            attempted_urls.append(tsa_url)
+            return _FAKE_TSR
+
+        with patch("trust_layer.timestamps._submit_hash_once", side_effect=_capture):
+            submit_hash(_HASH, plan=plan)
+
+        assert "freetsa" in attempted_urls[0], \
+            f"plan='{plan}' should use FreeTSA first, got: {attempted_urls[0]}"
+
+
+# ---------------------------------------------------------------------------
 # verify_tsr
 # ---------------------------------------------------------------------------
 
