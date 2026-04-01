@@ -19,19 +19,27 @@ ArkForge works the same way for every call:
 
 ArkForge doesn't take sides. The proof serves the truth.
 
-## Current state (v0.4)
+## Current state (v1.3.17)
 
 **What works today:**
 
 - Certifying proxy — any HTTPS API call becomes a proven transaction (Agent Action Receipt)
-- SHA-256 hash chain binding request, response, payment, timestamp, buyer, seller
+- SHA-256 hash chain binding request, response, payment, timestamp, buyer, seller — canonical JSON (sorted keys) for spec_version ≥ 1.2, eliminating preimage ambiguity
 - Ed25519 digital signature (origin authentication)
-- RFC 3161 certified timestamps — pool failover: FreeTSA (primary) → DigiCert → Sectigo. Provider recorded per-proof.
+- RFC 3161 certified timestamps — pool failover: FreeTSA (primary) → DigiCert → Sectigo. Provider recorded per-proof. Platform keys use DigiCert as primary (WebTrust-certified, enterprise SLA).
 - **Sigstore Rekor** — chain hash registered in the Linux Foundation's append-only public transparency log (immutable external anchor, zero-trust verification)
 - Stripe payment as witness (Pro plan — ArkForge processes payment directly)
 - Free tier with 3 witnesses (Ed25519, RFC 3161, Sigstore Rekor — no credit card required)
+- **14-day trial** on Pro and Enterprise plans — no credit card required at signup
 - **External receipt verification** — clients attach a Stripe receipt URL, ArkForge fetches, hashes, parses, and binds it to the proof (spec v2.0)
 - **MCP tool call certification** — route MCP server outbound calls through `/v1/proxy`; every `tools/call` becomes a signed AAR independently verifiable by the agent's client or auditor
+- **Agent identity verification** — `agent_identity` field bound cryptographically via Ed25519 challenge-response or OATR delegation at registration time. `agent_identity_verified: true` flag in proof. `did_resolution_status: "bound"` when DID is verified, `"unverified"` when caller-declared.
+- **DID binding** — supports `did:key`, `did:web`, and `did:pkh` methods. Ed25519 key formats per DID method documented (Path A: native Ed25519, Path B: JWK wrapping).
+- **`/.well-known/agent.json`** (v1.4) — agent discoverability endpoint. Machine-readable description of the ArkForge certifying agent: capabilities, endpoints, proof spec version, public key.
+- **Privacy model for public proofs** — `GET /v1/proof/{id}` returns only `receipt_content_hash` and `verification_status` from payment data. Receipt URL, parsed fields, buyer/seller identities, reputation scores, and certification fee are masked. Full proof available via `GET /v1/proof/{id}/full` (API key required, owner only — verified via `sha256(api_key) == buyer_fingerprint`).
+- **`/v1/proof/{id}/verify`** — public endpoint to verify proof integrity without authentication. Returns chain hash validity and Sigstore Rekor anchor status.
+- **Proof abuse protection** — Redis-backed auto-block on suspicious proof access patterns (HTTP 429).
+- **Email lifecycle notifications** — subscription events (trial start/end, upgrade, cancel) trigger transactional emails.
 - Open proof specification with test vectors ([ark-forge/proof-spec](https://github.com/ark-forge/proof-spec))
 
 **Unlocked by Phase 1:** Any client can now prove a payment made to a third-party provider. ArkForge is no longer limited to its own payment processing. Zero provider onboarding required.
@@ -146,7 +154,7 @@ The provider doesn't need to register, connect Stripe, or know ArkForge exists. 
 ### What ArkForge charges for
 
 ArkForge charges the client for the **proof service** — not for the provider's API:
-- ArkForge → for the cryptographic proof (Free: 500/month at no cost; Pro: €29/month for 5,000; Enterprise: €149/month for 50,000)
+- ArkForge → for the cryptographic proof (Free: 500/month at no cost; Pro: €29/month for 5,000; Enterprise: €149/month for 50,000; Platform: €599/month for 500,000 — platforms and AI integrators, `mcp_plat_` key prefix, DigiCert-first TSA, overage opt-in at €0.002/proof)
 - Provider → for the API service (their own billing, separately)
 
 Two billing relationships, but **one runtime flow** (one API call through ArkForge).
@@ -279,8 +287,10 @@ ArkForge records, signs, and timestamps. It doesn't hold money, set prices, list
 | Spec version | Changes |
 |-------------|---------|
 | v1.1 | Ed25519 signature, upstream_timestamp, free tier |
-| v2.0 (current) | `payment_evidence` object, `receipt_content_hash` in chain hash, `payment_verification` level (`fetched` / `failed`), extensible PSP parser architecture |
-| v2.1 (Phase 2) | `payment_verification: "witnessed"` level, Stripe Connect witness |
+| v1.2 (current) | **Chain hash algorithm: canonical JSON** (sorted keys) instead of string concatenation — eliminates preimage ambiguity. Breaking change for proof verification; legacy path retained for spec_version 1.1. |
+| v2.0 (current) | `payment_evidence` object, `receipt_content_hash` in chain hash, `payment_verification` level (`fetched` / `declared`), extensible PSP parser architecture |
+| v2.1 (current) | `agent_identity` + `agent_identity_verified` fields, `did_resolution_status`, `/.well-known/agent.json` v1.4 |
+| v2.2 (Phase 2) | `payment_verification: "witnessed"` level, Stripe Connect witness |
 | v3.0 (Phase 3) | Multi-PSP orchestrated payment witnesses |
 | v3.x (Dispute Protocol) | `dispute_resolution` object with arbitrator signature — resolution becomes cryptographically provable |
 
