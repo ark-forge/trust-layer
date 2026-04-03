@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.24] — 2026-04-03
+
+### Added
+- add _links.pricing CTA in JSON responses for scan-to-pricing conversion
+
+---
+
 ## [1.3.23] — 2026-04-03
 
 _(no user-facing changes)_
