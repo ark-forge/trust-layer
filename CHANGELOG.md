@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.22] — 2026-04-03
+
+### Added
+- NIST AI RMF 1.0 + SOC 2 Readiness frameworks — v1.3.23
+
+---
+
 ## [1.3.23] — 2026-04-03
 
 ### Added
