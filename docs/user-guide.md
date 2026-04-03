@@ -1206,7 +1206,7 @@ if report["gaps"]:
 ```
 
 **Notes:**
-- Only proofs created **after** v1.4.0 deployment are indexed automatically.
+- Only proofs created **after** v1.3.18 deployment are indexed automatically.
   Run `python3 scripts/backfill_proof_index.py` to index pre-existing proofs.
 - `date_from` / `date_to` accept any ISO 8601 format: `2026-01-01`, `2026-01-01T00:00:00Z`, etc.
 - Currently supported framework: `eu_ai_act`. More frameworks (SOC2, ISO 27001, NIST AI RMF) are planned.

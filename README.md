@@ -452,6 +452,7 @@ chmod 600 .signing_key.pem .env
 | **Proof Spec** | Open specification + test vectors | [ark-forge/proof-spec](https://github.com/ark-forge/proof-spec) |
 | **MCP EU AI Act** | Compliance scanner — first service sold through ArkForge | [ark-forge/mcp-eu-ai-act](https://github.com/ark-forge/mcp-eu-ai-act) |
 | **Agent Client** | Autonomous buyer — proof-of-concept non-human customer | [ark-forge/arkforge-agent-client](https://github.com/ark-forge/arkforge-agent-client) |
+| **CEO CRM** | Contact lifecycle tracking (signup → active → dormant → reengaged) — feeds the autonomous CEO agent's cognitive loop. Postgres-backed, silent JSON fallback. | Internal |
 
 ### Listed in
 

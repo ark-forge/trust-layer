@@ -1,7 +1,7 @@
-# Pinned production dependencies (2026-03-12)
+# Pinned production dependencies (2026-03-30)
 # Update via: pip install -U <pkg> && pip freeze > requirements.txt
-fastapi==0.135.1
-uvicorn==0.41.0
+fastapi==0.135.2
+uvicorn==0.42.0
 httpx==0.28.1
 stripe==15.0.0
 cryptography==46.0.6
