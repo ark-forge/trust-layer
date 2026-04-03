@@ -1213,6 +1213,51 @@ if report["gaps"]:
 
 ---
 
+## Proof Index — Operations & Resilience
+
+The proof index powers date-range queries for compliance reports. Understanding its resilience model is useful for operators.
+
+### How it works
+
+When Redis is available, the service uses **DualWrite mode**: every proof is written to both the JSONL file (`data/proof_index.jsonl`) and Redis. The JSONL is written first and is always committed. Redis is written second and used for fast queries.
+
+When Redis is unavailable, the service falls back to **File-only mode**: proofs are written to the JSONL only. Queries scan the JSONL (adequate for <100k proofs).
+
+### Automatic reconciliation
+
+The service reconciles the JSONL → Redis automatically in two ways:
+
+| Trigger | When | What it does |
+|---------|------|-------------|
+| **Startup** | Every service (re)start | Replays the full JSONL into Redis |
+| **Periodic** | Every 5 minutes | Replays the last 25 hours of JSONL into Redis |
+
+This means:
+- **Redis restart** → reconciled on next service restart or within 5 minutes
+- **Redis outage during runtime** → proofs written to JSONL only during outage, replayed into Redis automatically within 5 minutes of Redis recovery
+
+### Manual reconciliation
+
+```bash
+# Rebuild Redis from JSONL (after Redis restart)
+python3 scripts/backfill_proof_index.py --from-jsonl
+
+# Only replay the last 24 hours
+python3 scripts/backfill_proof_index.py --from-jsonl --since 2026-04-02T00:00:00Z
+
+# Dry run
+python3 scripts/backfill_proof_index.py --from-jsonl --dry-run
+
+# Full backfill from proof files (first deploy or data migration)
+python3 scripts/backfill_proof_index.py
+```
+
+### Source of truth
+
+**JSONL is always the source of truth.** Redis is derived and can be rebuilt from the JSONL at any time. Never delete `data/proof_index.jsonl`.
+
+---
+
 - **Quick reference**: [quick-reference.md](./quick-reference.md)
 - **Support**: contact@arkforge.tech
 

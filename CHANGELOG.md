@@ -6,6 +6,47 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.19] — 2026-04-03
+
+### Changed
+- **Proof index: DualWrite resilience** — `DualWriteProofIndex` replaces pure `RedisProofIndex` when Redis is available. JSONL is now always written first (durable source of truth); Redis is written second (fast `ZRANGEBYSCORE` queries). If Redis fails mid-write, the JSONL entry is already committed — no data loss.
+
+### Added
+- **Automatic JSONL→Redis reconciliation** — two background daemon threads handle sync without operator intervention:
+  - *Startup reconciliation*: full JSONL replay into Redis on every service (re)start. Recovers from Redis data loss after restart.
+  - *Periodic reconciliation*: re-replays the last 25 hours of JSONL into Redis every 5 minutes. Recovers from Redis outages that occur while the service is running, without requiring a service restart.
+- `DualWriteProofIndex.reconcile(since_unix=None)` — callable method for manual or scripted reconciliation.
+- `backfill_proof_index.py --from-jsonl` mode — replays JSONL directly into Redis (faster than scanning proof files). Supports `--since ISO8601` for incremental reconciliation.
+- Ops documentation in `docs/user-guide.md` — resilience model, reconciliation triggers, manual commands.
+
+---
+
+## [1.3.18] — 2026-04-03
+
+### Added
+- **`POST /v1/assess`** — MCP server security posture assessment. Analyzes a server manifest for dangerous capability patterns (`PermissionAnalyzer`: filesystem write, code execution, env access, network), tool drift (`DescriptionDriftAnalyzer`: additions/removals/description changes via `difflib`), and version regressions (`VersionTrackingAnalyzer`). Returns `risk_score` (0–100), categorized findings, and baseline diff. Baseline stored per `(api_key, server_id)` in `data/mcp_baselines/`. Rate limit: 100 calls/day per API key.
+- **`POST /v1/compliance-report`** — EU AI Act compliance report. Aggregates certified proofs for an API key over a date range and maps them to 6 articles: Art. 9 (risk management), Art. 10 (data governance — not applicable), Art. 13 (transparency), Art. 14 (human oversight), Art. 17 (quality management), Art. 22 (record-keeping). Returns per-article coverage status (`covered`/`partial`/`gap`/`not_applicable`) with evidence summaries and a gaps list.
+- **`ProofIndexBackend` ABC** — pluggable proof index abstraction. `RedisProofIndex` (ZADD/ZRANGEBYSCORE, 90-day TTL) + `FileProofIndex` (JSONL append, `threading.Lock`) fallback. Powers date-range queries for compliance reports without scanning all proof files.
+- **`scripts/backfill_proof_index.py`** — one-shot migration to index proofs created before v1.3.18.
+- **APIRouter pattern** — first use of `fastapi.APIRouter` in the codebase. New routes are isolated modules under `trust_layer/routers/`. Existing `app.py` routes are untouched.
+
+---
+
+## [1.3.17] — 2026-04-01
+
+### Documentation
+- ROADMAP updated to reflect implemented features: agent identity, DID binding, Platform plan, proof privacy model (`/v1/proof/{id}/full`), `/v1/proof/{id}/verify` endpoint.
+
+---
+
+## [1.3.16] — 2026-04-01
+
+### Added
+- Platform plan TSA routing unit tests: Platform keys skip FreeTSA, fall back to Sectigo; non-platform plans retain FreeTSA-first behaviour.
+- E2E integration tests for Platform plan: key prefix detection, plan propagation to `submit_hash`, DigiCert TSA confirmed on live proof.
+
+---
+
 ## [1.3.15] — 2026-03-31
 
 ### Added
