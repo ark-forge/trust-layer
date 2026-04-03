@@ -317,9 +317,13 @@ Analyzes MCP server manifests for security risks and drift between deployments.
 Aggregates certified proofs over a date range and maps them to EU AI Act articles.
 
 - **Pluggable framework architecture**: `BaseComplianceFramework` ABC + registry + `register_framework()`. Built-in: `EUAIActFramework` v1.0.
-- **Proof index** (`ProofIndexBackend` ABC) enables time-range queries without scanning all proof files. Redis-backed (`ZADD/ZRANGEBYSCORE`) with JSONL fallback. Migration path to SQLite is a new backend implementation, not a code change.
+- **Proof index** (`ProofIndexBackend` ABC) enables time-range queries without scanning all proof files. `DualWriteProofIndex` (v1.3.19+) writes to JSONL (durable) + Redis (fast queries); JSONL is source of truth, Redis is rebuilt automatically at startup and every 5 minutes. Migration path to SQLite is a new backend implementation, not a code change.
 - **Article mapping** (Art. 9, 10, 13, 14, 17, 22) derived from existing proof fields — no spec change required.
 - **Extensibility**: `SOC2Framework`, `ISO27001Framework`, `NISTAIRMFFramework` require only subclassing `BaseComplianceFramework`.
+
+### Proof Index Resilience (`DualWriteProofIndex`) [IMPLEMENTED v1.3.19]
+
+Eliminates the Redis/JSONL split-brain condition introduced in v1.3.18. JSONL is always written first; Redis is derived. Two automatic reconciliation triggers: startup (full replay) + periodic every 5 min (25h window). Manual: `backfill_proof_index.py --from-jsonl`.
 
 ---
 
