@@ -1209,7 +1209,104 @@ if report["gaps"]:
 - Only proofs created **after** v1.3.18 deployment are indexed automatically.
   Run `python3 scripts/backfill_proof_index.py` to index pre-existing proofs.
 - `date_from` / `date_to` accept any ISO 8601 format: `2026-01-01`, `2026-01-01T00:00:00Z`, etc.
-- Currently supported framework: `eu_ai_act`. More frameworks (SOC2, ISO 27001, NIST AI RMF) are planned.
+- Supported frameworks: `eu_ai_act` (default), `iso_42001`. More frameworks (SOC2, NIST AI RMF) are planned.
+
+---
+
+## ISO/IEC 42001:2023 Compliance Report
+
+Generate a compliance report mapping your certified proofs to ISO/IEC 42001 AI Management System obligations.
+
+**What it does:**
+- Queries all proofs certified under your API key in a date range
+- Maps proof fields to ISO 42001 clauses
+- Returns clause-level status: `covered` | `partial` | `gap` | `not_applicable`
+- Lists gaps for remediation planning
+
+**Applicable to:** Organisations implementing or certifying an AI Management System (AIMS) under ISO/IEC 42001:2023.
+
+### Quick start
+
+```bash
+curl -X POST https://trust.arkforge.tech/v1/compliance-report \
+  -H "X-Api-Key: mcp_xxx..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "framework": "iso_42001",
+    "date_from": "2026-01-01",
+    "date_to": "2026-03-31"
+  }'
+```
+
+### Response
+
+```json
+{
+  "report_id": "rpt_20260403_120000_abc123",
+  "framework": "iso_42001",
+  "framework_version": "1.0",
+  "date_range": {"from": "2026-01-01T00:00:00+00:00", "to": "2026-03-31T00:00:00+00:00"},
+  "proof_count": 42,
+  "articles": [
+    {
+      "article": "§ 6.1",
+      "title": "Risk and Opportunity Management",
+      "status": "covered",
+      "evidence": "Cryptographic chain hash documents AI action for risk tracking",
+      "proof_count": 42,
+      "proof_sample": ["prf_20260115_...", "prf_20260116_...", "prf_20260117_..."]
+    },
+    {
+      "article": "§ 10.1",
+      "title": "Nonconformity and Corrective Action",
+      "status": "not_applicable",
+      "evidence": "Organisational obligation — not verifiable from transaction proofs",
+      "reason": "§ 10.1 requires documented procedures for identifying and addressing nonconformities.",
+      "proof_count": 0
+    }
+  ],
+  "gaps": [],
+  "summary": {"covered": 5, "partial": 0, "gap": 0, "not_applicable": 1}
+}
+```
+
+### Clause coverage
+
+| Clause | Title | What proves it |
+|--------|-------|---------------|
+| § 6.1  | Risk and Opportunity Management | `hashes.chain` present in proof |
+| § 8.2  | AI Risk Assessment | Proof chain hash integrity verifiable |
+| § 8.4  | AI System Lifecycle Documentation | `spec_version` + `parties.agent_version` both present |
+| § 9.1  | Monitoring, Measurement and Evaluation | RFC 3161 verified timestamp (`tsa.status == "verified"`) |
+| § 9.2  | Internal Audit | All proofs pass chain hash integrity verification |
+| § 10.1 | Nonconformity and Corrective Action | *Not applicable* — organisational obligation |
+
+### Python example
+
+```python
+import requests
+
+resp = requests.post(
+    "https://trust.arkforge.tech/v1/compliance-report",
+    headers={"X-Api-Key": "mcp_xxx..."},
+    json={
+        "framework": "iso_42001",
+        "date_from": "2026-01-01",
+        "date_to": "2026-03-31",
+    }
+)
+report = resp.json()
+print(f"Proofs analyzed: {report['proof_count']}")
+print(f"Summary: {report['summary']}")
+if report["gaps"]:
+    print(f"Gaps to address: {report['gaps']}")
+```
+
+**Notes:**
+- Only proofs created after v1.3.18 deployment are indexed automatically.
+  Run `python3 scripts/backfill_proof_index.py` to index pre-existing proofs.
+- `date_from` / `date_to` accept any ISO 8601 format: `2026-01-01`, `2026-01-01T00:00:00Z`, etc.
+- § 8.4 requires `agent_version` in proof `parties`. Agents that do not report their version will yield `partial` status on this clause.
 
 ---
 

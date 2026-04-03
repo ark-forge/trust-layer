@@ -6,6 +6,28 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.21] — 2026-04-03
+
+### Added
+- **ISO/IEC 42001:2023 compliance framework** — `POST /v1/compliance-report` now accepts `"framework": "iso_42001"`.
+  Maps Trust Layer proof fields to 6 AI Management System clauses:
+  - § 6.1 Risk and Opportunity Management — `hashes.chain` presence
+  - § 8.2 AI Risk Assessment — proof integrity verifiability
+  - § 8.4 AI System Lifecycle Documentation — `spec_version` + `parties.agent_version`
+  - § 9.1 Monitoring, Measurement and Evaluation — RFC 3161 verified timestamp
+  - § 9.2 Internal Audit — cryptographic audit trail integrity
+  - § 10.1 Nonconformity and Corrective Action — `not_applicable` (organisational obligation)
+- 19 new tests — `ISO42001Framework.map_proof`, `generate_report`, endpoint integration.
+  504 → 523 total, 0 regressions.
+- `docs/user-guide.md` — full ISO 42001 section with curl + Python examples, clause coverage table.
+- `docs/quick-reference.md` — compliance endpoint updated to list both frameworks.
+
+### Changed
+- `POST /v1/compliance-report` docstring updated: lists `eu_ai_act, iso_42001` as supported frameworks.
+- Error message for `unknown_framework` now dynamically lists all registered frameworks (including `iso_42001`).
+
+---
+
 ## [1.3.20] — 2026-04-03
 
 ### Fixed

@@ -362,3 +362,238 @@ class EUAIActFramework(BaseComplianceFramework):
 
 
 register_framework(EUAIActFramework())
+
+
+# ---------------------------------------------------------------------------
+# ISO/IEC 42001:2023 Framework
+# ---------------------------------------------------------------------------
+
+_ISO42001_CLAUSES = [
+    ("§ 6.1",  "Risk and Opportunity Management"),
+    ("§ 8.2",  "AI Risk Assessment"),
+    ("§ 8.4",  "AI System Lifecycle Documentation"),
+    ("§ 9.1",  "Monitoring, Measurement and Evaluation"),
+    ("§ 9.2",  "Internal Audit"),
+    ("§ 10.1", "Nonconformity and Corrective Action"),
+]
+
+
+class ISO42001Framework(BaseComplianceFramework):
+    """ISO/IEC 42001:2023 AI Management System compliance framework.
+
+    Maps Trust Layer proof fields to verifiable management system obligations.
+    Organisational obligations (§ 10.1) are marked not_applicable as they
+    cannot be derived from transaction proofs.
+
+    Clause coverage:
+    - § 6.1: Risk tracking — chain hash presence documents AI action
+    - § 8.2: Risk assessment — proof integrity verifiability
+    - § 8.4: Lifecycle documentation — spec_version + agent_version
+    - § 9.1: Monitoring — RFC 3161 verified timestamp
+    - § 9.2: Internal audit — cryptographic audit trail integrity
+    - § 10.1: Nonconformity — not_applicable (organisational obligation)
+    """
+
+    name = "iso_42001"
+    version = "1.0"
+
+    def map_proof(self, proof: dict) -> list[ArticleMapping]:
+        """Map a single proof to ISO/IEC 42001 clauses.
+
+        Returns one ArticleMapping per clause (6 total).
+        """
+        hashes = proof.get("hashes", {})
+        parties = proof.get("parties", {})
+        tsa = proof.get("timestamp_authority", {})
+        proof_id = proof.get("proof_id", "")
+
+        mappings = []
+
+        # § 6.1 — Risk and Opportunity Management: chain hash documents AI action
+        chain_ok = bool(hashes.get("chain"))
+        mappings.append(ArticleMapping(
+            article="§ 6.1",
+            title="Risk and Opportunity Management",
+            status="covered" if chain_ok else "gap",
+            evidence="Cryptographic chain hash documents AI action for risk tracking" if chain_ok
+                     else "Proof missing chain hash — risk tracking gap",
+            proof_ids=[proof_id] if chain_ok else [],
+        ))
+
+        # § 8.2 — AI Risk Assessment: integrity verifiability
+        integrity_ok = verify_proof_integrity(proof)
+        if integrity_ok:
+            r82_status = "covered"
+            r82_evidence = "Proof chain hash integrity verified — AI risk evidence is tamper-proof"
+        elif chain_ok:
+            r82_status = "partial"
+            r82_evidence = "Chain hash present but integrity check failed — evidence may be compromised"
+        else:
+            r82_status = "gap"
+            r82_evidence = "No chain hash — AI risk assessment evidence unavailable"
+        mappings.append(ArticleMapping(
+            article="§ 8.2",
+            title="AI Risk Assessment",
+            status=r82_status,
+            evidence=r82_evidence,
+            proof_ids=[proof_id] if r82_status == "covered" else [],
+        ))
+
+        # § 8.4 — AI System Lifecycle Documentation: spec_version + agent_version
+        spec_version = proof.get("spec_version", "")
+        agent_version = parties.get("agent_version", "")
+        if spec_version and agent_version:
+            r84_status = "covered"
+            r84_evidence = (
+                f"Proof spec v{spec_version} + agent v{agent_version} — system lifecycle documented"
+            )
+        elif spec_version or agent_version:
+            r84_status = "partial"
+            missing = []
+            if not spec_version:
+                missing.append("spec_version")
+            if not agent_version:
+                missing.append("agent_version")
+            r84_evidence = f"Partial lifecycle documentation: missing {', '.join(missing)}"
+        else:
+            r84_status = "gap"
+            r84_evidence = "No version information — AI system lifecycle not documented in proofs"
+        mappings.append(ArticleMapping(
+            article="§ 8.4",
+            title="AI System Lifecycle Documentation",
+            status=r84_status,
+            evidence=r84_evidence,
+            proof_ids=[proof_id] if r84_status != "gap" else [],
+        ))
+
+        # § 9.1 — Monitoring, Measurement and Evaluation: RFC 3161 verified timestamp
+        tsa_ok = tsa.get("status") == "verified"
+        ts = proof.get("timestamp", "")
+        if tsa_ok:
+            r91_status = "covered"
+            r91_evidence = "RFC 3161 verified timestamp — monitoring evidence is non-repudiable"
+        elif ts:
+            r91_status = "partial"
+            r91_evidence = (
+                "Timestamp present but RFC 3161 verification failed — "
+                "monitoring evidence not independently verifiable"
+            )
+        else:
+            r91_status = "gap"
+            r91_evidence = "No timestamp — monitoring and measurement evidence unavailable"
+        mappings.append(ArticleMapping(
+            article="§ 9.1",
+            title="Monitoring, Measurement and Evaluation",
+            status=r91_status,
+            evidence=r91_evidence,
+            proof_ids=[proof_id] if r91_status != "gap" else [],
+        ))
+
+        # § 9.2 — Internal Audit: proof integrity provides verifiable audit trail
+        mappings.append(ArticleMapping(
+            article="§ 9.2",
+            title="Internal Audit",
+            status="covered" if integrity_ok else "gap",
+            evidence=(
+                "Immutable cryptographic audit trail — all proofs independently verifiable"
+                if integrity_ok
+                else "Proof integrity failed — audit trail reliability compromised"
+            ),
+            proof_ids=[proof_id] if integrity_ok else [],
+        ))
+
+        # § 10.1 — Nonconformity and Corrective Action: organisational obligation
+        mappings.append(ArticleMapping(
+            article="§ 10.1",
+            title="Nonconformity and Corrective Action",
+            status="not_applicable",
+            evidence="Organisational obligation — not verifiable from transaction proofs",
+            reason=(
+                "§ 10.1 requires documented procedures for identifying and addressing "
+                "nonconformities. These are internal management controls that exist "
+                "outside transaction records."
+            ),
+        ))
+
+        return mappings
+
+    def generate_report(
+        self,
+        proof_ids: list[str],
+        date_range: dict,
+        coverage_since: Optional[str] = None,
+    ) -> ComplianceReport:
+        """Aggregate clause mappings across all proofs in the date range."""
+        _STATUS_RANK = {"gap": 0, "partial": 1, "covered": 2, "not_applicable": 3}
+
+        clause_acc: dict[str, dict] = {
+            clause: {"title": title, "rank": -1, "evidence": "", "proof_ids": [], "reason": None}
+            for clause, title in _ISO42001_CLAUSES
+        }
+
+        proofs_loaded = 0
+        for pid in proof_ids:
+            proof = load_proof(pid)
+            if proof is None:
+                continue
+            proofs_loaded += 1
+            for mapping in self.map_proof(proof):
+                acc = clause_acc[mapping.article]
+                rank = _STATUS_RANK.get(mapping.status, -1)
+                if mapping.status == "not_applicable":
+                    if acc["rank"] == -1:
+                        acc["rank"] = rank
+                        acc["evidence"] = mapping.evidence
+                        acc["reason"] = mapping.reason
+                elif rank > acc["rank"]:
+                    acc["rank"] = rank
+                    acc["evidence"] = mapping.evidence
+                if mapping.proof_ids:
+                    acc["proof_ids"].extend(mapping.proof_ids)
+
+        _RANK_TO_STATUS = {v: k for k, v in _STATUS_RANK.items()}
+        articles = []
+        gaps = []
+        summary = {"covered": 0, "partial": 0, "gap": 0, "not_applicable": 0}
+
+        for clause, title in _ISO42001_CLAUSES:
+            acc = clause_acc[clause]
+            rank = acc["rank"]
+            if rank == -1:
+                if clause == "§ 10.1":
+                    status = "not_applicable"
+                    evidence = "Organisational obligation — not verifiable from transaction proofs"
+                else:
+                    status = "gap"
+                    evidence = "No proofs analyzed in the selected date range"
+            else:
+                status = _RANK_TO_STATUS[rank]
+                evidence = acc["evidence"]
+
+            am = ArticleMapping(
+                article=clause,
+                title=title,
+                status=status,
+                evidence=evidence,
+                proof_ids=list(dict.fromkeys(acc["proof_ids"]))[:10],  # dedup, cap at 10
+                reason=acc.get("reason"),
+            )
+            articles.append(am)
+            summary[status] = summary.get(status, 0) + 1
+            if status == "gap":
+                gaps.append(f"{clause}: {title}")
+
+        return ComplianceReport(
+            report_id=generate_report_id(),
+            framework=self.name,
+            framework_version=self.version,
+            date_range=date_range,
+            proof_count=proofs_loaded,
+            articles=articles,
+            gaps=gaps,
+            summary=summary,
+            coverage_since=coverage_since,
+        )
+
+
+register_framework(ISO42001Framework())

@@ -206,8 +206,9 @@ GET  https://trust.arkforge.tech/.well-known/did.json  # W3C DID Document
 # MCP Security Assessment (v1.4+)
 POST https://trust.arkforge.tech/v1/assess
 
-# EU AI Act Compliance Report (v1.4+)
+# Compliance Report (v1.4+) — frameworks: eu_ai_act (default), iso_42001
 POST https://trust.arkforge.tech/v1/compliance-report
+# Body: {"framework": "eu_ai_act"|"iso_42001", "date_from": "...", "date_to": "..."}
 ```
 
 ---
