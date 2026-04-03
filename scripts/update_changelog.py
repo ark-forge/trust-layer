@@ -128,18 +128,25 @@ def update_changelog(entry: str) -> None:
 
 def main() -> None:
     if len(sys.argv) < 3:
-        print(f"Usage: {sys.argv[0]} <new_tag> <prev_tag>", file=sys.stderr)
+        print(f"Usage: {sys.argv[0]} <to_ref> <prev_tag> [label]", file=sys.stderr)
+        print(f"  to_ref   : git ref for the upper bound (tag or HEAD)", file=sys.stderr)
+        print(f"  prev_tag : tag for the lower bound (e.g. v1.3.18)", file=sys.stderr)
+        print(f"  label    : version label in the entry (defaults to to_ref)", file=sys.stderr)
         sys.exit(1)
 
-    new_tag, prev_tag = sys.argv[1], sys.argv[2]
-    print(f"Building changelog entry: {prev_tag}..{new_tag}")
+    to_ref = sys.argv[1]
+    prev_tag = sys.argv[2]
+    # label is the version string used in the CHANGELOG entry header.
+    # When the deploy script calls us before tagging, to_ref=HEAD and label=v1.3.19.
+    label = sys.argv[3] if len(sys.argv) >= 4 else to_ref
+    print(f"Building changelog entry: {prev_tag}..{to_ref} (label={label})")
 
-    commits = git_log(prev_tag, new_tag)
+    commits = git_log(prev_tag, to_ref)
     print(f"  {len(commits)} commits found")
 
-    entry = build_entry(new_tag, commits)
+    entry = build_entry(label, commits)
     update_changelog(entry)
-    print(f"  CHANGELOG.md updated — entry for {new_tag}")
+    print(f"  CHANGELOG.md updated — entry for {label}")
 
 
 if __name__ == "__main__":

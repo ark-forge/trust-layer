@@ -419,7 +419,7 @@ log "--- Phase 3: Release ---"
 
 # Update CHANGELOG.md before tagging (deploy script pushes via personal token,
 # bypassing branch protection — GITHUB_TOKEN in CI cannot)
-if python3 scripts/update_changelog.py "$NEW_TAG" "$LAST_TAG" >> "$LOG_FILE" 2>&1; then
+if python3 scripts/update_changelog.py HEAD "$LAST_TAG" "$NEW_TAG" >> "$LOG_FILE" 2>&1; then
     git add CHANGELOG.md
     git diff --cached --quiet || {
         git commit -m "docs(changelog): $NEW_TAG [skip ci]" >> "$LOG_FILE" 2>&1
