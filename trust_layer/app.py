@@ -29,6 +29,8 @@ _FAILOVER_BLOCKED_PATHS = {
     "/v1/keys/bind-did/confirm",
     "/v1/credits/buy",
     "/v1/disputes",
+    "/v1/assess",
+    "/v1/compliance-report",
 }
 
 
@@ -393,6 +395,12 @@ app.add_middleware(
 if _FAILOVER_MODE:
     app.add_middleware(FailoverReadOnlyMiddleware)
     logger.warning("FAILOVER_MODE=true — service en lecture seule (POST /v1/proxy bloqué)")
+
+# --- Feature routers (v1.4+) ---
+from .routers.assess import router as _assess_router
+from .routers.compliance import router as _compliance_router
+app.include_router(_assess_router)
+app.include_router(_compliance_router)
 
 
 # --- Helpers ---

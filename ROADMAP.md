@@ -291,10 +291,35 @@ ArkForge records, signs, and timestamps. It doesn't hold money, set prices, list
 | v2.0 (current) | `payment_evidence` object, `receipt_content_hash` in chain hash, `payment_verification` level (`fetched` / `declared`), extensible PSP parser architecture |
 | v2.1 (current) | `agent_identity` + `agent_identity_verified` fields, `did_resolution_status`, `/.well-known/agent.json` v1.4 |
 | v2.2 (Phase 2) | `payment_verification: "witnessed"` level, Stripe Connect witness |
+| v2.3 (planned) | **Assessment Receipt** — `assess_id` linkable to a proof chain. MCP server manifest hash in chain data. Enables cryptographic proof that a specific server manifest was certified at time T. Design foundations laid in v1.4.0 (`assess_id: asr_*` already stable). |
 | v3.0 (Phase 3) | Multi-PSP orchestrated payment witnesses |
 | v3.x (Dispute Protocol) | `dispute_resolution` object with arbitrator signature — resolution becomes cryptographically provable |
 
 Spec changes follow [semver](https://semver.org/). Breaking changes (chain hash formula) = major version. New optional fields = minor version.
+
+---
+
+## Phase 4 — MCP Security + Compliance Intelligence [IMPLEMENTED v1.4.0]
+
+**Goal:** Extend Trust Layer beyond transaction certification into active security posture monitoring and regulatory compliance reporting.
+
+### MCP Security Posture Assessment (`POST /v1/assess`)
+
+Analyzes MCP server manifests for security risks and drift between deployments.
+
+- **Pluggable analyzer architecture** (mirrors PSP parser registry): `BaseAnalyzer` ABC + registry + `register_analyzer()`. Built-in analyzers: `PermissionAnalyzer` (dangerous capability patterns), `DescriptionDriftAnalyzer` (tool additions/removals/changes via `difflib`), `VersionTrackingAnalyzer` (version regressions).
+- **Baseline per (api_key, server_id)** stored in `data/mcp_baselines/`. Every call updates the baseline and compares against the previous state.
+- **Assessment artifact** (`asr_*`) stored in `data/assessments/` — stable ID for future spec v2.3 Assessment Receipt.
+- **Extensibility**: new analyzers (CVE scanning, LLM-based intent analysis, OWASP mapping) require no changes to core code — subclass, implement, register.
+
+### EU AI Act Compliance Report (`POST /v1/compliance-report`)
+
+Aggregates certified proofs over a date range and maps them to EU AI Act articles.
+
+- **Pluggable framework architecture**: `BaseComplianceFramework` ABC + registry + `register_framework()`. Built-in: `EUAIActFramework` v1.0.
+- **Proof index** (`ProofIndexBackend` ABC) enables time-range queries without scanning all proof files. Redis-backed (`ZADD/ZRANGEBYSCORE`) with JSONL fallback. Migration path to SQLite is a new backend implementation, not a code change.
+- **Article mapping** (Art. 9, 10, 13, 14, 17, 22) derived from existing proof fields — no spec change required.
+- **Extensibility**: `SOC2Framework`, `ISO27001Framework`, `NISTAIRMFFramework` require only subclassing `BaseComplianceFramework`.
 
 ---
 

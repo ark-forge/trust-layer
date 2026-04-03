@@ -1017,4 +1017,205 @@ Mode B can use a **Free key** — certification only, payment is external, no mo
 
 ---
 
-*Last updated: 2026-03-30*
+## MCP Security Posture Assessment
+
+Analyze an MCP server manifest for security risks and detect changes between deployments.
+
+**What it does:**
+- Flags dangerous capability patterns (code execution, filesystem write, env access, network)
+- Detects tool drift: new tools added, tools removed, descriptions changed
+- Tracks server version changes across deployments
+- Stores a baseline per server — every call updates it
+
+**Rate limit:** 100 assessments/day per API key.
+
+### Quick start
+
+```bash
+curl -X POST https://trust.arkforge.tech/v1/assess \
+  -H "X-Api-Key: mcp_xxx..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "server_id": "my-mcp-server",
+    "manifest": {
+      "tools": [
+        {"name": "read_data", "description": "Read records from database"},
+        {"name": "write_file", "description": "Write content to a file on disk"}
+      ]
+    },
+    "server_version": "1.2.0"
+  }'
+```
+
+### Response
+
+```json
+{
+  "assess_id": "asr_20260403_120000_abc123",
+  "server_id": "my-mcp-server",
+  "assessed_at": "2026-04-03T12:00:00+00:00",
+  "risk_score": 45,
+  "findings": [
+    {
+      "analyzer": "permissions",
+      "severity": "high",
+      "tool": "write_file",
+      "message": "Tool has 'filesystem_write' capability pattern"
+    }
+  ],
+  "drift_detected": false,
+  "drift_summary": {},
+  "baseline_status": "created"
+}
+```
+
+**Fields:**
+- `risk_score` — 0–100. 0 = no findings. Higher = more risk.
+- `findings` — list of issues found. `severity`: info | low | medium | high | critical.
+- `drift_detected` — true if the manifest changed since the last call for this `server_id`.
+- `drift_summary` — `new_tools`, `removed_tools`, `changed` lists (populated when drift detected).
+- `baseline_status` — `"created"` on first call, `"updated"` on subsequent calls.
+- `assess_id` — stable identifier for this assessment (future: linkable to proofs).
+
+### Drift detection example
+
+```python
+import requests
+
+HEADERS = {"X-Api-Key": "mcp_xxx...", "Content-Type": "application/json"}
+BASE = "https://trust.arkforge.tech"
+
+def assess(server_id, tools, version=None):
+    resp = requests.post(f"{BASE}/v1/assess", headers=HEADERS, json={
+        "server_id": server_id,
+        "manifest": {"tools": tools},
+        "server_version": version,
+    })
+    return resp.json()
+
+# First call — creates baseline
+result = assess("my-server", [{"name": "echo", "description": "Echo input"}], "1.0.0")
+print(result["baseline_status"])  # → "created"
+print(result["drift_detected"])   # → False
+
+# Second call — adds a new tool
+result = assess("my-server", [
+    {"name": "echo", "description": "Echo input"},
+    {"name": "exec", "description": "Run a shell command"},
+], "1.0.1")
+print(result["drift_detected"])              # → True
+print(result["drift_summary"]["new_tools"])  # → ["exec"]
+```
+
+---
+
+## EU AI Act Compliance Report
+
+Generate a compliance report mapping your certified proofs to EU AI Act obligations.
+
+**What it does:**
+- Queries all proofs certified under your API key in a date range
+- Maps proof fields to specific AI Act articles
+- Returns article-level status: `covered` | `partial` | `gap` | `not_applicable`
+- Lists gaps for remediation planning
+
+**Applicable to:** High-risk AI systems under Annex III (Art. 9, 13, 14, 17) and all AI systems for record-keeping (Art. 22). Art. 10 (data governance) is an organisational obligation — not derivable from transaction proofs.
+
+### Quick start
+
+```bash
+curl -X POST https://trust.arkforge.tech/v1/compliance-report \
+  -H "X-Api-Key: mcp_xxx..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "framework": "eu_ai_act",
+    "date_from": "2026-01-01",
+    "date_to": "2026-03-31"
+  }'
+```
+
+### Response
+
+```json
+{
+  "report_id": "rpt_20260403_120000_abc123",
+  "framework": "eu_ai_act",
+  "framework_version": "1.0",
+  "date_range": {"from": "2026-01-01T00:00:00+00:00", "to": "2026-03-31T00:00:00+00:00"},
+  "proof_count": 42,
+  "articles": [
+    {
+      "article": "Art. 9",
+      "title": "Risk Management System",
+      "status": "covered",
+      "evidence": "42 proofs with valid chain hash",
+      "proof_count": 42,
+      "proof_sample": ["prf_20260115_...", "prf_20260116_...", "prf_20260117_..."]
+    },
+    {
+      "article": "Art. 10",
+      "title": "Data and Data Governance",
+      "status": "not_applicable",
+      "evidence": "Organisational obligation — not verifiable from transaction proofs",
+      "reason": "Art. 10 requires data governance policies and dataset documentation.",
+      "proof_count": 0
+    },
+    {
+      "article": "Art. 13",
+      "title": "Transparency and Provision of Information",
+      "status": "covered",
+      "evidence": "Agent identity, seller, and RFC 3161 timestamp present",
+      "proof_count": 42
+    }
+  ],
+  "gaps": [],
+  "summary": {"covered": 4, "partial": 0, "gap": 0, "not_applicable": 2}
+}
+```
+
+### Article coverage
+
+| Article | Title | What proves it |
+|---------|-------|---------------|
+| Art. 9  | Risk Management System | Proofs exist with valid chain hash |
+| Art. 10 | Data and Data Governance | *Not applicable* — organisational obligation |
+| Art. 13 | Transparency | `agent_identity` + `seller` + verified RFC 3161 timestamp |
+| Art. 14 | Human Oversight | `agent_identity_verified=true` (full) or `buyer_fingerprint` (partial) |
+| Art. 17 | Quality Management System | All proofs pass chain hash integrity verification |
+| Art. 22 | Record-keeping | Proof count + timestamp coverage over the period |
+
+### Python example
+
+```python
+import requests
+
+resp = requests.post(
+    "https://trust.arkforge.tech/v1/compliance-report",
+    headers={"X-Api-Key": "mcp_xxx..."},
+    json={
+        "framework": "eu_ai_act",
+        "date_from": "2026-01-01",
+        "date_to": "2026-03-31",
+    }
+)
+report = resp.json()
+print(f"Proofs analyzed: {report['proof_count']}")
+print(f"Summary: {report['summary']}")
+if report["gaps"]:
+    print(f"Gaps to address: {report['gaps']}")
+```
+
+**Notes:**
+- Only proofs created **after** v1.4.0 deployment are indexed automatically.
+  Run `python3 scripts/backfill_proof_index.py` to index pre-existing proofs.
+- `date_from` / `date_to` accept any ISO 8601 format: `2026-01-01`, `2026-01-01T00:00:00Z`, etc.
+- Currently supported framework: `eu_ai_act`. More frameworks (SOC2, ISO 27001, NIST AI RMF) are planned.
+
+---
+
+- **Quick reference**: [quick-reference.md](./quick-reference.md)
+- **Support**: contact@arkforge.tech
+
+---
+
+*Last updated: 2026-04-03*

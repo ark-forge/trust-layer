@@ -20,7 +20,10 @@ CONVERSION_EVENTS_LOG = DATA_DIR / "conversion_events.jsonl"
 IDEMPOTENCY_DIR = DATA_DIR / "idempotency"
 AGENTS_DIR = DATA_DIR / "agents"
 SERVICES_DIR = DATA_DIR / "services"
-for _d in (IDEMPOTENCY_DIR, AGENTS_DIR, SERVICES_DIR):
+MCP_BASELINES_DIR = DATA_DIR / "mcp_baselines"
+ASSESSMENTS_DIR = DATA_DIR / "assessments"
+PROOF_INDEX_FILE = DATA_DIR / "proof_index.jsonl"
+for _d in (IDEMPOTENCY_DIR, AGENTS_DIR, SERVICES_DIR, MCP_BASELINES_DIR, ASSESSMENTS_DIR):
     _d.mkdir(exist_ok=True)
 
 # --- Load secrets: vault first, settings.env fallback ---

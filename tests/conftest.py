@@ -87,6 +87,23 @@ def _isolate_data(tmp_path, monkeypatch):
     import trust_layer.email_notify as email_mod
     monkeypatch.setattr(email_mod, "_send_email", lambda *a, **kw: None)
 
+    # --- Feature routers: assess + compliance ---
+    monkeypatch.setattr(cfg, "MCP_BASELINES_DIR", tmp_path / "data" / "mcp_baselines")
+    monkeypatch.setattr(cfg, "ASSESSMENTS_DIR", tmp_path / "data" / "assessments")
+    monkeypatch.setattr(cfg, "PROOF_INDEX_FILE", tmp_path / "data" / "proof_index.jsonl")
+    for _feat_dir in ["data/mcp_baselines", "data/assessments"]:
+        (tmp_path / _feat_dir).mkdir(parents=True, exist_ok=True)
+
+    import trust_layer.mcp_assess as assess_mod
+    monkeypatch.setattr(assess_mod, "MCP_BASELINES_DIR", tmp_path / "data" / "mcp_baselines")
+    monkeypatch.setattr(assess_mod, "ASSESSMENTS_DIR", tmp_path / "data" / "assessments")
+
+    import trust_layer.proof_index as pidx_mod
+    monkeypatch.setattr(pidx_mod, "PROOF_INDEX_FILE", tmp_path / "data" / "proof_index.jsonl")
+    # Reset proof_index singleton so each test gets a fresh File backend pointing to tmp_path
+    monkeypatch.setattr(pidx_mod, "_index_backend", None)
+    monkeypatch.setattr(pidx_mod, "_index_checked", False)
+
 
 @pytest.fixture
 def test_api_key(tmp_path):

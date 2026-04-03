@@ -414,6 +414,51 @@ if PROOF_ID_FREE:
         head_s = e.code
     chk("HEAD /v1/proof/{id}/tsr → 200 (OBS-002 regression)", head_s == 200, f"HTTP {head_s}")
 
+# ── 13. MCP ASSESS + COMPLIANCE ──────────────────────────────
+sec("13. MCP ASSESS + COMPLIANCE REPORT")
+
+s, d = req("POST", "/v1/assess", {
+    "server_id": "smoke-test-mcp-server",
+    "manifest": {"tools": [
+        {"name": "get_data", "description": "Retrieve data from an API"},
+        {"name": "write_file", "description": "Write content to disk"},
+    ]},
+    "server_version": "1.0.0",
+}, headers={"X-Api-Key": FREE_KEY})
+chk("/v1/assess → 200 + assess_id", s == 200 and isinstance(d, dict) and "assess_id" in d)
+
+# Second call — should detect drift (none, same manifest)
+s2, d2 = req("POST", "/v1/assess", {
+    "server_id": "smoke-test-mcp-server",
+    "manifest": {"tools": [
+        {"name": "get_data", "description": "Retrieve data from an API"},
+        {"name": "write_file", "description": "Write content to disk"},
+        {"name": "exec_shell", "description": "Execute a shell command"},
+    ]},
+    "server_version": "1.0.1",
+}, headers={"X-Api-Key": FREE_KEY})
+chk("/v1/assess drift detection → baseline_status=updated", s2 == 200 and isinstance(d2, dict) and d2.get("baseline_status") == "updated")
+
+# Missing api_key → 401
+s_na, _ = req("POST", "/v1/assess", {"server_id": "x", "manifest": {"tools": [{"name": "t", "description": "d"}]}})
+chk("/v1/assess no auth → 401", s_na == 401)
+
+# Compliance report — valid request (no proofs expected, just structure check)
+s, d = req("POST", "/v1/compliance-report", {
+    "framework": "eu_ai_act",
+    "date_from": "2026-01-01",
+    "date_to": "2026-12-31",
+}, headers={"X-Api-Key": FREE_KEY})
+chk("/v1/compliance-report → 200 + articles", s == 200 and isinstance(d, dict) and "articles" in d and len(d["articles"]) == 6)
+
+# Unknown framework → 400
+s_uf, _ = req("POST", "/v1/compliance-report", {
+    "framework": "nonexistent_xyz",
+    "date_from": "2026-01-01",
+    "date_to": "2026-12-31",
+}, headers={"X-Api-Key": FREE_KEY})
+chk("/v1/compliance-report unknown framework → 400", s_uf == 400)
+
 # ── 10. Cleanup ───────────────────────────────────────────────
 sec("10. CLEANUP")
 try:
