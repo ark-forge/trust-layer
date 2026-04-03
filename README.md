@@ -192,6 +192,24 @@ Human client hires agent → agent routes all calls through ArkForge
 - Identity mismatch across calls is flagged: `identity_consistent: false`.
 - Reputation score (0–100) computed deterministically from proof history. No ML, no reviews. [Formula](#reputation-score).
 
+### Compliance reports
+Generate framework-mapped compliance evidence from your certified proofs:
+
+| Framework | Identifier | Scope |
+|-----------|------------|-------|
+| EU AI Act (Regulation 2024/1689) | `eu_ai_act` | Articles 9, 10, 13, 14, 17, 22 |
+| ISO/IEC 42001:2023 | `iso_42001` | Clauses 6.1, 8.2, 8.4, 9.1, 9.2, 10.1 |
+| NIST AI RMF 1.0 | `nist_ai_rmf` | GOVERN 1.1, MAP 1.1/5.2, MEASURE 1.1/2.5, MANAGE 1.3/4.1 |
+| SOC 2 Readiness | `soc2_readiness` | CC6.1, CC6.7, CC7.2, PI1.1, PI1.2, A1.1 |
+
+```bash
+curl -X POST https://trust.arkforge.tech/v1/compliance-report \
+  -H "X-Api-Key: mcp_xxx..." \
+  -d '{"framework": "nist_ai_rmf", "date_from": "2026-01-01", "date_to": "2026-03-31"}'
+```
+
+> **SOC 2 note:** `soc2_readiness` produces readiness evidence, not a formal SOC 2 audit opinion. A Type II report requires an independent CPA firm accredited by the AICPA.
+
 ### Triptyque de la Preuve
 Every transaction carries the ArkForge mark at three levels:
 

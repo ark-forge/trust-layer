@@ -1209,7 +1209,7 @@ if report["gaps"]:
 - Only proofs created **after** v1.3.18 deployment are indexed automatically.
   Run `python3 scripts/backfill_proof_index.py` to index pre-existing proofs.
 - `date_from` / `date_to` accept any ISO 8601 format: `2026-01-01`, `2026-01-01T00:00:00Z`, etc.
-- Supported frameworks: `eu_ai_act` (default), `iso_42001`. More frameworks (SOC2, NIST AI RMF) are planned.
+- Supported frameworks: `eu_ai_act` (default), `iso_42001`, `nist_ai_rmf`, `soc2_readiness`.
 
 ---
 
@@ -1307,6 +1307,77 @@ if report["gaps"]:
   Run `python3 scripts/backfill_proof_index.py` to index pre-existing proofs.
 - `date_from` / `date_to` accept any ISO 8601 format: `2026-01-01`, `2026-01-01T00:00:00Z`, etc.
 - § 8.4 requires `agent_version` in proof `parties`. Agents that do not report their version will yield `partial` status on this clause.
+
+---
+
+## NIST AI RMF 1.0 Compliance Report
+
+Generate a compliance report mapping your certified proofs to NIST AI Risk Management Framework subcategories.
+
+**Applicable to:** Organisations implementing the NIST AI RMF across the four core functions: GOVERN, MAP, MEASURE, MANAGE.
+
+### Quick start
+
+```bash
+curl -X POST https://trust.arkforge.tech/v1/compliance-report \
+  -H "X-Api-Key: mcp_xxx..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "framework": "nist_ai_rmf",
+    "date_from": "2026-01-01",
+    "date_to": "2026-03-31"
+  }'
+```
+
+### Subcategory coverage
+
+| ID | Function | Title | What proves it |
+|----|----------|-------|---------------|
+| GOVERN 1.1 | GOVERN | AI Risk Policies and Procedures | *Not applicable* — organisational obligation |
+| MAP 1.1 | MAP | AI System Context Established | `spec_version` + `parties.agent_identity` |
+| MAP 5.2 | MAP | AI Risk Tracking Practices | `hashes.chain` present |
+| MEASURE 1.1 | MEASURE | Risk Measurement Methods | Proof chain hash integrity verifiable |
+| MEASURE 2.5 | MEASURE | AI System Performance Monitored | RFC 3161 verified timestamp |
+| MANAGE 1.3 | MANAGE | Risk Treatment Documented | Chain hash + integrity verified |
+| MANAGE 4.1 | MANAGE | Risk Monitoring Established | `proof_id` + `timestamp` present |
+
+**Reference:** NIST AI 100-1 (2023) — https://doi.org/10.6028/NIST.AI.100-1
+
+---
+
+## SOC 2 Readiness Report
+
+Generate a SOC 2 readiness evidence report mapping your certified proofs to AICPA Trust Service Criteria.
+
+> **Important:** This report produces *readiness evidence*, not a formal SOC 2 audit opinion. A SOC 2 Type II report requires an independent CPA firm accredited by the AICPA. Use this report to prepare for an audit, not to replace one.
+
+**Applicable to:** SaaS organisations preparing for a SOC 2 Type II audit, particularly around processing integrity and security controls.
+
+### Quick start
+
+```bash
+curl -X POST https://trust.arkforge.tech/v1/compliance-report \
+  -H "X-Api-Key: mcp_xxx..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "framework": "soc2_readiness",
+    "date_from": "2026-01-01",
+    "date_to": "2026-03-31"
+  }'
+```
+
+### Criteria coverage
+
+| Criterion | Category | Title | What proves it |
+|-----------|----------|-------|---------------|
+| CC6.1 | Security | Logical Access Controls | `buyer_fingerprint` + `seller` in proof |
+| CC6.7 | Security | Transmission and Movement Integrity | `hashes.request` + `hashes.response` + `hashes.chain` |
+| CC7.2 | Security | Security Event Monitoring | RFC 3161 verified timestamp |
+| PI1.1 | Processing Integrity | Completeness | Proof chain hash integrity verifiable |
+| PI1.2 | Processing Integrity | Accuracy | `proof_id` + `timestamp` + `certification_fee.status == "succeeded"` |
+| A1.1 | Availability | Availability Monitoring | *Not applicable* — infrastructure obligation |
+
+**Reference:** AICPA Trust Services Criteria (2017, updated 2022)
 
 ---
 

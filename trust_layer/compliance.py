@@ -597,3 +597,519 @@ class ISO42001Framework(BaseComplianceFramework):
 
 
 register_framework(ISO42001Framework())
+
+
+# ---------------------------------------------------------------------------
+# NIST AI RMF 1.0 Framework
+# ---------------------------------------------------------------------------
+
+_NIST_AI_RMF_SUBCATEGORIES = [
+    ("GOVERN 1.1", "AI Risk Policies and Procedures"),
+    ("MAP 1.1",    "AI System Context Established"),
+    ("MAP 5.2",    "AI Risk Tracking Practices"),
+    ("MEASURE 1.1","Risk Measurement Methods"),
+    ("MEASURE 2.5","AI System Performance Monitored"),
+    ("MANAGE 1.3", "Risk Treatment Documented"),
+    ("MANAGE 4.1", "Risk Monitoring Established"),
+]
+
+
+class NISTAIRMFFramework(BaseComplianceFramework):
+    """NIST AI Risk Management Framework 1.0 compliance mapping.
+
+    Maps Trust Layer proof fields to verifiable RMF subcategories across
+    the four core functions: GOVERN, MAP, MEASURE, MANAGE.
+
+    Organisational subcategories (GOVERN 1.1) are marked not_applicable
+    as they require policy documentation outside transaction records.
+
+    Reference: NIST AI 100-1 (2023), https://doi.org/10.6028/NIST.AI.100-1
+    """
+
+    name = "nist_ai_rmf"
+    version = "1.0"
+
+    def map_proof(self, proof: dict) -> list[ArticleMapping]:
+        """Map a single proof to NIST AI RMF subcategories.
+
+        Returns one ArticleMapping per subcategory (7 total).
+        """
+        hashes = proof.get("hashes", {})
+        parties = proof.get("parties", {})
+        tsa = proof.get("timestamp_authority", {})
+        proof_id = proof.get("proof_id", "")
+
+        mappings = []
+
+        # GOVERN 1.1 — AI Risk Policies: organisational obligation
+        mappings.append(ArticleMapping(
+            article="GOVERN 1.1",
+            title="AI Risk Policies and Procedures",
+            status="not_applicable",
+            evidence="Organisational obligation — not verifiable from transaction proofs",
+            reason=(
+                "GOVERN 1.1 requires documented AI risk policies and governance structures. "
+                "These are organisational controls that exist outside transaction records."
+            ),
+        ))
+
+        # MAP 1.1 — AI System Context: spec_version + agent_identity document the system
+        spec_version = proof.get("spec_version", "")
+        agent_identity = parties.get("agent_identity", "")
+        if spec_version and agent_identity:
+            m11_status = "covered"
+            m11_evidence = (
+                f"AI system context documented: spec v{spec_version}, "
+                f"agent identity {str(agent_identity)[:40]}"
+            )
+        elif spec_version or agent_identity:
+            m11_status = "partial"
+            missing = []
+            if not spec_version:
+                missing.append("spec_version")
+            if not agent_identity:
+                missing.append("agent_identity")
+            m11_evidence = f"Partial context: missing {', '.join(missing)}"
+        else:
+            m11_status = "gap"
+            m11_evidence = "No system context documented in proof"
+        mappings.append(ArticleMapping(
+            article="MAP 1.1",
+            title="AI System Context Established",
+            status=m11_status,
+            evidence=m11_evidence,
+            proof_ids=[proof_id] if m11_status != "gap" else [],
+        ))
+
+        # MAP 5.2 — AI Risk Tracking: chain hash documents each AI action
+        chain_ok = bool(hashes.get("chain"))
+        mappings.append(ArticleMapping(
+            article="MAP 5.2",
+            title="AI Risk Tracking Practices",
+            status="covered" if chain_ok else "gap",
+            evidence="Cryptographic chain hash tracks each AI action for risk traceability"
+                     if chain_ok else "Proof missing chain hash — risk tracking gap",
+            proof_ids=[proof_id] if chain_ok else [],
+        ))
+
+        # MEASURE 1.1 — Risk Measurement Methods: integrity verifiable = measurement established
+        integrity_ok = verify_proof_integrity(proof)
+        if integrity_ok:
+            ms11_status = "covered"
+            ms11_evidence = "Proof chain hash integrity verified — risk measurement is tamper-proof"
+        elif chain_ok:
+            ms11_status = "partial"
+            ms11_evidence = "Chain hash present but integrity check failed — measurement reliability compromised"
+        else:
+            ms11_status = "gap"
+            ms11_evidence = "No chain hash — risk measurement evidence unavailable"
+        mappings.append(ArticleMapping(
+            article="MEASURE 1.1",
+            title="Risk Measurement Methods",
+            status=ms11_status,
+            evidence=ms11_evidence,
+            proof_ids=[proof_id] if ms11_status == "covered" else [],
+        ))
+
+        # MEASURE 2.5 — AI System Performance Monitored: RFC 3161 verified timestamp
+        tsa_ok = tsa.get("status") == "verified"
+        ts = proof.get("timestamp", "")
+        if tsa_ok:
+            ms25_status = "covered"
+            ms25_evidence = "RFC 3161 verified timestamp — performance monitoring evidence is non-repudiable"
+        elif ts:
+            ms25_status = "partial"
+            ms25_evidence = (
+                "Timestamp present but RFC 3161 verification failed — "
+                "monitoring evidence not independently verifiable"
+            )
+        else:
+            ms25_status = "gap"
+            ms25_evidence = "No timestamp — AI system performance monitoring evidence unavailable"
+        mappings.append(ArticleMapping(
+            article="MEASURE 2.5",
+            title="AI System Performance Monitored",
+            status=ms25_status,
+            evidence=ms25_evidence,
+            proof_ids=[proof_id] if ms25_status != "gap" else [],
+        ))
+
+        # MANAGE 1.3 — Risk Treatment Documented: chain hash + integrity = treatment on record
+        if integrity_ok:
+            mg13_status = "covered"
+            mg13_evidence = "Risk treatment documented: verified proof chain records the AI action and its context"
+        elif chain_ok:
+            mg13_status = "partial"
+            mg13_evidence = "Chain hash present but integrity failed — risk treatment record may be compromised"
+        else:
+            mg13_status = "gap"
+            mg13_evidence = "No chain hash — risk treatment not documented"
+        mappings.append(ArticleMapping(
+            article="MANAGE 1.3",
+            title="Risk Treatment Documented",
+            status=mg13_status,
+            evidence=mg13_evidence,
+            proof_ids=[proof_id] if mg13_status == "covered" else [],
+        ))
+
+        # MANAGE 4.1 — Risk Monitoring Established: proof_id + timestamp = monitoring record exists
+        ts_present = bool(ts)
+        if proof_id and ts_present:
+            mg41_status = "covered"
+            mg41_evidence = f"Immutable monitoring record established: proof {proof_id[:24]} at {ts[:10]}"
+        elif proof_id or ts_present:
+            mg41_status = "partial"
+            mg41_evidence = "Partial monitoring record: " + ("proof_id present" if proof_id else "timestamp present")
+        else:
+            mg41_status = "gap"
+            mg41_evidence = "No monitoring record established"
+        mappings.append(ArticleMapping(
+            article="MANAGE 4.1",
+            title="Risk Monitoring Established",
+            status=mg41_status,
+            evidence=mg41_evidence,
+            proof_ids=[proof_id] if mg41_status != "gap" else [],
+        ))
+
+        return mappings
+
+    def generate_report(
+        self,
+        proof_ids: list[str],
+        date_range: dict,
+        coverage_since: Optional[str] = None,
+    ) -> ComplianceReport:
+        """Aggregate subcategory mappings across all proofs in the date range."""
+        _STATUS_RANK = {"gap": 0, "partial": 1, "covered": 2, "not_applicable": 3}
+
+        acc: dict[str, dict] = {
+            sub: {"title": title, "rank": -1, "evidence": "", "proof_ids": [], "reason": None}
+            for sub, title in _NIST_AI_RMF_SUBCATEGORIES
+        }
+
+        proofs_loaded = 0
+        for pid in proof_ids:
+            proof = load_proof(pid)
+            if proof is None:
+                continue
+            proofs_loaded += 1
+            for mapping in self.map_proof(proof):
+                entry = acc[mapping.article]
+                rank = _STATUS_RANK.get(mapping.status, -1)
+                if mapping.status == "not_applicable":
+                    if entry["rank"] == -1:
+                        entry["rank"] = rank
+                        entry["evidence"] = mapping.evidence
+                        entry["reason"] = mapping.reason
+                elif rank > entry["rank"]:
+                    entry["rank"] = rank
+                    entry["evidence"] = mapping.evidence
+                if mapping.proof_ids:
+                    entry["proof_ids"].extend(mapping.proof_ids)
+
+        _RANK_TO_STATUS = {v: k for k, v in _STATUS_RANK.items()}
+        articles = []
+        gaps = []
+        summary = {"covered": 0, "partial": 0, "gap": 0, "not_applicable": 0}
+
+        for sub, title in _NIST_AI_RMF_SUBCATEGORIES:
+            entry = acc[sub]
+            rank = entry["rank"]
+            if rank == -1:
+                if sub == "GOVERN 1.1":
+                    status = "not_applicable"
+                    evidence = "Organisational obligation — not verifiable from transaction proofs"
+                else:
+                    status = "gap"
+                    evidence = "No proofs analyzed in the selected date range"
+            else:
+                status = _RANK_TO_STATUS[rank]
+                evidence = entry["evidence"]
+
+            am = ArticleMapping(
+                article=sub,
+                title=title,
+                status=status,
+                evidence=evidence,
+                proof_ids=list(dict.fromkeys(entry["proof_ids"]))[:10],
+                reason=entry.get("reason"),
+            )
+            articles.append(am)
+            summary[status] = summary.get(status, 0) + 1
+            if status == "gap":
+                gaps.append(f"{sub}: {title}")
+
+        return ComplianceReport(
+            report_id=generate_report_id(),
+            framework=self.name,
+            framework_version=self.version,
+            date_range=date_range,
+            proof_count=proofs_loaded,
+            articles=articles,
+            gaps=gaps,
+            summary=summary,
+            coverage_since=coverage_since,
+        )
+
+
+register_framework(NISTAIRMFFramework())
+
+
+# ---------------------------------------------------------------------------
+# SOC 2 Readiness Framework
+# ---------------------------------------------------------------------------
+
+_SOC2_CRITERIA = [
+    ("CC6.1", "Logical Access Controls"),
+    ("CC6.7", "Transmission and Movement Integrity"),
+    ("CC7.2", "Security Event Monitoring"),
+    ("PI1.1", "Processing Integrity — Completeness"),
+    ("PI1.2", "Processing Integrity — Accuracy"),
+    ("A1.1",  "Availability Monitoring"),
+]
+
+
+class SOC2ReadinessFramework(BaseComplianceFramework):
+    """SOC 2 Readiness mapping — Trust Service Criteria evidence.
+
+    Maps Trust Layer proof fields to SOC 2 Trust Service Criteria (TSC)
+    as *readiness evidence*, not as a formal SOC 2 audit report.
+
+    IMPORTANT: This framework produces readiness evidence, not a SOC 2
+    audit opinion. A formal SOC 2 Type II report requires an independent
+    CPA firm accredited by the AICPA. Use this report to prepare for
+    an audit, not to replace one.
+
+    Criteria covered:
+    - CC6.1: Logical access — API key auth chain (buyer_fingerprint + seller)
+    - CC6.7: Transmission integrity — chain hash protects data in transit
+    - CC7.2: Security event monitoring — RFC 3161 timestamped events
+    - PI1.1: Processing completeness — proof chain hash integrity
+    - PI1.2: Processing accuracy — proof_id + timestamp + certification_fee status
+    - A1.1: Availability monitoring — not_applicable (infrastructure concern)
+
+    Reference: AICPA Trust Services Criteria (2017, updated 2022)
+    """
+
+    name = "soc2_readiness"
+    version = "1.0"
+
+    def map_proof(self, proof: dict) -> list[ArticleMapping]:
+        """Map a single proof to SOC 2 Trust Service Criteria.
+
+        Returns one ArticleMapping per criterion (6 total).
+        """
+        hashes = proof.get("hashes", {})
+        parties = proof.get("parties", {})
+        tsa = proof.get("timestamp_authority", {})
+        fee = proof.get("certification_fee", {})
+        proof_id = proof.get("proof_id", "")
+
+        mappings = []
+
+        # CC6.1 — Logical Access Controls: API key auth chain documented
+        buyer_fp = parties.get("buyer_fingerprint", "")
+        seller = parties.get("seller", "")
+        if buyer_fp and seller:
+            cc61_status = "covered"
+            cc61_evidence = "Logical access documented: buyer fingerprint + seller identity in proof"
+        elif buyer_fp or seller:
+            cc61_status = "partial"
+            missing = []
+            if not buyer_fp:
+                missing.append("buyer_fingerprint")
+            if not seller:
+                missing.append("seller")
+            cc61_evidence = f"Partial access evidence: missing {', '.join(missing)}"
+        else:
+            cc61_status = "gap"
+            cc61_evidence = "No access control evidence in proof"
+        mappings.append(ArticleMapping(
+            article="CC6.1",
+            title="Logical Access Controls",
+            status=cc61_status,
+            evidence=cc61_evidence,
+            proof_ids=[proof_id] if cc61_status != "gap" else [],
+        ))
+
+        # CC6.7 — Transmission Integrity: chain hash protects data in transit
+        chain_ok = bool(hashes.get("chain"))
+        req_ok = bool(hashes.get("request"))
+        resp_ok = bool(hashes.get("response"))
+        if chain_ok and req_ok and resp_ok:
+            cc67_status = "covered"
+            cc67_evidence = "Request, response, and chain hashes present — transmission integrity verifiable"
+        elif chain_ok or (req_ok and resp_ok):
+            cc67_status = "partial"
+            cc67_evidence = "Partial hash coverage — transmission integrity partially verifiable"
+        else:
+            cc67_status = "gap"
+            cc67_evidence = "No hashes present — transmission integrity not verifiable"
+        mappings.append(ArticleMapping(
+            article="CC6.7",
+            title="Transmission and Movement Integrity",
+            status=cc67_status,
+            evidence=cc67_evidence,
+            proof_ids=[proof_id] if cc67_status != "gap" else [],
+        ))
+
+        # CC7.2 — Security Event Monitoring: RFC 3161 timestamped events
+        tsa_ok = tsa.get("status") == "verified"
+        ts = proof.get("timestamp", "")
+        if tsa_ok:
+            cc72_status = "covered"
+            cc72_evidence = "Security events monitored: RFC 3161 verified timestamp on every proof"
+        elif ts:
+            cc72_status = "partial"
+            cc72_evidence = (
+                "Timestamp present but RFC 3161 verification failed — "
+                "event monitoring not independently verifiable"
+            )
+        else:
+            cc72_status = "gap"
+            cc72_evidence = "No timestamp — security event monitoring evidence unavailable"
+        mappings.append(ArticleMapping(
+            article="CC7.2",
+            title="Security Event Monitoring",
+            status=cc72_status,
+            evidence=cc72_evidence,
+            proof_ids=[proof_id] if cc72_status != "gap" else [],
+        ))
+
+        # PI1.1 — Processing Integrity — Completeness: proof chain integrity verifiable
+        integrity_ok = verify_proof_integrity(proof)
+        if integrity_ok:
+            pi11_status = "covered"
+            pi11_evidence = "Processing completeness verified: chain hash integrity check passed"
+        elif chain_ok:
+            pi11_status = "partial"
+            pi11_evidence = "Chain hash present but integrity check failed — completeness unverifiable"
+        else:
+            pi11_status = "gap"
+            pi11_evidence = "No chain hash — processing completeness cannot be verified"
+        mappings.append(ArticleMapping(
+            article="PI1.1",
+            title="Processing Integrity — Completeness",
+            status=pi11_status,
+            evidence=pi11_evidence,
+            proof_ids=[proof_id] if pi11_status == "covered" else [],
+        ))
+
+        # PI1.2 — Processing Accuracy: proof_id + timestamp + fee status
+        fee_ok = fee.get("status") == "succeeded"
+        ts_ok = bool(ts)
+        if proof_id and ts_ok and fee_ok:
+            pi12_status = "covered"
+            pi12_evidence = "Processing accuracy documented: proof ID, timestamp, and succeeded certification fee"
+        elif proof_id and ts_ok:
+            pi12_status = "partial"
+            missing_pi = []
+            if not fee_ok:
+                missing_pi.append("certification_fee.status=succeeded")
+            pi12_evidence = f"Partial accuracy evidence: missing {', '.join(missing_pi)}"
+        else:
+            pi12_status = "gap"
+            pi12_evidence = "Insufficient fields to establish processing accuracy"
+        mappings.append(ArticleMapping(
+            article="PI1.2",
+            title="Processing Integrity — Accuracy",
+            status=pi12_status,
+            evidence=pi12_evidence,
+            proof_ids=[proof_id] if pi12_status != "gap" else [],
+        ))
+
+        # A1.1 — Availability Monitoring: infrastructure concern, not derivable from proofs
+        mappings.append(ArticleMapping(
+            article="A1.1",
+            title="Availability Monitoring",
+            status="not_applicable",
+            evidence="Infrastructure obligation — not verifiable from transaction proofs",
+            reason=(
+                "A1.1 requires capacity planning, availability monitoring, and incident "
+                "response for the infrastructure layer. These controls exist outside "
+                "transaction records and require infrastructure-level evidence."
+            ),
+        ))
+
+        return mappings
+
+    def generate_report(
+        self,
+        proof_ids: list[str],
+        date_range: dict,
+        coverage_since: Optional[str] = None,
+    ) -> ComplianceReport:
+        """Aggregate TSC criterion mappings across all proofs in the date range."""
+        _STATUS_RANK = {"gap": 0, "partial": 1, "covered": 2, "not_applicable": 3}
+
+        acc: dict[str, dict] = {
+            crit: {"title": title, "rank": -1, "evidence": "", "proof_ids": [], "reason": None}
+            for crit, title in _SOC2_CRITERIA
+        }
+
+        proofs_loaded = 0
+        for pid in proof_ids:
+            proof = load_proof(pid)
+            if proof is None:
+                continue
+            proofs_loaded += 1
+            for mapping in self.map_proof(proof):
+                entry = acc[mapping.article]
+                rank = _STATUS_RANK.get(mapping.status, -1)
+                if mapping.status == "not_applicable":
+                    if entry["rank"] == -1:
+                        entry["rank"] = rank
+                        entry["evidence"] = mapping.evidence
+                        entry["reason"] = mapping.reason
+                elif rank > entry["rank"]:
+                    entry["rank"] = rank
+                    entry["evidence"] = mapping.evidence
+                if mapping.proof_ids:
+                    entry["proof_ids"].extend(mapping.proof_ids)
+
+        _RANK_TO_STATUS = {v: k for k, v in _STATUS_RANK.items()}
+        articles = []
+        gaps = []
+        summary = {"covered": 0, "partial": 0, "gap": 0, "not_applicable": 0}
+
+        for crit, title in _SOC2_CRITERIA:
+            entry = acc[crit]
+            rank = entry["rank"]
+            if rank == -1:
+                if crit == "A1.1":
+                    status = "not_applicable"
+                    evidence = "Infrastructure obligation — not verifiable from transaction proofs"
+                else:
+                    status = "gap"
+                    evidence = "No proofs analyzed in the selected date range"
+            else:
+                status = _RANK_TO_STATUS[rank]
+                evidence = entry["evidence"]
+
+            am = ArticleMapping(
+                article=crit,
+                title=title,
+                status=status,
+                evidence=evidence,
+                proof_ids=list(dict.fromkeys(entry["proof_ids"]))[:10],
+                reason=entry.get("reason"),
+            )
+            articles.append(am)
+            summary[status] = summary.get(status, 0) + 1
+            if status == "gap":
+                gaps.append(f"{crit}: {title}")
+
+        return ComplianceReport(
+            report_id=generate_report_id(),
+            framework=self.name,
+            framework_version=self.version,
+            date_range=date_range,
+            proof_count=proofs_loaded,
+            articles=articles,
+            gaps=gaps,
+            summary=summary,
+            coverage_since=coverage_since,
+        )
+
+
+register_framework(SOC2ReadinessFramework())

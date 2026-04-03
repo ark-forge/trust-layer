@@ -73,7 +73,7 @@ async def compliance_report_endpoint(
     Aggregates proofs certified under this API key and maps them to the
     requested compliance framework's articles.
 
-    Supported frameworks: eu_ai_act, iso_42001
+    Supported frameworks: eu_ai_act, iso_42001, nist_ai_rmf, soc2_readiness
 
     Returns article-level coverage with status (covered/partial/gap/not_applicable),
     evidence summaries, and a gaps list for remediation planning.

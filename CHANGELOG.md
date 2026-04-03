@@ -6,6 +6,33 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.23] — 2026-04-03
+
+### Added
+- **NIST AI RMF 1.0 compliance framework** — `POST /v1/compliance-report` accepts `"framework": "nist_ai_rmf"`.
+  Maps Trust Layer proof fields to 7 subcategories across GOVERN, MAP, MEASURE, MANAGE:
+  - GOVERN 1.1 Risk Policies (not_applicable), MAP 1.1 Context (spec + agent_identity),
+    MAP 5.2 Risk Tracking (chain hash), MEASURE 1.1 Measurement (integrity),
+    MEASURE 2.5 Monitoring (RFC 3161), MANAGE 1.3 Treatment (chain + integrity),
+    MANAGE 4.1 Monitoring (proof_id + timestamp)
+- **SOC 2 Readiness framework** — `POST /v1/compliance-report` accepts `"framework": "soc2_readiness"`.
+  Maps to 6 AICPA Trust Service Criteria:
+  - CC6.1 Logical Access (buyer_fp + seller), CC6.7 Transmission Integrity (all 3 hashes),
+    CC7.2 Security Monitoring (RFC 3161), PI1.1 Completeness (integrity),
+    PI1.2 Accuracy (proof_id + timestamp + fee), A1.1 Availability (not_applicable)
+  - Prominent disclaimer: readiness evidence only, not a formal SOC 2 audit opinion
+- 27 new tests — map_proof + generate_report + endpoint integration for both frameworks.
+  522 → 549 total, 0 regressions.
+- `README.md` — compliance reports section listing all 4 frameworks with curl example.
+- `docs/user-guide.md` — NIST AI RMF and SOC 2 Readiness sections with criteria tables.
+- `docs/quick-reference.md` — compliance endpoint updated to list all 4 frameworks.
+
+### Changed
+- `POST /v1/compliance-report` docstring: lists all 4 supported frameworks.
+- `docs/user-guide.md`: "More frameworks planned" note replaced with full list.
+
+---
+
 ## [1.3.21] — 2026-04-03
 
 ### Added
