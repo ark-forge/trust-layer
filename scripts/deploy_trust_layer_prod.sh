@@ -435,6 +435,47 @@ git push origin "$NEW_TAG" >> "$LOG_FILE" 2>&1
 log "Tag $NEW_TAG pushed"
 
 # ============================================================
+# PHASE 3b — SYNC arkforge-mcp (PyPI)
+# ============================================================
+log "--- Phase 3b: Sync arkforge-mcp ---"
+MCP_DIR="/opt/claude-ceo/workspace/mcp-servers/arkforge-trust"
+MCP_RESULT="skipped"
+
+if [ ! -d "$MCP_DIR" ]; then
+    log "WARN: arkforge-mcp not found at $MCP_DIR — skipping MCP sync"
+else
+    cd "$MCP_DIR"
+
+    # Bump patch version in pyproject.toml
+    CURRENT_MCP=$(grep '^version' pyproject.toml | grep -oP '[\d.]+')
+    MCP_MAJOR=$(echo "$CURRENT_MCP" | cut -d. -f1)
+    MCP_MINOR=$(echo "$CURRENT_MCP" | cut -d. -f2)
+    MCP_PATCH=$(echo "$CURRENT_MCP" | cut -d. -f3)
+    NEW_MCP="${MCP_MAJOR}.${MCP_MINOR}.$((MCP_PATCH + 1))"
+
+    sed -i "s/^version = .*/version = \"$NEW_MCP\"/" pyproject.toml
+    sed -i "s/arkforge-mcp\/[0-9][0-9.]*/arkforge-mcp\/$NEW_MCP/" src/arkforge_mcp/server.py
+
+    # Build + publish
+    if rm -rf dist/ && python3 -m build -q >> "$LOG_FILE" 2>&1 \
+        && twine upload dist/* -q >> "$LOG_FILE" 2>&1; then
+        log "MCP $CURRENT_MCP → $NEW_MCP published to PyPI"
+        MCP_RESULT="$CURRENT_MCP → $NEW_MCP"
+
+        # Commit + push to arkforge-mcp repo
+        git add pyproject.toml src/arkforge_mcp/server.py
+        git commit -m "chore: sync to trust-layer $NEW_TAG" >> "$LOG_FILE" 2>&1
+        git push >> "$LOG_FILE" 2>&1
+        log "arkforge-mcp repo updated (aligned with TL $NEW_TAG)"
+    else
+        log "WARN: MCP publish failed — Trust Layer deploy NOT rolled back (non-blocking)"
+        MCP_RESULT="FAILED"
+    fi
+
+    cd "$REPO_DIR"
+fi
+
+# ============================================================
 # PHASE 4 — NOTIFICATION
 # ============================================================
 SMOKE_STATUS_MSG=""
@@ -443,7 +484,8 @@ if [ "$SKIP_SMOKE" = true ]; then
 elif [ "${SMOKE_RESULT:-}" = "PASSED" ]; then
     SMOKE_STATUS_MSG=" | smoke: ✓"
 fi
-NOTIFY_MSG="Deploy $LAST_TAG → $NEW_TAG OK${SMOKE_STATUS_MSG}\n\n${CHANGELOG}"
+MCP_STATUS_MSG=" | mcp: $MCP_RESULT"
+NOTIFY_MSG="Deploy $LAST_TAG → $NEW_TAG OK${SMOKE_STATUS_MSG}${MCP_STATUS_MSG}\n\n${CHANGELOG}"
 telegram_notify "$NOTIFY_MSG"
 log "Telegram notification sent"
 
