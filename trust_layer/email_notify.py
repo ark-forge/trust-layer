@@ -167,7 +167,7 @@ def send_quota_alert_email(email: str, api_key: str, used: int, limit: int, peri
         period_label = "monthly"
         upgrade_hint = (
             "Upgrade to Pro for 100 proofs/day and no monthly cap:\n"
-            "  https://arkforge.fr/en/pricing.html"
+            "  https://arkforge.tech/en/pricing.html"
         )
     else:
         period_label = "daily"
