@@ -202,6 +202,12 @@ GET  https://arkforge.tech/trust/v/{proof_id}          # short URL
 # Public key / DID
 GET  https://trust.arkforge.tech/v1/pubkey
 GET  https://trust.arkforge.tech/.well-known/did.json  # W3C DID Document
+
+# MCP Security Assessment (v1.4+)
+POST https://trust.arkforge.tech/v1/assess
+
+# EU AI Act Compliance Report (v1.4+)
+POST https://trust.arkforge.tech/v1/compliance-report
 ```
 
 ---

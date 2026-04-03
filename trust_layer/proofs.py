@@ -106,6 +106,17 @@ def store_proof(proof_id: str, proof_data: dict) -> Path:
     """Atomic write proof to proofs/<proof_id>.json. Returns path."""
     path = PROOFS_DIR / f"{proof_id}.json"
     save_json(path, proof_data)
+    # Index for time-range queries (compliance reports). Never blocks proof writing.
+    try:
+        from .proof_index import get_proof_index
+        fp = proof_data.get("parties", {}).get("buyer_fingerprint", "")
+        ts_str = proof_data.get("timestamp", "")
+        if fp and ts_str:
+            from datetime import datetime, timezone
+            ts_unix = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
+            get_proof_index().record(fp, proof_id, ts_unix)
+    except Exception:
+        pass
     return path
 
 
