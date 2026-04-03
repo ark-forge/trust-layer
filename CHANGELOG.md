@@ -6,6 +6,16 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.20] — 2026-04-03
+
+### Fixed
+- update_changelog.py reçoit HEAD + label séparé — le tag n'existe pas encore au moment de l'appel
+
+### Documentation
+- fix proof index version reference (v1.4.0 → v1.3.18) + minor README/deps updates
+
+---
+
 ## [1.3.19] — 2026-04-03
 
 ### Changed
