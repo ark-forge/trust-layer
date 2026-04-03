@@ -6,6 +6,16 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.25] — 2026-04-03
+
+### Added
+- sync arkforge-mcp à chaque livraison TL (Phase 3b)
+
+### Fixed
+- pricing URL arkforge.fr → arkforge.tech
+
+---
+
 ## [1.3.24] — 2026-04-03
 
 ### Added
