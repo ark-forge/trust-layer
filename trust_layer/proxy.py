@@ -830,6 +830,12 @@ async def execute_proxy(
     # 14b. Level 1 — Digital Stamp (AFTER hashing, does NOT affect chain hash)
     _inject_digital_stamp(result, proof_record)
 
+    # 14c. CTA — pricing link for conversion
+    result.setdefault("_links", {})["pricing"] = (
+        "https://arkforge.tech/en/pricing.html"
+        "?utm_source=proxy_api&utm_medium=json_response"
+    )
+
     # 15. Cache idempotency
     _cache_idempotency(idempotency_key, result)
 
