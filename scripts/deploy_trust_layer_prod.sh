@@ -456,20 +456,38 @@ else
     sed -i "s/^version = .*/version = \"$NEW_MCP\"/" pyproject.toml
     sed -i "s/arkforge-mcp\/[0-9][0-9.]*/arkforge-mcp\/$NEW_MCP/" src/arkforge_mcp/server.py
 
-    # Build + publish
-    if rm -rf dist/ && python3 -m build -q >> "$LOG_FILE" 2>&1 \
-        && twine upload dist/* -q >> "$LOG_FILE" 2>&1; then
+    # Build + publish (stderr capturé séparément pour diagnostic)
+    MCP_BUILD_OK=false
+    MCP_UPLOAD_OK=false
+    if rm -rf dist/ && python3 -m build -q >> "$LOG_FILE" 2>&1; then
+        MCP_BUILD_OK=true
+        TWINE_OUT=$(twine upload dist/* 2>&1)
+        echo "$TWINE_OUT" >> "$LOG_FILE"
+        if echo "$TWINE_OUT" | grep -q "View at:"; then
+            MCP_UPLOAD_OK=true
+        elif echo "$TWINE_OUT" | grep -q "already exists"; then
+            log "WARN: MCP $NEW_MCP already on PyPI — skipping upload (idempotent)"
+            MCP_UPLOAD_OK=true
+        else
+            log "WARN: MCP publish failed — twine output: $(echo "$TWINE_OUT" | tail -3)"
+        fi
+    else
+        log "WARN: MCP build failed"
+    fi
+
+    if $MCP_UPLOAD_OK; then
         log "MCP $CURRENT_MCP → $NEW_MCP published to PyPI"
         MCP_RESULT="$CURRENT_MCP → $NEW_MCP"
 
         # Commit + push to arkforge-mcp repo
         git add pyproject.toml src/arkforge_mcp/server.py
-        git commit -m "chore: sync to trust-layer $NEW_TAG" >> "$LOG_FILE" 2>&1
-        git push >> "$LOG_FILE" 2>&1
+        git commit -m "chore: sync to trust-layer $NEW_TAG" >> "$LOG_FILE" 2>&1 || true
+        git push >> "$LOG_FILE" 2>&1 || log "WARN: MCP git push failed (non-blocking)"
         log "arkforge-mcp repo updated (aligned with TL $NEW_TAG)"
     else
-        log "WARN: MCP publish failed — Trust Layer deploy NOT rolled back (non-blocking)"
-        MCP_RESULT="FAILED"
+        # Revert version bump pour éviter désynchronisation
+        git checkout pyproject.toml src/arkforge_mcp/server.py 2>/dev/null || true
+        MCP_RESULT="FAILED (build=$MCP_BUILD_OK, upload=$MCP_UPLOAD_OK)"
     fi
 
     cd "$REPO_DIR"
