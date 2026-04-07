@@ -229,6 +229,9 @@ PROVIDER PAYMENT (direct, not via ArkForge)
   Verified:       {pp_verify}
 """
 
+    transparency_log = proof_data.get("transparency_log") or {}
+    rekor_verify_url = transparency_log.get("verify_url", "") if transparency_log.get("status") == "verified" else ""
+
     receipt_line = ""
     if cert_fee.get("receipt_url"):
         receipt_line = f"\n  Receipt:        {cert_fee['receipt_url']}"
@@ -256,11 +259,12 @@ CRYPTOGRAPHIC PROOF
   Chain hash:     {hashes.get('chain', 'N/A')}
 
 VERIFY
-  {verification_url}
+  Proof (ArkForge):    {verification_url}
+{"  Independent (Rekor): " + rekor_verify_url if rekor_verify_url else ""}
 
 {'=' * 50}
 This is an automated proof of an agent-to-agent transaction.
-Anyone can verify this proof independently at the URL above.
+Verify independently on Sigstore Rekor using the URL above — no ArkForge account required.
 Service: ArkForge Trust Layer (https://arkforge.tech/trust)
 """
     try:
