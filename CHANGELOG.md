@@ -6,6 +6,14 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.26] — 2026-04-07
+
+### Fixed
+- add Rekor independent verify URL to proof email
+- Phase 3b — capturer stderr twine, revert on failure, idempotent on already-exists
+
+---
+
 ## [1.3.25] — 2026-04-03
 
 ### Added
