@@ -31,6 +31,7 @@ _FAILOVER_BLOCKED_PATHS = {
     "/v1/disputes",
     "/v1/assess",
     "/v1/compliance-report",
+    "/v1/contact",
 }
 
 
@@ -137,6 +138,7 @@ from .email_notify import (
     send_welcome_email,
     send_welcome_email_pro,
     send_trial_ended_email,
+    send_demo_request_email,
     send_subscription_suspended_email,
     send_subscription_reactivated_email,
 )
@@ -872,6 +874,13 @@ _PROOF_ID_RE = _re.compile(r"^prf_\d{8}_\d{6}_[0-9a-f]{6}$")
 _FREE_SIGNUP_RATE: dict[str, list[float]] = {}  # IP -> timestamps (sliding 1h)
 _FREE_SIGNUP_MAX_PER_HOUR = 5
 
+_CONTACT_RATE: dict[str, list[float]] = {}  # IP -> timestamps (sliding 1h)
+_CONTACT_MAX_PER_HOUR = 3
+
+_CONTACT_VALID_USE_CASES = frozenset({
+    "eu_ai_act", "audit", "dispute", "multimodel", "selfhosted", "other",
+})
+
 
 def _classify_referrer_source(referrer: str) -> str:
     """Classify a raw Referer URL into an acquisition source for attribution."""
@@ -980,6 +989,77 @@ async def free_signup(request: Request):
         "email": email,
         "message": "Your free API key is ready. It has also been sent to your email.",
     }
+
+
+# --- POST /v1/contact ---
+
+@app.post("/v1/contact")
+async def contact_endpoint(request: Request):
+    """Enterprise demo / contact request.
+
+    Accepts a JSON body with first_name, last_name, email, company,
+    use_case (optional), and message (optional).
+    Sends a notification to the admin inbox and a confirmation to the prospect.
+    Rate-limited to 3 requests per IP per hour.
+    """
+    import time
+
+    try:
+        body = await request.json()
+    except Exception:
+        return _error_response("invalid_request", "Invalid JSON body", 400)
+
+    first_name = (body.get("first_name") or "").strip()
+    last_name  = (body.get("last_name")  or "").strip()
+    email      = (body.get("email")      or "").strip().lower()
+    company    = (body.get("company")    or "").strip()
+    use_case   = (body.get("use_case")   or "").strip().lower()
+    message    = (body.get("message")    or "").strip()
+
+    if not first_name or len(first_name) > 100:
+        return _error_response("invalid_request", "first_name is required (max 100 chars)", 400)
+    if not last_name or len(last_name) > 100:
+        return _error_response("invalid_request", "last_name is required (max 100 chars)", 400)
+    if not email or not _EMAIL_RE.match(email):
+        return _error_response("invalid_request", "A valid email is required", 400)
+    local_part = email.split("@")[0]
+    if len(email) > 320 or len(local_part) > 64:
+        return _error_response("invalid_request", "Email address exceeds maximum allowed length", 400)
+    if not company or len(company) > 200:
+        return _error_response("invalid_request", "company is required (max 200 chars)", 400)
+    if use_case and use_case not in _CONTACT_VALID_USE_CASES:
+        use_case = "other"
+    if len(message) > 2000:
+        return _error_response("invalid_request", "message exceeds 2000 characters", 400)
+
+    # Rate limit: max 3 submissions per IP per hour
+    client_ip = (
+        request.headers.get("x-real-ip")
+        or (request.client.host if request.client else "unknown")
+    )
+    now = time.time()
+    timestamps = _CONTACT_RATE.get(client_ip, [])
+    timestamps = [t for t in timestamps if t > now - 3600]
+    if len(timestamps) >= _CONTACT_MAX_PER_HOUR:
+        return _error_response("rate_limited", "Too many contact requests. Try again later.", 429)
+    timestamps.append(now)
+    _CONTACT_RATE[client_ip] = timestamps
+
+    try:
+        send_demo_request_email(
+            first_name=first_name,
+            last_name=last_name,
+            email=email,
+            company=company,
+            use_case=use_case,
+            message=message,
+        )
+    except Exception as e:
+        logger.warning("Demo request email failed for %s / %s: %s", email, company, e)
+        # Do not fail the request — email is best-effort
+
+    logger.info("Enterprise demo request from %s <%s> at %s", company, email, client_ip)
+    return JSONResponse(status_code=200, content={"status": "received"})
 
 
 # --- POST /v1/keys/bind-did ---

@@ -508,6 +508,71 @@ Support: contact@arkforge.fr
         logger.warning("Subscription reactivated email failed: %s", e)
 
 
+def send_demo_request_email(
+    first_name: str,
+    last_name: str,
+    email: str,
+    company: str,
+    use_case: str = "",
+    message: str = "",
+):
+    """Send enterprise demo request — notification to admin + confirmation to prospect."""
+    use_case_label = use_case.replace("_", " ").capitalize() if use_case else "Not specified"
+
+    # 1. Notification to admin inbox
+    admin_subject = f"[Enterprise Demo] {company} — {first_name} {last_name}"
+    admin_body = f"""New enterprise demo request
+{'=' * 50}
+
+Name:      {first_name} {last_name}
+Email:     {email}
+Company:   {company}
+Use case:  {use_case_label}
+
+Message:
+{message if message else "(none)"}
+
+{'=' * 50}
+Reply directly to this email to contact the prospect.
+"""
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = admin_subject
+        msg["From"] = f"ArkForge <{SMTP_USER}>"
+        msg["To"] = SMTP_CONTACT
+        msg["Reply-To"] = email
+        msg["Date"] = formatdate(localtime=True)
+        msg["Message-ID"] = make_msgid(domain="arkforge.fr")
+        msg.attach(MIMEText(admin_body, "plain", "utf-8"))
+
+        context = ssl.create_default_context()
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context, timeout=15) as server:
+            server.login(SMTP_LOGIN, SMTP_PASSWORD)
+            server.sendmail(SMTP_USER, SMTP_CONTACT, msg.as_string())
+        logger.info("Demo request notification sent to admin for %s / %s", email, company)
+    except Exception as e:
+        logger.warning("Demo request admin notification failed: %s", e)
+
+    # 2. Confirmation to prospect
+    confirm_subject = "ArkForge — We received your enterprise request"
+    confirm_body = f"""Hi {first_name},
+
+Thanks for reaching out. We received your demo request for {company} and will get back to you within one business day.
+
+In the meantime, you can explore the docs at https://github.com/ark-forge/trust-layer
+or try the API directly with a free key: https://arkforge.tech/en/signup.html
+
+Looking forward to talking.
+
+David, ArkForge
+contact@arkforge.tech
+"""
+    try:
+        _send_email(email, confirm_subject, confirm_body)
+    except Exception as e:
+        logger.warning("Demo request confirmation email failed for %s: %s", email, e)
+
+
 def send_credits_exhausted_email(email: str, api_key: str):
     """Send an alert email when credits are fully exhausted."""
     subject = "[ArkForge] Credits exhausted — agent stopped"
