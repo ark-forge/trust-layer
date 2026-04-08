@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.28] — 2026-04-08
+
+### Added
+- add POST /v1/contact enterprise demo request endpoint
+
+---
+
 ## [1.3.27] — 2026-04-08
 
 ### Fixed
