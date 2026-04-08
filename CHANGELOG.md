@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.27] — 2026-04-08
+
+### Fixed
+- use noreply@arkforge.tech as SMTP from address — arkforge.fr not verified on Resend
+
+---
+
 ## [1.3.26] — 2026-04-07
 
 ### Fixed
