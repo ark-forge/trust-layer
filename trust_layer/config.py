@@ -99,7 +99,7 @@ STRIPE_PRO_PRODUCT_ID = os.environ.get("STRIPE_PRO_PRODUCT_ID", "")
 SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.resend.com")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "465"))
 SMTP_LOGIN = os.environ.get("SMTP_LOGIN", "resend")           # SMTP auth login (e.g. "resend" for Resend.com)
-SMTP_USER = os.environ.get("SMTP_USER", os.environ.get("IMAP_USER", "noreply@arkforge.fr"))  # From address
+SMTP_USER = os.environ.get("SMTP_USER", os.environ.get("IMAP_USER", "noreply@arkforge.tech"))  # From address
 SMTP_CONTACT = os.environ.get("SMTP_CONTACT", "contact@arkforge.fr") # reply-to (human inbox)
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", os.environ.get("IMAP_PASSWORD", ""))
 
