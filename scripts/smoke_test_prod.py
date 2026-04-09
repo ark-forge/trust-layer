@@ -64,7 +64,7 @@ def req(method, path, body=None, headers=None, delay=1.2):
     try:
         return s, json.loads(c)
     except Exception:
-        return s, c.decode(errors="replace")
+        return s, {"_raw": c.decode(errors="replace")}
 
 
 def chk(name, ok, detail=""):
@@ -144,7 +144,6 @@ except Exception as e:
 # ── 1. Infra ──────────────────────────────────────────────────
 sec("1. INFRA")
 s, d = req("GET", "/v1/health")
-d = d if isinstance(d, dict) else {}
 deployed_version = d.get("version", "?")
 chk("health 200 + status ok", s == 200 and d.get("status") == "ok",
     f"v{deployed_version} | {d.get('environment')}")
