@@ -1918,15 +1918,19 @@ async def get_agent_json():
 
 @app.get("/v1/stats")
 async def get_stats():
-    """Public proof count — no auth required. Cached 60s."""
-    from .config import PROOFS_DIR
+    """Public proof + assess counts — no auth required. Cached 60s."""
+    from .config import PROOFS_DIR, ASSESSMENTS_DIR
     import time
     cache = getattr(get_stats, "_cache", None)
     now = time.monotonic()
     if cache and now - cache["ts"] < 60:
         return cache["data"]
-    count = sum(1 for f in PROOFS_DIR.iterdir() if f.suffix == ".json") if PROOFS_DIR.exists() else 0
-    data = {"proofs_generated": count}
+    proof_count = sum(1 for f in PROOFS_DIR.iterdir() if f.suffix == ".json") if PROOFS_DIR.exists() else 0
+    assess_count = sum(1 for f in ASSESSMENTS_DIR.iterdir() if f.suffix == ".json") if ASSESSMENTS_DIR.exists() else 0
+    data = {
+        "proofs_generated": proof_count,
+        "assessments_completed": assess_count,
+    }
     get_stats._cache = {"ts": now, "data": data}
     return data
 

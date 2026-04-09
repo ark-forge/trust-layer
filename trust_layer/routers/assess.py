@@ -5,6 +5,7 @@ Auth: X-Api-Key header or Authorization: Bearer <key>.
 """
 
 import hashlib
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -12,9 +13,12 @@ from typing import Optional
 from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse
 
+from ..config import DATA_DIR
 from ..keys import validate_api_key
 from ..mcp_assess import build_assessment, ASSESS_DAILY_LIMIT
 from ..redis_client import get_redis
+
+SCAN_EVENTS_LOG = DATA_DIR / "scan_events.jsonl"
 
 logger = logging.getLogger("trust_layer.routers.assess")
 
@@ -137,5 +141,19 @@ async def assess_endpoint(
     except Exception as e:
         logger.error("Assessment failed for server_id=%s: %s", server_id, e)
         return _error("assessment_error", "Assessment failed. Please retry.", 500)
+
+    # --- Log scan event for server-side analytics ---
+    try:
+        with open(SCAN_EVENTS_LOG, "a") as f:
+            f.write(json.dumps({
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "event": "assess",
+                "server_id": server_id,
+                "tools_count": len(tools),
+                "risk_score": assessment.get("risk_score"),
+                "key_hash": fp[:8],
+            }) + "\n")
+    except Exception:
+        pass  # non-critical
 
     return JSONResponse(status_code=200, content=assessment)
