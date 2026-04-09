@@ -210,7 +210,8 @@ chk("GET /v1/proof/{id}: integrity_verified", d.get("integrity_verified") is Tru
 s, d = req("GET", f"/v/{ PROOF_ID_FREE}", delay=1.2)  # stamp shorthand (via nginx strip → app /v/)
 # Actually the path through nginx is /trust/v/{id}
 time.sleep(1.2)
-r = urllib.request.Request(f"{BASE}/v/{PROOF_ID_FREE}", method="GET")
+r = urllib.request.Request(f"{BASE}/v/{PROOF_ID_FREE}", method="GET",
+    headers={"User-Agent": "ArkForge-SmokeTest/1.0"})
 try:
     with urllib.request.urlopen(r, timeout=10) as resp:
         stamp_s = resp.status
@@ -319,7 +320,8 @@ time.sleep(0.5)
 wh_url = BASE + wh_path
 wh_req = urllib.request.Request(wh_url,
     data=fake_body.encode(),
-    headers={"Content-Type": "application/json", "Stripe-Signature": "t=1234,v1=badsig"},
+    headers={"Content-Type": "application/json", "Stripe-Signature": "t=1234,v1=badsig",
+             "User-Agent": "ArkForge-SmokeTest/1.0"},
     method="POST")
 try:
     with urllib.request.urlopen(wh_req, timeout=10) as r:
@@ -332,7 +334,7 @@ chk("webhook signature invalide → 400", wh_s1 == 400, f"HTTP {wh_s1}")
 time.sleep(0.5)
 wh_req2 = urllib.request.Request(wh_url,
     data=fake_body.encode(),
-    headers={"Content-Type": "application/json"},
+    headers={"Content-Type": "application/json", "User-Agent": "ArkForge-SmokeTest/1.0"},
     method="POST")
 try:
     with urllib.request.urlopen(wh_req2, timeout=10) as r:
@@ -364,7 +366,8 @@ if WEBHOOK_SECRET and WEBHOOK_KEY:
     time.sleep(0.5)
     wh_req3 = urllib.request.Request(wh_url,
         data=inv_paid_payload.encode(),
-        headers={"Content-Type": "application/json", "Stripe-Signature": sig_header},
+        headers={"Content-Type": "application/json", "Stripe-Signature": sig_header,
+                 "User-Agent": "ArkForge-SmokeTest/1.0"},
         method="POST")
     try:
         with urllib.request.urlopen(wh_req3, timeout=10) as r:
@@ -397,7 +400,8 @@ sec("12. TSR RFC 3161")
 if PROOF_ID_FREE:
     time.sleep(0.5)
     tsr_url = BASE + f"/v1/proof/{PROOF_ID_FREE}/tsr"
-    tsr_req = urllib.request.Request(tsr_url, method="GET")
+    tsr_req = urllib.request.Request(tsr_url, method="GET",
+        headers={"User-Agent": "ArkForge-SmokeTest/1.0"})
     try:
         with urllib.request.urlopen(tsr_req, timeout=15) as r:
             tsr_s, tsr_ct, tsr_len = r.status, r.headers.get("Content-Type", ""), len(r.read())
@@ -406,7 +410,8 @@ if PROOF_ID_FREE:
     chk("GET /v1/proof/{id}/tsr → 200 DER",
         tsr_s == 200 and tsr_len > 100, f"HTTP {tsr_s} size={tsr_len}B")
 
-    tsr_head = urllib.request.Request(tsr_url, method="HEAD")
+    tsr_head = urllib.request.Request(tsr_url, method="HEAD",
+        headers={"User-Agent": "ArkForge-SmokeTest/1.0"})
     try:
         with urllib.request.urlopen(tsr_head, timeout=10) as r:
             head_s = r.status
