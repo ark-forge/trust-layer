@@ -144,7 +144,8 @@ except Exception as e:
 # ── 1. Infra ──────────────────────────────────────────────────
 sec("1. INFRA")
 s, d = req("GET", "/v1/health")
-deployed_version = d.get("version", "?") if isinstance(d, dict) else "?"
+d = d if isinstance(d, dict) else {}
+deployed_version = d.get("version", "?")
 chk("health 200 + status ok", s == 200 and d.get("status") == "ok",
     f"v{deployed_version} | {d.get('environment')}")
 chk("environment = production", d.get("environment") == "production")
