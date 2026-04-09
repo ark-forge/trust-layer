@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.29] — 2026-04-09
+
+### Added
+- add server-side scan counter to /v1/stats + scan_events.jsonl
+
+---
+
 ## [1.3.28] — 2026-04-08
 
 ### Added
