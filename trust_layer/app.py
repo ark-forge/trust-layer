@@ -15,8 +15,26 @@ from fastapi.responses import JSONResponse, Response, HTMLResponse, RedirectResp
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
-# Failover read-only mode — actif si FAILOVER_MODE=true dans l'env systemd
-_FAILOVER_MODE = os.environ.get("FAILOVER_MODE", "").lower() == "true"
+# Failover read-only mode — read dynamically from failover_state.json
+# (replaces static systemd env var to avoid stale FAILOVER_MODE after restarts)
+_FAILOVER_STATE_FILE = "/opt/claude-ceo/brain/failover_state.json"
+_failover_cache = {"value": False, "checked_at": 0.0}
+
+def _is_failover_mode() -> bool:
+    """Return True if failover_state.json says mode=failover. Cached 10s."""
+    import time
+    now = time.monotonic()
+    if now - _failover_cache["checked_at"] < 10:
+        return _failover_cache["value"]
+    try:
+        with open(_FAILOVER_STATE_FILE) as f:
+            state = json.load(f)
+        result = state.get("mode") == "failover"
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        result = False
+    _failover_cache["value"] = result
+    _failover_cache["checked_at"] = now
+    return result
 
 # Endpoints d'écriture bloqués en mode failover
 _FAILOVER_BLOCKED_PATHS = {
@@ -57,7 +75,7 @@ class HeadToGetMiddleware(BaseHTTPMiddleware):
 class FailoverReadOnlyMiddleware(BaseHTTPMiddleware):
     """Bloque les écritures en mode failover pour éviter le split-brain."""
     async def dispatch(self, request: Request, call_next):
-        if _FAILOVER_MODE and request.method == "POST":
+        if _is_failover_mode() and request.method == "POST":
             path = request.url.path.rstrip("/")
             if path in _FAILOVER_BLOCKED_PATHS:
                 return JSONResponse(
@@ -394,9 +412,8 @@ app.add_middleware(
     allow_credentials=False,
 )
 
-if _FAILOVER_MODE:
-    app.add_middleware(FailoverReadOnlyMiddleware)
-    logger.warning("FAILOVER_MODE=true — service en lecture seule (POST /v1/proxy bloqué)")
+# Middleware always active — _is_failover_mode() checks state file dynamically
+app.add_middleware(FailoverReadOnlyMiddleware)
 
 # --- Feature routers (v1.4+) ---
 from .routers.assess import router as _assess_router
@@ -1581,8 +1598,9 @@ async def health():
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "environment": TRUST_LAYER_ENV,
     }
-    resp["mode"] = "failover" if _FAILOVER_MODE else "primary"
-    resp["write_enabled"] = not _FAILOVER_MODE
+    failover = _is_failover_mode()
+    resp["mode"] = "failover" if failover else "primary"
+    resp["write_enabled"] = not failover
     return resp
 
 
