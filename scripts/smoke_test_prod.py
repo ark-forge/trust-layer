@@ -54,7 +54,7 @@ def req(method, path, body=None, headers=None, delay=1.2):
     time.sleep(delay)
     url = BASE + path
     data = json.dumps(body).encode() if body is not None else None
-    h = {"Content-Type": "application/json", **(headers or {})}
+    h = {"Content-Type": "application/json", "User-Agent": "ArkForge-SmokeTest/1.0", **(headers or {})}
     r = urllib.request.Request(url, data=data, headers=h, method=method)
     try:
         with urllib.request.urlopen(r, timeout=15) as resp:
