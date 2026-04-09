@@ -1581,9 +1581,8 @@ async def health():
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "environment": TRUST_LAYER_ENV,
     }
-    if _FAILOVER_MODE:
-        resp["mode"] = "failover"
-        resp["write_enabled"] = False
+    resp["mode"] = "failover" if _FAILOVER_MODE else "primary"
+    resp["write_enabled"] = not _FAILOVER_MODE
     return resp
 
 
