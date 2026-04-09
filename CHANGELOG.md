@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.31] — 2026-04-09
+
+### Fixed
+- dynamic FAILOVER_MODE via state file — eliminates stale systemd env var
+
+---
+
 ## [1.3.30] — 2026-04-09
 
 ### Fixed
