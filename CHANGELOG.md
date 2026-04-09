@@ -6,6 +6,17 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.30] — 2026-04-09
+
+### Fixed
+- add User-Agent to all raw urllib requests
+- add User-Agent header to prevent 403 from empty UA filter
+- always return dict from req() to prevent AttributeError
+- always expose mode/write_enabled, harden smoke test
+- always expose mode and write_enabled fields
+
+---
+
 ## [1.3.29] — 2026-04-09
 
 ### Added
