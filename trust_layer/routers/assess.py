@@ -144,14 +144,17 @@ async def assess_endpoint(
 
     # --- Log scan event for server-side analytics ---
     try:
+        tool_names = [t.get("name", "") for t in tools]
         with open(SCAN_EVENTS_LOG, "a") as f:
             f.write(json.dumps({
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "event": "assess",
                 "server_id": server_id,
                 "tools_count": len(tools),
+                "tool_names": tool_names,
                 "risk_score": assessment.get("risk_score"),
                 "key_hash": fp[:8],
+                "plan": key_info.get("plan", "unknown"),
             }) + "\n")
     except Exception:
         pass  # non-critical
