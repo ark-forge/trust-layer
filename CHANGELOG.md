@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.33] — 2026-04-10
+
+### Added
+- log tool_names and plan in scan_events.jsonl
+
+---
+
 ## [1.3.32] — 2026-04-09
 
 _(no user-facing changes)_
