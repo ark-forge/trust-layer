@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.34] — 2026-04-14
+
+### Added
+- add POST /api/register endpoint for MCP phone-home registration
+
+---
+
 ## [1.3.33] — 2026-04-10
 
 ### Added
