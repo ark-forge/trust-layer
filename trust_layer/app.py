@@ -42,6 +42,7 @@ _FAILOVER_BLOCKED_PATHS = {
     "/v1/keys/setup",
     "/v1/keys/portal",
     "/v1/keys/free-signup",
+    "/api/register",
     "/v1/keys/overage",
     "/v1/keys/bind-did",
     "/v1/keys/bind-did/confirm",
@@ -994,6 +995,93 @@ async def free_signup(request: Request):
                 "utm_medium": utm_medium,
                 "utm_campaign": utm_campaign,
                 "referrer": referrer,
+                "client_ip_hash": hashlib.sha256(client_ip.encode()).hexdigest()[:12],
+            }) + "\n")
+    except OSError:
+        pass
+
+    return {
+        "api_key": api_key,
+        "plan": "free",
+        "limit": f"{FREE_TIER_MONTHLY_LIMIT} proofs/month",
+        "email": email,
+        "message": "Your free API key is ready. It has also been sent to your email.",
+    }
+
+
+# --- POST /api/register (MCP phone-home) ---
+
+_MCP_REGISTER_RATE: dict = {}
+_MCP_REGISTER_MAX_PER_HOUR = 10
+
+@app.post("/api/register")
+async def mcp_register(request: Request):
+    """Register a free API key from MCP stdio clients (phone-home).
+
+    Lightweight endpoint for MCP servers running in stdio mode to register
+    users server-side instead of writing keys locally (where they have no value).
+    """
+    import time as _time
+
+    try:
+        body = await request.json()
+    except Exception:
+        return _error_response("invalid_request", "Invalid JSON body", 400)
+
+    email = (body.get("email") or "").strip().lower()
+    if not email or not _EMAIL_RE.match(email):
+        return _error_response("invalid_request", "A valid email is required", 400)
+    local_part = email.split("@")[0]
+    if len(email) > 320 or len(local_part) > 64:
+        return _error_response("invalid_request", "Email address exceeds maximum allowed length", 400)
+
+    client_ip = (
+        request.headers.get("x-real-ip")
+        or (request.client.host if request.client else "unknown")
+    )
+    now = _time.time()
+    timestamps = _MCP_REGISTER_RATE.get(client_ip, [])
+    timestamps = [t for t in timestamps if t > now - 3600]
+    if len(timestamps) >= _MCP_REGISTER_MAX_PER_HOUR:
+        return _error_response("rate_limited", "Too many registrations. Try again later.", 429)
+    timestamps.append(now)
+    _MCP_REGISTER_RATE[client_ip] = timestamps
+
+    from .keys import load_api_keys
+    existing_keys = load_api_keys()
+    for key, info in existing_keys.items():
+        if info.get("email", "").lower() == email and info.get("plan") == "free" and info.get("active"):
+            return JSONResponse(content={
+                "api_key": key,
+                "plan": "free",
+                "email": email,
+                "already_existed": True,
+                "message": "A free API key already exists for this email.",
+            })
+
+    api_key = create_api_key(
+        stripe_customer_id="",
+        ref_id=f"mcp_phonehome_{email}",
+        email=email,
+        test_mode=False,
+        plan="free",
+    )
+    logger.info("MCP phone-home registration for %s", email)
+
+    try:
+        send_welcome_email(email, api_key)
+    except (OSError, RuntimeError) as e:
+        logger.warning("Welcome email failed for MCP register %s: %s", email, e)
+
+    try:
+        source = body.get("source", "mcp_phonehome")
+        with open(CONVERSION_EVENTS_LOG, "a") as _cel:
+            _cel.write(json.dumps({
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "event": "signup_attributed",
+                "plan": "free",
+                "email_hash": email[:3] + "***" if email else "",
+                "source": source,
                 "client_ip_hash": hashlib.sha256(client_ip.encode()).hexdigest()[:12],
             }) + "\n")
     except OSError:
