@@ -124,6 +124,7 @@ from .config import (
     WEBHOOK_IDEMPOTENCY_FILE,
     CONVERSION_EVENTS_LOG,
     FUNNEL_EVENTS_LOG,
+    MCP_REGISTRATION_LOG,
     CORS_ALLOWED_ORIGINS,
     PRO_OVERAGE_PRICE,
     ENTERPRISE_OVERAGE_PRICE,
@@ -877,6 +878,29 @@ async def billing_portal(
 
 # --- POST /v1/keys/free-signup ---
 
+def _record_mcp_registration(email: str, source: str, ip: str, api_key: str,
+                             scan_id: str = "") -> None:
+    """Append a registration row to MCP registration_log.jsonl for funnel tracking.
+
+    Why: funnel collector reads this file to count register_free_key calls, web conversions
+    would otherwise be invisible to register_free_key_calls_7d metric.
+    """
+    try:
+        MCP_REGISTRATION_LOG.parent.mkdir(parents=True, exist_ok=True)
+        entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "email_hash": hashlib.sha256(email.lower().strip().encode()).hexdigest()[:16],
+            "source": source,
+            "ip": ip,
+            "api_key_prefix": (api_key[:12] + "...") if api_key else None,
+            "scan_id": scan_id or None,
+        }
+        with open(MCP_REGISTRATION_LOG, "a") as f:
+            f.write(json.dumps(entry, default=str) + "\n")
+    except OSError:
+        logger.warning("_record_mcp_registration failed for %s", source, exc_info=True)
+
+
 import re as _re
 
 # RFC 5321-compatible email regex: local@domain.tld
@@ -980,18 +1004,19 @@ async def free_signup(request: Request):
         logger.warning("Welcome email failed for free signup %s: %s", email, e)
 
     # Attribution event: capture referrer + UTM for funnel tracking
+    referrer = request.headers.get("referer", "")
+    utm_source = body.get("utm_source", "")
+    utm_medium = body.get("utm_medium", "")
+    utm_campaign = body.get("utm_campaign", "")
+    attribution_source = utm_source or _classify_referrer_source(referrer)
     try:
-        referrer = request.headers.get("referer", "")
-        utm_source = body.get("utm_source", "")
-        utm_medium = body.get("utm_medium", "")
-        utm_campaign = body.get("utm_campaign", "")
         with open(CONVERSION_EVENTS_LOG, "a") as _cel:
             _cel.write(json.dumps({
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "event": "signup_attributed",
                 "plan": "free",
                 "email_hash": email[:3] + "***" if email else "",
-                "source": utm_source or _classify_referrer_source(referrer),
+                "source": attribution_source,
                 "utm_source": utm_source,
                 "utm_medium": utm_medium,
                 "utm_campaign": utm_campaign,
@@ -1000,6 +1025,13 @@ async def free_signup(request: Request):
             }) + "\n")
     except OSError:
         pass
+
+    _record_mcp_registration(
+        email=email,
+        source=f"web_{attribution_source}" if attribution_source else "web_direct",
+        ip=client_ip,
+        api_key=api_key,
+    )
 
     return {
         "api_key": api_key,
@@ -1210,6 +1242,14 @@ async def mcp_register(request: Request):
             }) + "\n")
     except OSError:
         pass
+
+    _record_mcp_registration(
+        email=email,
+        source=source,
+        ip=client_ip,
+        api_key=api_key,
+        scan_id=scan_id,
+    )
 
     return {
         "api_key": api_key,
