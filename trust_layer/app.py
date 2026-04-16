@@ -1852,6 +1852,9 @@ async def funnel_metrics(
                     continue
                 evt = entry.get("event", "")
                 if evt in counts:
+                    # Skip internal/test scans for accurate conversion metrics
+                    if evt == "cta_impression" and entry.get("plan") in ("internal", "test"):
+                        continue
                     counts[evt] += 1
                     day = ts[:10]
                     by_day.setdefault(day, {"cta_impression": 0, "register_page_visit": 0, "register_completion": 0})
