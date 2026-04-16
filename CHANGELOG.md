@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.36] — 2026-04-16
+
+### Fixed
+- filter internal/test scans from cta_impression metrics
+
+---
+
 ## [1.3.35] — 2026-04-16
 
 _(no user-facing changes)_
