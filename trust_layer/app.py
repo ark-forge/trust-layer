@@ -123,6 +123,7 @@ from .config import (
     ARKFORGE_PUBLIC_KEY,
     WEBHOOK_IDEMPOTENCY_FILE,
     CONVERSION_EVENTS_LOG,
+    FUNNEL_EVENTS_LOG,
     CORS_ALLOWED_ORIGINS,
     PRO_OVERAGE_PRICE,
     ENTERPRISE_OVERAGE_PRICE,
@@ -1009,6 +1010,113 @@ async def free_signup(request: Request):
     }
 
 
+# --- GET /register (inline CTA from MCP scan results) ---
+
+@app.get("/register")
+async def register_form(request: Request, scan_id: str = ""):
+    """Minimal registration form linked from MCP scan output."""
+    scan_id_safe = scan_id[:32] if scan_id else ""
+
+    # --- Funnel event: register page visit ---
+    try:
+        client_ip = (
+            request.headers.get("x-real-ip")
+            or (request.client.host if request.client else "unknown")
+        )
+        with open(FUNNEL_EVENTS_LOG, "a") as _f:
+            _f.write(json.dumps({
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "event": "register_page_visit",
+                "scan_id": scan_id_safe,
+                "client_ip_hash": hashlib.sha256(client_ip.encode()).hexdigest()[:12],
+                "referrer": (request.headers.get("referer") or "")[:200],
+            }) + "\n")
+    except Exception:
+        pass
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Save Your Scan Results - ArkForge</title>
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0a0a0f;color:#e0e0e0;min-height:100vh;display:flex;align-items:center;justify-content:center}}
+.card{{background:#14141f;border:1px solid #2a2a3a;border-radius:12px;padding:2.5rem;max-width:420px;width:90%}}
+h1{{font-size:1.4rem;margin-bottom:.5rem;color:#fff}}
+p{{font-size:.9rem;color:#a0a0b0;margin-bottom:1.5rem;line-height:1.5}}
+label{{font-size:.85rem;color:#c0c0d0;display:block;margin-bottom:.4rem}}
+input[type=email]{{width:100%;padding:.75rem 1rem;border:1px solid #2a2a3a;border-radius:8px;background:#0a0a0f;color:#fff;font-size:1rem;outline:none;transition:border-color .2s}}
+input[type=email]:focus{{border-color:#4f8cff}}
+button{{width:100%;padding:.75rem;margin-top:1rem;border:none;border-radius:8px;background:#4f8cff;color:#fff;font-size:1rem;font-weight:600;cursor:pointer;transition:background .2s}}
+button:hover{{background:#3a7aef}}
+button:disabled{{background:#333;cursor:wait}}
+.result{{margin-top:1rem;padding:1rem;border-radius:8px;font-size:.9rem;line-height:1.5}}
+.result.ok{{background:#0d2818;border:1px solid #1a5c2e;color:#6fcf97}}
+.result.err{{background:#2d1215;border:1px solid #5c1a1f;color:#cf6f6f}}
+.key-box{{font-family:monospace;background:#0a0a0f;padding:.5rem .75rem;border-radius:6px;margin-top:.5rem;word-break:break-all;display:flex;align-items:center;gap:.5rem}}
+.copy-btn{{background:none;border:1px solid #2a2a3a;color:#a0a0b0;padding:.25rem .5rem;border-radius:4px;cursor:pointer;font-size:.75rem;width:auto;margin:0}}
+.copy-btn:hover{{border-color:#4f8cff;color:#4f8cff;background:none}}
+.features{{list-style:none;margin-top:1.5rem;font-size:.85rem;color:#a0a0b0}}
+.features li::before{{content:'\\2713 ';color:#6fcf97}}
+.features li{{margin-bottom:.35rem}}
+</style>
+</head>
+<body>
+<div class="card">
+<h1>Save your scan results</h1>
+<p>Get a free API key. No password, no credit card.</p>
+<form id="regform">
+<label for="email">Email address</label>
+<input type="email" id="email" name="email" placeholder="you@company.com" required autofocus>
+<input type="hidden" id="scan_id" value="{scan_id_safe}">
+<button type="submit" id="btn">Get free API key</button>
+</form>
+<div id="result" style="display:none"></div>
+<ul class="features">
+<li>Scan history across sessions</li>
+<li>Compliance trend tracking</li>
+<li>CI/CD integration (GitHub Actions, GitLab CI)</li>
+</ul>
+</div>
+<script>
+document.getElementById('regform').addEventListener('submit', async(e)=>{{
+e.preventDefault();
+const btn=document.getElementById('btn');
+const res=document.getElementById('result');
+const email=document.getElementById('email').value.trim();
+const scanId=document.getElementById('scan_id').value;
+if(!email)return;
+btn.disabled=true;btn.textContent='Activating...';
+res.style.display='none';
+try{{
+const r=await fetch('/api/register',{{
+method:'POST',
+headers:{{'Content-Type':'application/json'}},
+body:JSON.stringify({{email:email,source:'web_register',scan_id:scanId}})
+}});
+const d=await r.json();
+if(r.ok&&d.api_key){{
+res.className='result ok';
+res.innerHTML='API key activated!<div class="key-box"><span>'+d.api_key+'</span><button class="copy-btn" onclick="navigator.clipboard.writeText(\\''+d.api_key+'\\');this.textContent=\\'Copied\\'">Copy</button></div><p style="margin-top:.75rem;font-size:.85rem;color:#a0a0b0">Also sent to '+email+'</p>';
+btn.textContent='Done';
+}}else{{
+throw new Error(d.detail||d.error||'Registration failed');
+}}
+}}catch(err){{
+res.className='result err';
+res.textContent=err.message;
+btn.disabled=false;btn.textContent='Get free API key';
+}}
+res.style.display='block';
+}});
+</script>
+</body>
+</html>"""
+    return HTMLResponse(content=html)
+
+
 # --- POST /api/register (MCP phone-home) ---
 
 _MCP_REGISTER_RATE: dict = {}
@@ -1073,8 +1181,23 @@ async def mcp_register(request: Request):
     except (OSError, RuntimeError) as e:
         logger.warning("Welcome email failed for MCP register %s: %s", email, e)
 
+    # --- Funnel event: register completion ---
+    source = body.get("source", "mcp_phonehome")
+    scan_id = body.get("scan_id", "")
     try:
-        source = body.get("source", "mcp_phonehome")
+        with open(FUNNEL_EVENTS_LOG, "a") as _f:
+            _f.write(json.dumps({
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "event": "register_completion",
+                "scan_id": scan_id[:32] if scan_id else "",
+                "source": source,
+                "client_ip_hash": hashlib.sha256(client_ip.encode()).hexdigest()[:12],
+                "email_hash": email[:3] + "***" if email else "",
+            }) + "\n")
+    except Exception:
+        pass
+
+    try:
         with open(CONVERSION_EVENTS_LOG, "a") as _cel:
             _cel.write(json.dumps({
                 "ts": datetime.now(timezone.utc).isoformat(),
@@ -1082,6 +1205,7 @@ async def mcp_register(request: Request):
                 "plan": "free",
                 "email_hash": email[:3] + "***" if email else "",
                 "source": source,
+                "scan_id": scan_id[:32] if scan_id else "",
                 "client_ip_hash": hashlib.sha256(client_ip.encode()).hexdigest()[:12],
             }) + "\n")
     except OSError:
@@ -1690,6 +1814,64 @@ async def health():
     resp["mode"] = "failover" if failover else "primary"
     resp["write_enabled"] = not failover
     return resp
+
+
+# --- GET /v1/funnel-metrics (internal — aggregated funnel counters) ---
+
+@app.get("/v1/funnel-metrics")
+async def funnel_metrics(
+    request: Request,
+    days: int = 7,
+    x_api_key: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
+):
+    api_key = _get_api_key(authorization, x_api_key)
+    if not api_key:
+        return _error_response("invalid_api_key", "API key required", 401)
+    key_info = validate_api_key(api_key)
+    if not key_info or not is_internal_key(api_key):
+        return _error_response("forbidden", "Internal key required", 403)
+
+    from datetime import timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=min(days, 90))).isoformat()
+    counts = {"cta_impression": 0, "register_page_visit": 0, "register_completion": 0}
+    by_day: dict = {}
+
+    try:
+        with open(FUNNEL_EVENTS_LOG) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                ts = entry.get("ts", "")
+                if ts < cutoff:
+                    continue
+                evt = entry.get("event", "")
+                if evt in counts:
+                    counts[evt] += 1
+                    day = ts[:10]
+                    by_day.setdefault(day, {"cta_impression": 0, "register_page_visit": 0, "register_completion": 0})
+                    by_day[day][evt] += 1
+    except FileNotFoundError:
+        pass
+
+    cta = counts["cta_impression"]
+    visits = counts["register_page_visit"]
+    completions = counts["register_completion"]
+    return {
+        "window_days": min(days, 90),
+        "cta_impressions": cta,
+        "register_page_visits": visits,
+        "register_completions": completions,
+        "cta_to_visit_rate": round(visits / cta, 4) if cta > 0 else None,
+        "visit_to_completion_rate": round(completions / visits, 4) if visits > 0 else None,
+        "cta_to_completion_rate": round(completions / cta, 4) if cta > 0 else None,
+        "by_day": dict(sorted(by_day.items())),
+    }
 
 
 # --- POST /v1/keys/overage ---

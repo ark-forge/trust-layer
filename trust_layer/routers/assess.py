@@ -13,7 +13,7 @@ from typing import Optional
 from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse
 
-from ..config import DATA_DIR
+from ..config import DATA_DIR, FUNNEL_EVENTS_LOG
 from ..keys import validate_api_key
 from ..mcp_assess import build_assessment, ASSESS_DAILY_LIMIT
 from ..redis_client import get_redis
@@ -158,5 +158,20 @@ async def assess_endpoint(
             }) + "\n")
     except Exception:
         pass  # non-critical
+
+    # --- Log funnel event: CTA impression (register link shown in response) ---
+    try:
+        assess_id = assessment.get("assess_id", "")
+        with open(FUNNEL_EVENTS_LOG, "a") as _f:
+            _f.write(json.dumps({
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "event": "cta_impression",
+                "assess_id": assess_id,
+                "server_id": server_id,
+                "key_hash": fp[:8],
+                "plan": key_info.get("plan", "unknown"),
+            }) + "\n")
+    except Exception:
+        pass
 
     return JSONResponse(status_code=200, content=assessment)

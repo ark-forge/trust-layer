@@ -67,6 +67,8 @@ def _isolate_data(tmp_path, monkeypatch):
     monkeypatch.setattr(app_mod, "ARKFORGE_PUBLIC_KEY", test_pubkey)
     monkeypatch.setattr(app_mod, "PROOF_ACCESS_LOG", tmp_path / "data" / "proof_access_log.jsonl")
     monkeypatch.setattr(app_mod, "WEBHOOK_IDEMPOTENCY_FILE", tmp_path / "data" / "webhook_idempotency.jsonl")
+    monkeypatch.setattr(app_mod, "FUNNEL_EVENTS_LOG", tmp_path / "data" / "funnel_events.jsonl")
+    monkeypatch.setattr(app_mod, "CONVERSION_EVENTS_LOG", tmp_path / "data" / "conversion_events.jsonl")
 
     # DNS rebinding mock — prevent real DNS resolution in proxy tests
     monkeypatch.setattr(proxy_mod, "_check_no_private_dns", AsyncMock(return_value=None))
@@ -97,6 +99,10 @@ def _isolate_data(tmp_path, monkeypatch):
     import trust_layer.mcp_assess as assess_mod
     monkeypatch.setattr(assess_mod, "MCP_BASELINES_DIR", tmp_path / "data" / "mcp_baselines")
     monkeypatch.setattr(assess_mod, "ASSESSMENTS_DIR", tmp_path / "data" / "assessments")
+
+    import trust_layer.routers.assess as assess_router_mod
+    monkeypatch.setattr(assess_router_mod, "SCAN_EVENTS_LOG", tmp_path / "data" / "scan_events.jsonl")
+    monkeypatch.setattr(assess_router_mod, "FUNNEL_EVENTS_LOG", tmp_path / "data" / "funnel_events.jsonl")
 
     import trust_layer.proof_index as pidx_mod
     monkeypatch.setattr(pidx_mod, "PROOF_INDEX_FILE", tmp_path / "data" / "proof_index.jsonl")
