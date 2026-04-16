@@ -6,6 +6,12 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.35] — 2026-04-16
+
+_(no user-facing changes)_
+
+---
+
 ## [1.3.34] — 2026-04-14
 
 ### Added
