@@ -798,7 +798,7 @@ async def setup_key(request: Request):
                 if plan_name == "platform"
                 else f"https://arkforge.tech/{lang}/tl-pro-success.html?session_id={{CHECKOUT_SESSION_ID}}"
             ),
-            cancel_url=f"https://arkforge.tech/{lang}/pricing.html?intent={plan_name}",
+            cancel_url=f"https://arkforge.tech/{lang}/pricing.html?intent={plan_name}&utm_source=stripe_checkout&utm_medium=cancel",
             metadata=checkout_meta,
             subscription_data={
                 "trial_period_days": 14,
@@ -881,7 +881,7 @@ async def billing_portal(
     try:
         portal_session = stripe.billing_portal.Session.create(
             customer=customer_id,
-            return_url=f"https://arkforge.tech/{lang}/pricing.html",
+            return_url=f"https://arkforge.tech/{lang}/pricing.html?utm_source=stripe_portal&utm_medium=return",
             api_key=sk,
         )
         return {

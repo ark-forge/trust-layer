@@ -180,7 +180,7 @@ def send_quota_alert_email(email: str, api_key: str, used: int, limit: int, peri
         period_label = "monthly"
         upgrade_hint = (
             "Upgrade to Pro for 100 proofs/day and no monthly cap:\n"
-            "  https://arkforge.tech/en/pricing.html"
+            "  https://arkforge.tech/en/pricing.html?utm_source=email&utm_medium=notification"
         )
     else:
         period_label = "daily"
@@ -451,7 +451,7 @@ Your API key has been deactivated:
   {api_key}
 
 To continue using ArkForge Trust Layer, resubscribe anytime:
-  https://arkforge.tech/en/pricing.html
+  https://arkforge.tech/en/pricing.html?utm_source=email&utm_medium=notification
 
 Your proofs remain accessible for 30 days after trial end:
   https://trust.arkforge.tech/v1/proof/<proof_id>
@@ -619,7 +619,7 @@ ArkForge Trust Layer — https://arkforge.tech/trust
 def send_checkout_abandoned_email(email: str, plan: str = "pro", lang: str = "en"):
     """Send recovery email when a checkout session expires without payment."""
     plan_label = plan.capitalize()
-    checkout_url = f"https://arkforge.tech/{lang}/pricing.html?intent={plan}"
+    checkout_url = f"https://arkforge.tech/{lang}/pricing.html?intent={plan}&utm_source=email&utm_medium=abandoned_checkout"
 
     subject = f"Your {plan_label} checkout didn't complete"
     body = f"""ArkForge Trust Layer — Checkout Not Completed
