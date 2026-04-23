@@ -6,6 +6,16 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.37] — 2026-04-23
+
+### Added
+- record web signups in MCP registration_log for register_free_key_calls_web
+
+### Fixed
+- add Pro upgrade CTA to free welcome email
+
+---
+
 ## [1.3.36] — 2026-04-16
 
 ### Fixed
