@@ -97,6 +97,19 @@ Check usage anytime:
   curl https://trust.arkforge.tech/v1/usage \\
     -H "X-API-Key: {api_key}"
 
+---
+
+Need unlimited scans or 5,000+ proofs/month?
+
+Upgrade to Pro — 14-day free trial, no charge until day 15:
+  https://arkforge.tech/en/pro-signup.html
+
+Pro includes: unlimited compliance scans, CI/CD API, compliance
+roadmap generation, and Trust Layer audit trail.
+29 EUR/month, cancel anytime.
+
+---
+
 Docs: https://arkforge.tech/trust
 Support: contact@arkforge.fr
 """
