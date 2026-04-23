@@ -614,3 +614,32 @@ ArkForge Trust Layer — https://arkforge.tech/trust
         logger.info("Credits exhausted alert sent to %s", email)
     except Exception as e:
         logger.warning("Credits exhausted email failed: %s", e)
+
+
+def send_checkout_abandoned_email(email: str, plan: str = "pro", lang: str = "en"):
+    """Send recovery email when a checkout session expires without payment."""
+    plan_label = plan.capitalize()
+    checkout_url = f"https://arkforge.tech/{lang}/pricing.html?intent={plan}"
+
+    subject = f"Your {plan_label} checkout didn't complete"
+    body = f"""ArkForge Trust Layer — Checkout Not Completed
+
+Your {plan_label} plan checkout session expired before payment was completed.
+
+No charges were made to your card.
+
+If you ran into an issue or have questions about the plan,
+reply to this email — we read every message.
+
+To restart checkout:
+  {checkout_url}
+
+{'=' * 50}
+ArkForge Trust Layer — https://arkforge.tech/trust
+Support: contact@arkforge.fr
+"""
+    try:
+        _send_email(email, subject, body)
+        logger.info("Checkout abandoned recovery email sent to %s (plan=%s)", email, plan)
+    except Exception as e:
+        logger.warning("Checkout abandoned email failed: %s", e)

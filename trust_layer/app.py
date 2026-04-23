@@ -162,6 +162,7 @@ from .email_notify import (
     send_demo_request_email,
     send_subscription_suspended_email,
     send_subscription_reactivated_email,
+    send_checkout_abandoned_email,
 )
 from .timestamps import submit_hash
 from .reputation import get_reputation, get_public_reputation
@@ -736,6 +737,11 @@ async def setup_key(request: Request):
     if plan not in ("pro", "enterprise", "platform"):
         plan = "pro"
 
+    utm_source = (body.get("utm_source") or "")[:64]
+    utm_medium = (body.get("utm_medium") or "")[:64]
+    utm_campaign = (body.get("utm_campaign") or "")[:64]
+    referrer = (body.get("referrer") or "")[:256]
+
     if plan == "enterprise":
         price_id = STRIPE_ENTERPRISE_PRICE_ID_TEST if req_mode == "test" else STRIPE_ENTERPRISE_PRICE_ID
         plan_name = "enterprise"
@@ -766,6 +772,22 @@ async def setup_key(request: Request):
                 api_key=sk,
             )
 
+        checkout_meta = {
+            "product": f"trust_layer_{plan_name}_subscription",
+            "email": email,
+            "stripe_mode": req_mode,
+            "lang": lang,
+            "plan": plan_name,
+        }
+        if utm_source:
+            checkout_meta["utm_source"] = utm_source
+        if utm_medium:
+            checkout_meta["utm_medium"] = utm_medium
+        if utm_campaign:
+            checkout_meta["utm_campaign"] = utm_campaign
+        if referrer:
+            checkout_meta["referrer"] = referrer
+
         session = stripe.checkout.Session.create(
             mode="subscription",
             payment_method_types=["card"],
@@ -777,13 +799,7 @@ async def setup_key(request: Request):
                 else f"https://arkforge.tech/{lang}/tl-pro-success.html?session_id={{CHECKOUT_SESSION_ID}}"
             ),
             cancel_url=f"https://arkforge.tech/{lang}/pricing.html?intent={plan_name}",
-            metadata={
-                "product": f"trust_layer_{plan_name}_subscription",
-                "email": email,
-                "stripe_mode": req_mode,
-                "lang": lang,
-                "plan": plan_name,
-            },
+            metadata=checkout_meta,
             subscription_data={
                 "trial_period_days": 14,
                 "metadata": {
@@ -792,6 +808,7 @@ async def setup_key(request: Request):
                     "plan": plan_name,
                 }
             },
+            expires_at=int(datetime.now(timezone.utc).timestamp()) + 3600,
             api_key=sk,
         )
 
@@ -1032,6 +1049,22 @@ async def free_signup(request: Request):
         ip=client_ip,
         api_key=api_key,
     )
+
+    # Funnel event: register_completion from web form (/en/signup.html → /v1/keys/free-signup).
+    # Mirrors the emission in /api/register (MCP phone-home) so funnel metrics aggregate
+    # both surfaces uniformly. Without this, web signups bypass the funnel_events stream.
+    try:
+        with open(FUNNEL_EVENTS_LOG, "a") as _f:
+            _f.write(json.dumps({
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "event": "register_completion",
+                "scan_id": "",
+                "source": f"web_{attribution_source}" if attribution_source else "web_direct",
+                "client_ip_hash": hashlib.sha256(client_ip.encode()).hexdigest()[:12],
+                "email_hash": email[:3] + "***" if email else "",
+            }) + "\n")
+    except Exception:
+        pass
 
     return {
         "api_key": api_key,
@@ -1684,10 +1717,16 @@ async def stripe_webhook(request: Request):
     if event_type == "checkout.session.completed":
         customer_id = data.get("customer", "")
         customer_email = (
-            data.get("customer_email", "")
-            or data.get("customer_details", {}).get("email", "")
+            data.get("customer_details", {}).get("email", "")
             or data.get("metadata", {}).get("email", "")
         )
+        if not customer_email and customer_id:
+            try:
+                sk = STRIPE_TEST_KEY if is_test else STRIPE_LIVE_KEY
+                cust = stripe.Customer.retrieve(customer_id, api_key=sk)
+                customer_email = cust.get("email", "")
+            except Exception:
+                pass
         payment_intent_id = data.get("payment_intent", "")
         subscription_id = data.get("subscription", "")
         metadata = data.get("metadata", {})
@@ -1798,8 +1837,40 @@ async def stripe_webhook(request: Request):
             "Invoice payment failed for sub=%s customer=%s attempt=%s",
             subscription_id, customer_id, attempt
         )
-        # On final failure (attempt_count >= 4 typically), Stripe sets subscription past_due
-        # which fires customer.subscription.updated → deactivate_key_by_ref
+
+    elif event_type == "checkout.session.expired":
+        metadata = data.get("metadata", {})
+        customer_id = data.get("customer", "")
+        customer_email = (
+            data.get("customer_details", {}).get("email", "")
+            or metadata.get("email", "")
+        )
+        if not customer_email and customer_id:
+            try:
+                sk = STRIPE_TEST_KEY if is_test else STRIPE_LIVE_KEY
+                cust = stripe.Customer.retrieve(customer_id, api_key=sk)
+                customer_email = cust.get("email", "")
+            except Exception:
+                pass
+        plan = metadata.get("plan", "pro")
+        lang = metadata.get("lang", "en")
+        if customer_email:
+            try:
+                send_checkout_abandoned_email(customer_email, plan=plan, lang=lang)
+            except Exception as _e:
+                logger.warning("Checkout abandoned email failed: %s", _e)
+            try:
+                with open(CONVERSION_EVENTS_LOG, "a") as _cel:
+                    _cel.write(json.dumps({
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "event": "checkout_abandoned",
+                        "plan": plan,
+                        "email_hash": customer_email[:3] + "***",
+                        "test_mode": is_test,
+                    }) + "\n")
+            except OSError:
+                pass
+        logger.info("Checkout session expired for %s (plan=%s)", customer_email or "unknown", plan)
 
     _checkout_sid = data.get("id", "") if event_type == "checkout.session.completed" else ""
     _mark_webhook_processed(event_id, event_type=event_type, session_id=_checkout_sid)
