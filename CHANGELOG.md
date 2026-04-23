@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.38] — 2026-04-23
+
+### Fixed
+- checkout abandonment recovery + email resolution fallback
+
+---
+
 ## [1.3.37] — 2026-04-23
 
 ### Added
