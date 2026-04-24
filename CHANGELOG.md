@@ -6,6 +6,14 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.39] — 2026-04-24
+
+### Fixed
+- add upgrade_url to free-signup API response
+- add UTM tracking to Stripe checkout cancel, portal return, and abandoned checkout email URLs
+
+---
+
 ## [1.3.38] — 2026-04-23
 
 ### Fixed
