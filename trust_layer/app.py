@@ -1072,6 +1072,8 @@ async def free_signup(request: Request):
         "limit": f"{FREE_TIER_MONTHLY_LIMIT} proofs/month",
         "email": email,
         "message": "Your free API key is ready. It has also been sent to your email.",
+        "upgrade_url": "https://arkforge.tech/en/pro-signup.html?utm_source=free_signup_response",
+        "upgrade_cta": "Need more? Try Pro free for 14 days — 5,000 proofs/month, no charge until day 15.",
     }
 
 
@@ -1290,6 +1292,8 @@ async def mcp_register(request: Request):
         "limit": f"{FREE_TIER_MONTHLY_LIMIT} proofs/month",
         "email": email,
         "message": "Your free API key is ready. It has also been sent to your email.",
+        "upgrade_url": "https://arkforge.tech/en/pro-signup.html?utm_source=mcp_register_response",
+        "upgrade_cta": "Need more? Try Pro free for 14 days — 5,000 proofs/month, no charge until day 15.",
     }
 
 
