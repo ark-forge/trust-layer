@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.40] — 2026-04-24
+
+### Fixed
+- add UTM tracking to README and email template links
+
+---
+
 ## [1.3.39] — 2026-04-24
 
 ### Fixed
