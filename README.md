@@ -372,7 +372,7 @@ curl https://trust.arkforge.tech/v1/agent/{agent_id}/reputation
 
 ## Self-hosting
 
-> Self-hosted instances provide cryptographic integrity but carry no independent third-party attestation. For proofs verifiable by external parties, use the hosted service at [arkforge.tech/trust](https://arkforge.tech/trust).
+> Self-hosted instances provide cryptographic integrity but carry no independent third-party attestation. For proofs verifiable by external parties, use the hosted service at [arkforge.tech/trust](https://arkforge.tech/trust?utm_source=github_readme&utm_medium=referral).
 
 ```bash
 git clone https://github.com/ark-forge/trust-layer.git

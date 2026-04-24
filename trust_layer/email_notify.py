@@ -102,7 +102,7 @@ Check usage anytime:
 Need unlimited scans or 5,000+ proofs/month?
 
 Upgrade to Pro — 14-day free trial, no charge until day 15:
-  https://arkforge.tech/en/pro-signup.html
+  https://arkforge.tech/en/pro-signup.html?utm_source=email&utm_medium=welcome
 
 Pro includes: unlimited compliance scans, CI/CD API, compliance
 roadmap generation, and Trust Layer audit trail.
@@ -110,7 +110,7 @@ roadmap generation, and Trust Layer audit trail.
 
 ---
 
-Docs: https://arkforge.tech/trust
+Docs: https://arkforge.tech/trust?utm_source=email&utm_medium=welcome
 Support: contact@arkforge.fr
 """
     try:
@@ -160,7 +160,7 @@ Manage your subscription or cancel anytime:
   curl -X POST https://trust.arkforge.tech/v1/keys/portal \\
     -H "X-Api-Key: {api_key}"
 
-Docs: https://arkforge.tech/trust
+Docs: https://arkforge.tech/trust?utm_source=email&utm_medium=welcome_pro
 Support: contact@arkforge.fr
 """
     try:
@@ -206,7 +206,7 @@ Check your usage anytime:
     -H "Authorization: Bearer {api_key}"
 
 {'=' * 50}
-ArkForge Trust Layer — https://arkforge.tech/trust
+ArkForge Trust Layer — https://arkforge.tech/trust?utm_source=email&utm_medium=quota_alert
 """
     try:
         _send_email(email, subject, body)
@@ -278,7 +278,7 @@ VERIFY
 {'=' * 50}
 This is an automated proof of an agent-to-agent transaction.
 Verify independently on Sigstore Rekor using the URL above — no ArkForge account required.
-Service: ArkForge Trust Layer (https://arkforge.tech/trust)
+Service: ArkForge Trust Layer (https://arkforge.tech/trust?utm_source=email&utm_medium=proof_receipt)
 """
     try:
         _send_email(email, subject, body)
@@ -312,7 +312,7 @@ Or check your balance:
     -H "X-Api-Key: {api_key}"
 
 {'=' * 50}
-ArkForge Trust Layer — https://arkforge.tech/trust
+ArkForge Trust Layer — https://arkforge.tech/trust?utm_source=email&utm_medium=low_credits
 """
     try:
         _send_email(email, subject, body)
