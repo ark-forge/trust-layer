@@ -6,6 +6,14 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.41] — 2026-05-02
+
+### Added
+- CTEF cross-implementation reference in user-guide: constraint_evaluation field mapping (AgentGraph→ArkForge), `no_critical_findings` enforcement gate, `tier_upgrade_proof` composable envelope example
+- document v0.3.2 alignment: depth-first proof-stripping, canonical-bytes-diff fixture, 3 constraint_evaluation test vectors (within-limit/near-miss/exceeded)
+
+---
+
 ## [1.3.40] — 2026-04-24
 
 ### Fixed

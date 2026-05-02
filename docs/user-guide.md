@@ -1426,9 +1426,70 @@ python3 scripts/backfill_proof_index.py
 
 ---
 
+## CTEF Constraint Evaluation — Cross-Implementation Reference
+
+ArkForge Trust Layer participates in the [Composable Trust Evidence Format (CTEF)](https://github.com/corpollc/qntm) working group as an **enforcement gateway**: it consumes constraint evaluation evidence from providers like AgentGraph and enforces verdicts at the trust boundary.
+
+### Field mapping: AgentGraph → ArkForge
+
+| AgentGraph CTEF field | ArkForge attestation slot | Description |
+|---|---|---|
+| `claim_type` | `constraint_evaluation` | CTEF continuity-layer claim type |
+| `facet` | Dimension under evaluation | e.g. `budget_remaining`, `token_limit`, `response_time_ms` |
+| `limit` | Authority-declared ceiling | Extracted from the authority chain at issuance |
+| `actual` | Observed value at evaluation time | Runtime measurement |
+| `delta` | `limit - actual` | Positive = within bounds, zero = boundary, negative = exceeded |
+| `authority_chain_hash` | Chain integrity anchor | JCS-canonical hash with all nested `proof` fields stripped (depth-first) |
+| `authority_chain_ref` | URI to the authority chain | Allows independent re-verification |
+
+### Enforcement gate: `no_critical_findings`
+
+The binary enforcement-time decision is derived from the delta sign:
+
+| Delta | Verdict | Enforcement action |
+|---|---|---|
+| `delta > threshold` | `pass` | Request proceeds |
+| `0 < delta ≤ threshold` | `pass` (near-miss) | Request proceeds, monitoring alert fires |
+| `delta ≤ 0` | `fail` | Request blocked at enforcement gateway |
+
+The `no_critical_findings` boolean is the canonical gate shape: `true` when all evaluated facets have `delta > 0`, `false` otherwise.
+
+### Canonical test vectors (from PR #14)
+
+Three `constraint_evaluation` scenarios shipped as byte-match-validated CTEF vectors:
+
+| Scenario | Delta | Operational meaning |
+|---|---|---|
+| `within_limit` | +250 | Agent well within authority bounds |
+| `near_miss` | +5 | Monitoring fires before constraint breaks |
+| `exceeded` | -150 | Enforcement gateway blocks the request |
+
+Self-verification: `python3 specs/test-vectors/verify_execution_attestation_arkforge.py`
+
+### Composable envelope: `tier_upgrade_proof`
+
+A single CTEF envelope can carry both a static posture gate (scan results) and a runtime authorization decision. The `tier_upgrade_proof` shape composes `constraint_evaluation` evidence with scan posture to produce a combined verdict:
+
+```json
+{
+  "claim_type": "tier_upgrade_proof",
+  "posture_gate": { "scan_type": "security_posture", "no_critical_findings": true },
+  "constraint_evaluation": { "facet": "tier_ceiling", "limit": 3, "actual": 2, "delta": 1 },
+  "verdict": "granted",
+  "requester_did": "did:web:agent.example.com",
+  "policy_ref": "AEP-0.1.1/§4"
+}
+```
+
+Three test vectors cover the decision space: `granted` (posture passes + within ceiling), `denied` (posture fails or ceiling exceeded), `replay_vulnerable` (stale posture evidence reused past validity window).
+
+**Interop status:** ArkForge is the 6th byte-match-validated CTEF implementation and the 1st enforcement-gateway-role entry in the [AgentGraph interop harness](https://agentgraph.co/.well-known/interop-harness.json). Cross-validated against AgentGraph CTEF v0.3.1 (`agentgraph-co/agentgraph@69ad94d`).
+
+---
+
 - **Quick reference**: [quick-reference.md](./quick-reference.md)
 - **Support**: contact@arkforge.tech
 
 ---
 
-*Last updated: 2026-04-03*
+*Last updated: 2026-05-02*
