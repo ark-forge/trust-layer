@@ -719,6 +719,9 @@ async def setup_key(request: Request):
     except Exception:
         return _error_response("invalid_request", "Invalid JSON body", 400)
 
+    if body.get("website"):
+        return {"checkout_url": "", "session_id": "", "customer_id": "", "mode": "live", "plan": "pro", "price_monthly_eur": 29.0, "proofs_per_month": 5000}
+
     email = (body.get("email") or "").strip().lower()
     if not email or not _EMAIL_RE.match(email):
         return _error_response("invalid_request", "A valid email is required", 400)
@@ -992,6 +995,9 @@ async def free_signup(request: Request):
         body = await request.json()
     except Exception:
         return _error_response("invalid_request", "Invalid JSON body", 400)
+
+    if body.get("website"):
+        return {"api_key": "", "limit": "500 proofs/month", "email": "", "message": "OK"}
 
     email = (body.get("email") or "").strip().lower()
     if not email or not _EMAIL_RE.match(email):
