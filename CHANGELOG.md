@@ -6,6 +6,14 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.42] — 2026-05-03
+
+### Fixed
+- update test email domain to non-blocked domain after disposable email blocklist
+- route Scanner Pro through Checkout Sessions with real 14-day trial + block disposable emails
+
+---
+
 ## [1.3.41] — 2026-05-03
 
 ### Fixed
