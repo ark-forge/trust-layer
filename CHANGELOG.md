@@ -6,6 +6,21 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.41] — 2026-05-03
+
+### Fixed
+- add honeypot anti-bot check to signup endpoints
+- add MCP_SCAN_PINGS_LOG to config exports
+- add rate limiting to /v1/keys/setup endpoint
+
+### Documentation
+- add CTEF constraint_evaluation mapping + tier_upgrade_proof v0.3.2 notes
+
+### Internal
+- upgrade dependencies — cryptography 46→47, fastapi 0.135→0.136, stripe 15.0→15.1, uvicorn 0.42→0.46
+
+---
+
 ## [1.3.41] — 2026-05-02
 
 ### Added
