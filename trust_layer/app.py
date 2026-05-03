@@ -124,6 +124,7 @@ from .config import (
     WEBHOOK_IDEMPOTENCY_FILE,
     CONVERSION_EVENTS_LOG,
     FUNNEL_EVENTS_LOG,
+    MCP_SCAN_PINGS_LOG,
     MCP_REGISTRATION_LOG,
     CORS_ALLOWED_ORIGINS,
     PRO_OVERAGE_PRICE,
@@ -725,6 +726,19 @@ async def setup_key(request: Request):
     if len(email) > 320 or len(local_part) > 64:
         return _error_response("invalid_request", "Email address exceeds maximum allowed length", 400)
 
+    import time as _time
+    client_ip = (
+        request.headers.get("x-real-ip")
+        or (request.client.host if request.client else "unknown")
+    )
+    now_ts = _time.time()
+    setup_timestamps = _SETUP_RATE.get(client_ip, [])
+    setup_timestamps = [t for t in setup_timestamps if t > now_ts - 3600]
+    if len(setup_timestamps) >= _SETUP_MAX_PER_HOUR:
+        return _error_response("rate_limited", "Too many checkout attempts. Try again later.", 429)
+    setup_timestamps.append(now_ts)
+    _SETUP_RATE[client_ip] = setup_timestamps
+
     req_mode = body.get("mode", "live")
     lang = body.get("lang", "fr")
     if lang not in ("en", "fr"):
@@ -792,6 +806,7 @@ async def setup_key(request: Request):
             mode="subscription",
             payment_method_types=["card"],
             customer=customer.id,
+            client_reference_id=f"signup_{plan_name}",
             line_items=[{"price": price_id, "quantity": 1}],
             success_url=(
                 f"https://arkforge.tech/{lang}/tl-platform-success.html?session_id={{CHECKOUT_SESSION_ID}}"
@@ -933,6 +948,9 @@ _PROOF_ID_RE = _re.compile(r"^prf_\d{8}_\d{6}_[0-9a-f]{6}$")
 
 _FREE_SIGNUP_RATE: dict[str, list[float]] = {}  # IP -> timestamps (sliding 1h)
 _FREE_SIGNUP_MAX_PER_HOUR = 5
+
+_SETUP_RATE: dict[str, list[float]] = {}  # IP -> timestamps (sliding 1h)
+_SETUP_MAX_PER_HOUR = 5
 
 _CONTACT_RATE: dict[str, list[float]] = {}  # IP -> timestamps (sliding 1h)
 _CONTACT_MAX_PER_HOUR = 3
@@ -1295,6 +1313,59 @@ async def mcp_register(request: Request):
         "upgrade_url": "https://arkforge.tech/en/pro-signup.html?utm_source=mcp_register_response",
         "upgrade_cta": "Need more? Try Pro free for 14 days — 5,000 proofs/month, no charge until day 15.",
     }
+
+
+# --- POST /api/mcp-scan-ping ---
+
+_MCP_PING_RATE: dict = {}
+_MCP_PING_MAX_PER_MINUTE = 30
+
+@app.post("/api/mcp-scan-ping")
+async def mcp_scan_ping(request: Request):
+    """Receive anonymous usage pings from MCP stdio clients.
+
+    Lightweight, fire-and-forget endpoint. No PII collected — just tool name,
+    transport, framework count, and a daily-rotated IP hash for dedup.
+    """
+    import time as _time
+
+    client_ip = (
+        request.headers.get("x-real-ip")
+        or (request.client.host if request.client else "unknown")
+    )
+    now = _time.time()
+    timestamps = _MCP_PING_RATE.get(client_ip, [])
+    timestamps = [t for t in timestamps if t > now - 60]
+    if len(timestamps) >= _MCP_PING_MAX_PER_MINUTE:
+        return JSONResponse(status_code=429, content={"status": "rate_limited"})
+    timestamps.append(now)
+    _MCP_PING_RATE[client_ip] = timestamps
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"status": "invalid_json"})
+
+    day_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    ip_hash = hashlib.sha256(f"{client_ip}:{day_str}".encode()).hexdigest()[:12]
+
+    entry = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "tool": str(body.get("tool", "unknown"))[:64],
+        "transport": str(body.get("transport", "unknown"))[:16],
+        "scan_id": str(body.get("scan_id", ""))[:32],
+        "models_found": int(body.get("models_found", 0)),
+        "files_scanned": int(body.get("files_scanned", 0)),
+        "v": str(body.get("v", ""))[:8],
+        "ip_hash": ip_hash,
+    }
+    try:
+        with open(MCP_SCAN_PINGS_LOG, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError:
+        logger.warning("Failed to write MCP scan ping")
+
+    return {"status": "ok"}
 
 
 # --- POST /v1/contact ---
@@ -1718,6 +1789,20 @@ async def stripe_webhook(request: Request):
 
     logger.info("Stripe webhook: %s (test=%s)", event_type, is_test)
 
+    try:
+        _process_stripe_event(event_type, data, is_test, event_id)
+    except Exception:
+        logger.exception("Stripe webhook processing failed for event %s (%s)", event_id, event_type)
+        _mark_webhook_processed(event_id, event_type=event_type, session_id="")
+        return {"received": True}
+
+    _checkout_sid = data.get("id", "") if event_type == "checkout.session.completed" else ""
+    _mark_webhook_processed(event_id, event_type=event_type, session_id=_checkout_sid)
+    return {"received": True}
+
+
+def _process_stripe_event(event_type: str, data: dict, is_test: bool, event_id: str):
+    """Process a single Stripe webhook event. Extracted for global error handling."""
     if event_type == "checkout.session.completed":
         customer_id = data.get("customer", "")
         customer_email = (
@@ -1875,10 +1960,6 @@ async def stripe_webhook(request: Request):
             except OSError:
                 pass
         logger.info("Checkout session expired for %s (plan=%s)", customer_email or "unknown", plan)
-
-    _checkout_sid = data.get("id", "") if event_type == "checkout.session.completed" else ""
-    _mark_webhook_processed(event_id, event_type=event_type, session_id=_checkout_sid)
-    return {"received": True}
 
 
 # --- GET / (root) ---
