@@ -754,6 +754,10 @@ async def setup_key(request: Request):
     if plan not in ("pro", "enterprise", "platform"):
         plan = "pro"
 
+    product = (body.get("product") or "trust_layer").lower()
+    if product not in ("trust_layer", "scanner"):
+        product = "trust_layer"
+
     utm_source = (body.get("utm_source") or "")[:64]
     utm_medium = (body.get("utm_medium") or "")[:64]
     utm_campaign = (body.get("utm_campaign") or "")[:64]
@@ -805,23 +809,31 @@ async def setup_key(request: Request):
         if referrer:
             checkout_meta["referrer"] = referrer
 
+        if product == "scanner":
+            success_page = f"https://arkforge.tech/{lang}/scanner-pro-success.html?session_id={{CHECKOUT_SESSION_ID}}"
+            product_tag = f"scanner_{plan_name}_subscription"
+        elif plan_name == "platform":
+            success_page = f"https://arkforge.tech/{lang}/tl-platform-success.html?session_id={{CHECKOUT_SESSION_ID}}"
+            product_tag = f"trust_layer_{plan_name}_subscription"
+        else:
+            success_page = f"https://arkforge.tech/{lang}/tl-pro-success.html?session_id={{CHECKOUT_SESSION_ID}}"
+            product_tag = f"trust_layer_{plan_name}_subscription"
+
+        checkout_meta["product"] = product_tag
+        cancel_tab = "scanner" if product == "scanner" else "trust"
         session = stripe.checkout.Session.create(
             mode="subscription",
             payment_method_types=["card"],
             customer=customer.id,
-            client_reference_id=f"signup_{plan_name}",
+            client_reference_id=f"signup_{product}_{plan_name}",
             line_items=[{"price": price_id, "quantity": 1}],
-            success_url=(
-                f"https://arkforge.tech/{lang}/tl-platform-success.html?session_id={{CHECKOUT_SESSION_ID}}"
-                if plan_name == "platform"
-                else f"https://arkforge.tech/{lang}/tl-pro-success.html?session_id={{CHECKOUT_SESSION_ID}}"
-            ),
-            cancel_url=f"https://arkforge.tech/{lang}/pricing.html?intent={plan_name}&utm_source=stripe_checkout&utm_medium=cancel",
+            success_url=success_page,
+            cancel_url=f"https://arkforge.tech/{lang}/pricing.html?intent={plan_name}&utm_source=stripe_checkout&utm_medium=cancel#{cancel_tab}",
             metadata=checkout_meta,
             subscription_data={
                 "trial_period_days": 14,
                 "metadata": {
-                    "product": f"trust_layer_{plan_name}_subscription",
+                    "product": product_tag,
                     "email": email,
                     "plan": plan_name,
                 }
@@ -952,6 +964,17 @@ _PROOF_ID_RE = _re.compile(r"^prf_\d{8}_\d{6}_[0-9a-f]{6}$")
 _FREE_SIGNUP_RATE: dict[str, list[float]] = {}  # IP -> timestamps (sliding 1h)
 _FREE_SIGNUP_MAX_PER_HOUR = 5
 
+_BLOCKED_EMAIL_DOMAINS = frozenset({
+    "example.com", "example.org", "example.net",
+    "test.com", "test.org",
+    "mailinator.com", "guerrillamail.com", "guerrillamail.net",
+    "tempmail.com", "throwaway.email", "yopmail.com", "yopmail.fr",
+    "sharklasers.com", "grr.la", "guerrillamail.info",
+    "trashmail.com", "trashmail.net", "dispostable.com",
+    "mailnesia.com", "maildrop.cc", "tempail.com",
+    "10minutemail.com", "temp-mail.org",
+})
+
 _SETUP_RATE: dict[str, list[float]] = {}  # IP -> timestamps (sliding 1h)
 _SETUP_MAX_PER_HOUR = 5
 
@@ -1006,6 +1029,10 @@ async def free_signup(request: Request):
     local_part = email.split("@")[0]
     if len(email) > 320 or len(local_part) > 64:
         return _error_response("invalid_request", "Email address exceeds maximum allowed length", 400)
+
+    domain = email.rsplit("@", 1)[1]
+    if domain in _BLOCKED_EMAIL_DOMAINS:
+        return _error_response("invalid_request", "Please use a real email address — we send your API key there", 422)
 
     # Rate limit: max 5 signups per IP per hour.
     # X-Real-IP is set by nginx from $remote_addr and cannot be forged by clients.
