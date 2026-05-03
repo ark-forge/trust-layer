@@ -24,6 +24,7 @@ MCP_REGISTRATION_LOG = Path(
         "/opt/claude-ceo/workspace/mcp-servers/eu-ai-act/data/registration_log.jsonl",
     )
 )
+MCP_SCAN_PINGS_LOG = DATA_DIR / "mcp_scan_pings.jsonl"
 IDEMPOTENCY_DIR = DATA_DIR / "idempotency"
 AGENTS_DIR = DATA_DIR / "agents"
 SERVICES_DIR = DATA_DIR / "services"
