@@ -975,13 +975,20 @@ _BLOCKED_EMAIL_DOMAINS = frozenset({
     "10minutemail.com", "temp-mail.org",
 })
 
+try:
+    import dns.resolver as _dns_resolver
+except ImportError:
+    _dns_resolver = None
+
+
 def _verify_mx(domain: str) -> bool:
     """Return True if domain has MX records (can receive email). Fails open on timeout."""
+    if _dns_resolver is None:
+        return True
     try:
-        import dns.resolver
-        records = dns.resolver.resolve(domain, "MX", lifetime=3.0)
+        records = _dns_resolver.resolve(domain, "MX", lifetime=3.0)
         return bool(records)
-    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.resolver.NoNameservers):
+    except (_dns_resolver.NXDOMAIN, _dns_resolver.NoAnswer, _dns_resolver.NoNameservers):
         return False
     except Exception:
         return True  # DNS timeout or transient failure — fail open
