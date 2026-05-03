@@ -6,6 +6,14 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.44] — 2026-05-03
+
+### Fixed
+- add DNS MX validation to reject fake email domains
+- add DNS MX validation to reject fake email domains
+
+---
+
 ## [1.3.43] — 2026-05-03
 
 _(no user-facing changes)_
