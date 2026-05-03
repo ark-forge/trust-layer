@@ -1034,6 +1034,17 @@ async def free_signup(request: Request):
     if domain in _BLOCKED_EMAIL_DOMAINS:
         return _error_response("invalid_request", "Please use a real email address — we send your API key there", 422)
 
+    # DNS MX check: reject domains that cannot receive email
+    import dns.resolver
+    try:
+        mx_records = dns.resolver.resolve(domain, "MX", lifetime=3.0)
+        if not mx_records:
+            return _error_response("invalid_request", "This email domain cannot receive mail. Please use a real email address.", 422)
+    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.resolver.NoNameservers):
+        return _error_response("invalid_request", "This email domain does not exist. Please use a real email address.", 422)
+    except Exception:
+        pass  # DNS timeout or transient failure — allow signup (fail open)
+
     # Rate limit: max 5 signups per IP per hour.
     # X-Real-IP is set by nginx from $remote_addr and cannot be forged by clients.
     # Fall back to direct connection IP if the header is absent.
