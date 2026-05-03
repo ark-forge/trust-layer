@@ -479,7 +479,7 @@ class TestProxyIntegration:
 
     def _setup_free_key(self, client):
         """Create a free API key and return it."""
-        resp = client.post("/v1/keys/free-signup", json={"email": "receipt-test@example.com"})
+        resp = client.post("/v1/keys/free-signup", json={"email": "receipt-test@arkforge-test.dev"})
         assert resp.status_code == 200
         return resp.json()["api_key"]
 
