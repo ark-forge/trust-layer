@@ -73,6 +73,9 @@ def _isolate_data(tmp_path, monkeypatch):
     # DNS rebinding mock — prevent real DNS resolution in proxy tests
     monkeypatch.setattr(proxy_mod, "_check_no_private_dns", AsyncMock(return_value=None))
 
+    # MX validation mock — skip real DNS lookups in tests
+    monkeypatch.setattr(app_mod, "_verify_mx", lambda domain: True)
+
     # Rekor — isolate to prevent real network calls in tests
     import trust_layer.rekor as rekor_mod
     monkeypatch.setattr(rekor_mod, "REKOR_URL", "https://rekor.test.internal")

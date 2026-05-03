@@ -975,6 +975,18 @@ _BLOCKED_EMAIL_DOMAINS = frozenset({
     "10minutemail.com", "temp-mail.org",
 })
 
+def _verify_mx(domain: str) -> bool:
+    """Return True if domain has MX records (can receive email). Fails open on timeout."""
+    try:
+        import dns.resolver
+        records = dns.resolver.resolve(domain, "MX", lifetime=3.0)
+        return bool(records)
+    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.resolver.NoNameservers):
+        return False
+    except Exception:
+        return True  # DNS timeout or transient failure — fail open
+
+
 _SETUP_RATE: dict[str, list[float]] = {}  # IP -> timestamps (sliding 1h)
 _SETUP_MAX_PER_HOUR = 5
 
@@ -1035,15 +1047,8 @@ async def free_signup(request: Request):
         return _error_response("invalid_request", "Please use a real email address — we send your API key there", 422)
 
     # DNS MX check: reject domains that cannot receive email
-    import dns.resolver
-    try:
-        mx_records = dns.resolver.resolve(domain, "MX", lifetime=3.0)
-        if not mx_records:
-            return _error_response("invalid_request", "This email domain cannot receive mail. Please use a real email address.", 422)
-    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.resolver.NoNameservers):
-        return _error_response("invalid_request", "This email domain does not exist. Please use a real email address.", 422)
-    except Exception:
-        pass  # DNS timeout or transient failure — allow signup (fail open)
+    if not _verify_mx(domain):
+        return _error_response("invalid_request", "This email domain cannot receive mail. Please use a real email address.", 422)
 
     # Rate limit: max 5 signups per IP per hour.
     # X-Real-IP is set by nginx from $remote_addr and cannot be forged by clients.
