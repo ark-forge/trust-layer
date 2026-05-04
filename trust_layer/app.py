@@ -1879,9 +1879,9 @@ def _process_stripe_event(event_type: str, data: dict, is_test: bool, event_id: 
         product = metadata.get("product", "")
 
         if customer_id or customer_email:
-            if product == "trust_layer_pro_subscription":
+            if product in ("trust_layer_pro_subscription", "scanner_pro_subscription"):
                 api_key = create_api_key(customer_id, ref_id, customer_email, test_mode=is_test, plan="pro")
-                logger.info("Pro subscription activated for %s (sub=%s)", customer_email, subscription_id)
+                logger.info("Pro subscription activated for %s (sub=%s, product=%s)", customer_email, subscription_id, product)
             elif product == "trust_layer_enterprise_subscription":
                 api_key = create_api_key(customer_id, ref_id, customer_email, test_mode=is_test, plan="enterprise")
                 logger.info("Enterprise subscription activated for %s (sub=%s)", customer_email, subscription_id)
@@ -1889,12 +1889,11 @@ def _process_stripe_event(event_type: str, data: dict, is_test: bool, event_id: 
                 api_key = create_api_key(customer_id, ref_id, customer_email, test_mode=is_test, plan="platform")
                 logger.info("Platform subscription activated for %s (sub=%s)", customer_email, subscription_id)
             else:
-                # Fallback : free tier ou checkout inconnu
                 api_key = create_api_key(customer_id, ref_id, customer_email, test_mode=is_test)
                 logger.info("API key created for %s (ref=%s, product=%s)", customer_email, ref_id, product)
 
             try:
-                if product in ("trust_layer_pro_subscription", "trust_layer_enterprise_subscription", "trust_layer_platform_subscription"):
+                if product in ("trust_layer_pro_subscription", "scanner_pro_subscription", "trust_layer_enterprise_subscription", "trust_layer_platform_subscription"):
                     plan_label = metadata.get("plan", "pro")
                     send_welcome_email_pro(customer_email, api_key, plan_name=plan_label)
                 else:
@@ -1917,7 +1916,7 @@ def _process_stripe_event(event_type: str, data: dict, is_test: bool, event_id: 
                     _cel.write(json.dumps({
                         "ts": datetime.now(timezone.utc).isoformat(),
                         "event": "signup_attributed",
-                        "plan": product.replace("trust_layer_", "").replace("_subscription", "") if product else "pro",
+                        "plan": product.replace("trust_layer_", "").replace("scanner_", "").replace("_subscription", "") if product else "pro",
                         "email_hash": customer_email[:3] + "***" if customer_email else "",
                         "source": "stripe_checkout",
                         "utm_source": metadata.get("utm_source", ""),
