@@ -436,6 +436,60 @@ def test_webhook_pro_subscription_creates_key(client, monkeypatch):
     assert keys[pro_key]["plan"] == "pro"
 
 
+@pytest.mark.parametrize("product_tag", [
+    "scanner_pro_subscription",
+])
+def test_webhook_scanner_pro_subscription_creates_pro_key(client, monkeypatch, product_tag):
+    """scanner_pro_subscription must route to plan=pro (not free fallback)."""
+    import trust_layer.app as app_mod
+    monkeypatch.setattr(app_mod, "STRIPE_WEBHOOK_SECRET_TEST", "whsec_test_fake")
+
+    from trust_layer.credits import get_balance
+
+    event_body = {
+        "id": "evt_test_scanner_pro_001",
+        "type": "checkout.session.completed",
+        "livemode": False,
+        "data": {"object": {}},
+    }
+    inner_object = {
+        "customer": "cus_scanner_pro_test",
+        "customer_details": {"email": "scanner_pro@test.com"},
+        "payment_intent": None,
+        "subscription": "sub_scanner_pro_001",
+        "metadata": {
+            "product": product_tag,
+            "email": "scanner_pro@test.com",
+            "plan": "pro",
+        },
+    }
+    mock_event = MagicMock()
+    mock_event.id = "evt_test_scanner_pro_001"
+    mock_event.type = "checkout.session.completed"
+    mock_event.livemode = False
+    mock_event.data.object.to_dict.return_value = inner_object
+
+    with patch("trust_layer.app.send_welcome_email_pro"), \
+         patch("stripe.Webhook.construct_event", return_value=mock_event):
+        r = client.post(
+            "/v1/webhooks/stripe",
+            json=event_body,
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert r.status_code == 200
+    assert r.json()["received"] is True
+
+    from trust_layer.keys import load_api_keys
+    keys = load_api_keys()
+    scanner_key = next((k for k, v in keys.items() if v.get("email") == "scanner_pro@test.com"), None)
+    assert scanner_key is not None, f"{product_tag} did not create an API key"
+    assert keys[scanner_key]["plan"] == "pro", f"{product_tag} should create pro plan, got {keys[scanner_key].get('plan')}"
+
+    balance = get_balance(scanner_key)
+    assert balance == 0.0, f"Expected no credits (subscription model), got {balance}"
+
+
 # --- /v1/keys/portal ---
 
 def test_billing_portal(client, monkeypatch):
