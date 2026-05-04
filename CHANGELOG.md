@@ -6,6 +6,14 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.45] — 2026-05-04
+
+### Fixed
+- handle scanner_pro_subscription in checkout webhook handler
+- fix dns.resolver import scope in _verify_mx
+
+---
+
 ## [1.3.44] — 2026-05-03
 
 ### Fixed
