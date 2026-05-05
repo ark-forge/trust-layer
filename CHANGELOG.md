@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.49] — 2026-05-05
+
+### Added
+- public /v1/demo endpoint for prospect conversion
+
+---
+
 ## [1.3.48] — 2026-05-05
 
 ### Added
