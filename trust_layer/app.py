@@ -164,6 +164,7 @@ from .email_notify import (
     send_subscription_suspended_email,
     send_subscription_reactivated_email,
     send_checkout_abandoned_email,
+    _is_test_email,
 )
 from .timestamps import submit_hash
 from .reputation import get_reputation, get_public_reputation
@@ -743,6 +744,9 @@ async def setup_key(request: Request):
     _SETUP_RATE[client_ip] = setup_timestamps
 
     req_mode = body.get("mode", "live")
+    is_reserved, _reserved_reason = _is_test_email(email)
+    if is_reserved and req_mode != "test":
+        req_mode = "test"
     lang = body.get("lang", "fr")
     if lang not in ("en", "fr"):
         lang = "fr"
