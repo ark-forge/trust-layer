@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.47] — 2026-05-05
+
+### Fixed
+- force test mode for RFC 2606 reserved email domains at source
+
+---
+
 ## [1.3.46] — 2026-05-05
 
 ### Tests
