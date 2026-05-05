@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.48] — 2026-05-05
+
+### Added
+- non-repudiation positioning — tagline + CTA banner
+
+---
+
 ## [1.3.47] — 2026-05-05
 
 ### Fixed
