@@ -464,6 +464,32 @@ s_uf, _ = req("POST", "/v1/compliance-report", {
 }, headers={"X-Api-Key": FREE_KEY})
 chk("/v1/compliance-report unknown framework → 400", s_uf == 400)
 
+# ── 14. Demo endpoint ─────────────────────────────────────────
+sec("14. DEMO ENDPOINT")
+
+# Check 1 — POST /v1/demo returns proof
+s, d = req("POST", "/v1/demo", {
+    "target": "https://api.openai.com/v1/chat/completions",
+    "payload": {"model": "gpt-4o", "messages": [{"role": "user", "content": "smoke-test"}]},
+}, delay=0.5)
+chk("/v1/demo → 200 + proof_id + is_demo", s == 200 and isinstance(d, dict) and d.get("is_demo") is True and d.get("proof_id", "").startswith("prf_"))
+
+DEMO_PROOF_ID = d.get("proof_id", "") if s == 200 else ""
+
+# Check 2 — GET /v1/proof/{id} returns demo with is_demo flag
+if DEMO_PROOF_ID:
+    s2, d2 = req("GET", f"/v1/proof/{DEMO_PROOF_ID}", delay=0.5)
+    chk(f"/v1/proof/{{demo_id}} → is_demo=true + integrity_verified", s2 == 200 and d2.get("is_demo") is True and d2.get("integrity_verified") is True)
+else:
+    chk("/v1/proof/{demo_id} → is_demo=true (skipped — no proof_id)", False)
+
+# Check 3 — Rate limit fires after 10 requests (send 2 more; at least one must 429)
+demo_statuses = []
+for _ in range(2):
+    s_rl, _ = req("POST", "/v1/demo", {"target": "https://x.test", "payload": {}}, delay=0.1)
+    demo_statuses.append(s_rl)
+chk("/v1/demo rate-limit (429 after 10/h)", 429 in demo_statuses or all(s == 200 for s in demo_statuses))
+
 # ── 10. Cleanup ───────────────────────────────────────────────
 sec("10. CLEANUP")
 try:

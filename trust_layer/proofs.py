@@ -190,8 +190,10 @@ def get_public_proof(proof: dict) -> dict:
     buyer_reputation_score, buyer_profile_url) are redacted or removed.
     Use get_full_proof() for authenticated owner access.
     """
+    is_demo = proof.get("is_demo", False)
     result = {
         "proof_id": proof.get("proof_id"),
+        "is_demo": is_demo,
         "spec_version": proof.get("spec_version"),
         "hashes": proof.get("hashes"),
         "timestamp_authority": proof.get("timestamp_authority"),
@@ -212,6 +214,12 @@ def get_public_proof(proof: dict) -> dict:
         "did_resolution_status": proof.get("parties", {}).get("did_resolution_status"),
         "seller": proof.get("parties", {}).get("seller"),
     }
+    if is_demo:
+        result["demo_notice"] = (
+            "This is a demo proof generated without a real upstream call. "
+            "Sign your production AI calls — free up to 500/month: "
+            "https://arkforge.tech/en/signup.html"
+        )
     # Redact provider_payment: keep only type, hash, verification_status
     pp = proof.get("provider_payment")
     if pp:

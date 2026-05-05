@@ -39,6 +39,7 @@ def _is_failover_mode() -> bool:
 # Endpoints d'écriture bloqués en mode failover
 _FAILOVER_BLOCKED_PATHS = {
     "/v1/proxy",
+    "/v1/demo",
     "/v1/keys/setup",
     "/v1/keys/portal",
     "/v1/keys/free-signup",
@@ -152,7 +153,8 @@ from .attestation import (
     build_attestation, store_attestation, load_attestation,
     find_by_record_id, attestation_to_encina_response,
 )
-from .proxy import execute_proxy, ProxyError, drain_background_tasks, _track_task, _log_background_task
+from .proxy import execute_proxy, ProxyError, drain_background_tasks, _track_task, _log_background_task, _post_proof_background
+from .demo import check_demo_rate_limit, build_demo_proof, _PAYLOAD_MAX_BYTES as _DEMO_PAYLOAD_MAX_BYTES
 from .templates import render_proof_page
 from .rate_limit import get_usage, get_daily_limit
 from .redis_client import get_redis
@@ -543,6 +545,74 @@ async def proxy_endpoint(
             headers["X-ArkForge-Buyer-Score"] = str(buyer_score)
 
     return JSONResponse(status_code=status_code, content=result, headers=headers)
+
+
+# --- POST /v1/demo ---
+
+@app.post("/v1/demo")
+async def demo_endpoint(request: Request):
+    """Public demo — generate a real cryptographic proof with no auth, no upstream fetch.
+
+    Rate-limited to 10 requests/hour/IP. Proof is stored and verifiable at /v1/proof/{id}.
+    The upstream call is simulated (synthetic response) so no SSRF risk.
+    """
+    client_ip = request.headers.get("x-real-ip") or (request.client.host if request.client else "unknown")
+
+    is_limited, retry_after = check_demo_rate_limit(client_ip)
+    if is_limited:
+        return JSONResponse(
+            status_code=429,
+            content={"error": "rate_limited", "retry_after_seconds": retry_after},
+        )
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid_json"})
+
+    target = body.get("target", "").strip()
+    payload = body.get("payload", {})
+
+    if not target:
+        return JSONResponse(status_code=400, content={"error": "invalid_target", "detail": "'target' is required"})
+    if not isinstance(payload, dict):
+        return JSONResponse(status_code=400, content={"error": "invalid_request", "detail": "'payload' must be a JSON object"})
+
+    import json as _json
+    if len(_json.dumps(payload).encode()) > _DEMO_PAYLOAD_MAX_BYTES:
+        return JSONResponse(status_code=400, content={"error": "payload_too_large", "detail": f"'payload' must be under {_DEMO_PAYLOAD_MAX_BYTES} bytes"})
+
+    proof_record = build_demo_proof(target=target, payload=payload)
+    proof_id = proof_record["proof_id"]
+    chain_hash = proof_record.pop("_raw_chain_hash", "")
+    verification_url = proof_record["verification_url"]
+
+    # TSA + Rekor in background — same pipeline as real proofs, $0 cost
+    task = asyncio.create_task(
+        _post_proof_background(proof_id, proof_record, chain_hash, verification_url, email="", plan="demo")
+    )
+    _track_task(task)
+
+    logger.info("Demo proof generated: %s from IP %s", proof_id, client_ip)
+
+    return JSONResponse(status_code=200, content={
+        "proof_id": proof_id,
+        "is_demo": True,
+        "hashes": proof_record["hashes"],
+        "signature": proof_record.get("arkforge_signature"),
+        "pubkey": proof_record.get("arkforge_pubkey"),
+        "signed_at": proof_record["timestamp"],
+        "tsa_status": "pending",
+        "rekor_status": "pending",
+        "verify_url": verification_url,
+        "next_step": {
+            "message": "Sign your real AI calls — same proof, your data. Free up to 500/month.",
+            "signup_url": (
+                "https://arkforge.tech/en/signup.html"
+                "?utm_source=demo&utm_medium=trust_layer&utm_campaign=demo_endpoint"
+            ),
+        },
+    })
 
 
 # --- GET /v1/proof/{proof_id}/full ---
