@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.46] — 2026-05-05
+
+### Tests
+- add scanner_pro_subscription routing regression test
+
+---
+
 ## [1.3.45] — 2026-05-04
 
 ### Fixed
