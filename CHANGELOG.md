@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.51] — 2026-05-07
+
+### Fixed
+- include y as vowel in gibberish detection to reduce false positives
+
+---
+
 ## [1.3.50] — 2026-05-07
 
 ### Fixed
