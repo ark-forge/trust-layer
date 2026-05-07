@@ -799,6 +799,8 @@ async def setup_key(request: Request):
     local_part = email.split("@")[0]
     if len(email) > 320 or len(local_part) > 64:
         return _error_response("invalid_request", "Email address exceeds maximum allowed length", 400)
+    if _looks_like_gibberish(local_part):
+        return _error_response("invalid_request", "Please use a valid email address", 400)
 
     import time as _time
     client_ip = (
@@ -897,7 +899,7 @@ async def setup_key(request: Request):
         cancel_tab = "scanner" if product == "scanner" else "trust"
         session = stripe.checkout.Session.create(
             mode="subscription",
-            payment_method_types=["card"],
+            payment_method_types=["card", "link"],
             customer=customer.id,
             client_reference_id=f"signup_{product}_{plan_name}",
             line_items=[{"price": price_id, "quantity": 1}],
@@ -912,7 +914,7 @@ async def setup_key(request: Request):
                     "plan": plan_name,
                 }
             },
-            expires_at=int(datetime.now(timezone.utc).timestamp()) + 3600,
+            expires_at=int(datetime.now(timezone.utc).timestamp()) + 86400,
             api_key=sk,
         )
 
@@ -1031,6 +1033,23 @@ import re as _re
 _EMAIL_RE = _re.compile(
     r"^[a-zA-Z0-9]([a-zA-Z0-9._%+\-]*[a-zA-Z0-9])?@[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$"
 )
+
+
+def _looks_like_gibberish(local_part: str) -> bool:
+    """Reject local parts that are clearly random keyboard mashing (e.g. hkzjdlk, fdsfdsfsd)."""
+    lp = local_part.lower().replace(".", "").replace("_", "").replace("-", "")
+    if len(lp) < 4:
+        return False
+    vowels = sum(1 for c in lp if c in "aeiou")
+    ratio = vowels / len(lp) if lp else 0
+    if ratio < 0.08 and len(lp) >= 5:
+        return True
+    consonant_run = max(
+        (len(s) for s in _re.split(r"[aeiou0-9_.@\-+]", lp) if s), default=0
+    )
+    if consonant_run >= 6:
+        return True
+    return False
 
 # Valid proof ID format: prf_YYYYMMDD_HHMMSS_<6hex>
 _PROOF_ID_RE = _re.compile(r"^prf_\d{8}_\d{6}_[0-9a-f]{6}$")
