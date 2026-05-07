@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.50] — 2026-05-07
+
+### Fixed
+- anti-spam email validation + 24h expiry + Link payments
+
+---
+
 ## [1.3.49] — 2026-05-05
 
 ### Added
