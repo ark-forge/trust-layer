@@ -1040,12 +1040,13 @@ def _looks_like_gibberish(local_part: str) -> bool:
     lp = local_part.lower().replace(".", "").replace("_", "").replace("-", "")
     if len(lp) < 4:
         return False
-    vowels = sum(1 for c in lp if c in "aeiou")
+    # 'y' counted as vowel to avoid false-positives on Slavic/Asian transliterated names
+    vowels = sum(1 for c in lp if c in "aeiouy")
     ratio = vowels / len(lp) if lp else 0
-    if ratio < 0.08 and len(lp) >= 5:
+    if ratio < 0.10 and len(lp) >= 5:
         return True
     consonant_run = max(
-        (len(s) for s in _re.split(r"[aeiou0-9_.@\-+]", lp) if s), default=0
+        (len(s) for s in _re.split(r"[aeiouy0-9_.@\-+]", lp) if s), default=0
     )
     if consonant_run >= 6:
         return True
