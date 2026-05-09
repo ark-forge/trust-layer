@@ -3,6 +3,7 @@
 import logging
 import smtplib
 import ssl
+import time
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.utils import formatdate, make_msgid
@@ -10,6 +11,11 @@ from email.utils import formatdate, make_msgid
 from .config import SMTP_HOST, SMTP_PORT, SMTP_LOGIN, SMTP_USER, SMTP_CONTACT, SMTP_PASSWORD
 
 logger = logging.getLogger("trust_layer.email")
+
+_email_failure_count = 0
+_email_success_count = 0
+_last_failure_time: float = 0
+_FAILURE_ALERT_THRESHOLD = 3
 
 
 _TEST_TLDS = {"invalid", "local", "test", "example", "localhost"}
@@ -57,16 +63,33 @@ def _send_email(to: str, subject: str, body: str):
     msg["To"] = to
     msg["Reply-To"] = SMTP_CONTACT
     msg["Date"] = formatdate(localtime=True)
-    msg["Message-ID"] = make_msgid(domain="arkforge.fr")
+    msg["Message-ID"] = make_msgid(domain="arkforge.tech")
     msg["List-Unsubscribe"] = f"<mailto:{SMTP_CONTACT}?subject=unsubscribe>"
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
-    context = ssl.create_default_context()
-    with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context, timeout=15) as server:
-        server.login(SMTP_LOGIN, SMTP_PASSWORD)
-        server.sendmail(SMTP_USER, to, msg.as_string())
-
-    logger.info("Email sent to %s: %s", to, subject)
+    global _email_failure_count, _email_success_count, _last_failure_time
+    try:
+        context = ssl.create_default_context()
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context, timeout=15) as server:
+            server.login(SMTP_LOGIN, SMTP_PASSWORD)
+            server.sendmail(SMTP_USER, to, msg.as_string())
+        _email_success_count += 1
+        _email_failure_count = 0
+        logger.info("Email sent to %s: %s", to, subject)
+    except smtplib.SMTPRecipientsRefused as e:
+        _email_failure_count += 1
+        _last_failure_time = time.time()
+        logger.error("SMTP recipient refused (count=%d): to=%s err=%s", _email_failure_count, to, e)
+    except smtplib.SMTPSenderRefused as e:
+        _email_failure_count += 1
+        _last_failure_time = time.time()
+        logger.error("SMTP sender refused — domain may not be verified (count=%d): from=%s err=%s", _email_failure_count, SMTP_USER, e)
+    except (smtplib.SMTPException, OSError) as e:
+        _email_failure_count += 1
+        _last_failure_time = time.time()
+        logger.error("SMTP delivery failed (count=%d): to=%s err=%s", _email_failure_count, to, e)
+    if _email_failure_count >= _FAILURE_ALERT_THRESHOLD:
+        logger.critical("EMAIL_DELIVERY_ALERT: %d consecutive failures — last at %s. Check SMTP config (host=%s, from=%s)", _email_failure_count, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(_last_failure_time)), SMTP_HOST, SMTP_USER)
 
 
 def send_welcome_email(email: str, api_key: str):
@@ -111,7 +134,7 @@ roadmap generation, and Trust Layer audit trail.
 ---
 
 Docs: https://arkforge.tech/trust?utm_source=email&utm_medium=welcome
-Support: contact@arkforge.fr
+Support: contact@arkforge.tech
 """
     try:
         _send_email(email, subject, body)
@@ -161,7 +184,7 @@ Manage your subscription or cancel anytime:
     -H "X-Api-Key: {api_key}"
 
 Docs: https://arkforge.tech/trust?utm_source=email&utm_medium=welcome_pro
-Support: contact@arkforge.fr
+Support: contact@arkforge.tech
 """
     try:
         _send_email(email, subject, body)
@@ -458,7 +481,7 @@ Your proofs remain accessible for 30 days after trial end:
 
 {'=' * 50}
 ArkForge Trust Layer — https://arkforge.tech/trust
-Support: contact@arkforge.fr
+Support: contact@arkforge.tech
 """
     try:
         _send_email(email, subject, body)
@@ -488,7 +511,7 @@ automatically once payment succeeds.
 
 {'=' * 50}
 ArkForge Trust Layer — https://arkforge.tech/trust
-Support: contact@arkforge.fr
+Support: contact@arkforge.tech
 """
     try:
         _send_email(email, subject, body)
@@ -513,7 +536,7 @@ Check your usage:
 
 {'=' * 50}
 ArkForge Trust Layer — https://arkforge.tech/trust
-Support: contact@arkforge.fr
+Support: contact@arkforge.tech
 """
     try:
         _send_email(email, subject, body)
@@ -555,7 +578,7 @@ Reply directly to this email to contact the prospect.
         msg["To"] = SMTP_CONTACT
         msg["Reply-To"] = email
         msg["Date"] = formatdate(localtime=True)
-        msg["Message-ID"] = make_msgid(domain="arkforge.fr")
+        msg["Message-ID"] = make_msgid(domain="arkforge.tech")
         msg.attach(MIMEText(admin_body, "plain", "utf-8"))
 
         context = ssl.create_default_context()
@@ -636,7 +659,7 @@ To restart checkout:
 
 {'=' * 50}
 ArkForge Trust Layer — https://arkforge.tech/trust
-Support: contact@arkforge.fr
+Support: contact@arkforge.tech
 """
     try:
         _send_email(email, subject, body)

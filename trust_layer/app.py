@@ -815,10 +815,21 @@ async def setup_key(request: Request):
     setup_timestamps.append(now_ts)
     _SETUP_RATE[client_ip] = setup_timestamps
 
+    email_timestamps = _SETUP_RATE_EMAIL.get(email, [])
+    email_timestamps = [t for t in email_timestamps if t > now_ts - 3600]
+    if len(email_timestamps) >= _SETUP_MAX_PER_EMAIL_PER_HOUR:
+        return _error_response("rate_limited", "Too many checkout attempts for this email. Try again later.", 429)
+    email_timestamps.append(now_ts)
+    _SETUP_RATE_EMAIL[email] = email_timestamps
+
     req_mode = body.get("mode", "live")
     is_reserved, _reserved_reason = _is_test_email(email)
     if is_reserved and req_mode != "test":
         req_mode = "test"
+    if req_mode == "live" and "mode" not in body:
+        local_part = email.split("@")[0].lower() if "@" in email else ""
+        if "test" in local_part:
+            logger.warning("keys/setup: email %r looks like test but mode defaulted to live (no mode param sent)", email)
     lang = body.get("lang", "fr")
     if lang not in ("en", "fr"):
         lang = "fr"
@@ -1090,6 +1101,8 @@ def _verify_mx(domain: str) -> bool:
 
 _SETUP_RATE: dict[str, list[float]] = {}  # IP -> timestamps (sliding 1h)
 _SETUP_MAX_PER_HOUR = 5
+_SETUP_RATE_EMAIL: dict[str, list[float]] = {}  # email -> timestamps (sliding 1h)
+_SETUP_MAX_PER_EMAIL_PER_HOUR = 3
 
 _CONTACT_RATE: dict[str, list[float]] = {}  # IP -> timestamps (sliding 1h)
 _CONTACT_MAX_PER_HOUR = 3
@@ -2158,6 +2171,14 @@ async def health():
     failover = _is_failover_mode()
     resp["mode"] = "failover" if failover else "primary"
     resp["write_enabled"] = not failover
+    from .email_notify import _email_failure_count, _email_success_count, _last_failure_time
+    resp["email"] = {
+        "consecutive_failures": _email_failure_count,
+        "total_sent": _email_success_count,
+        "healthy": _email_failure_count < 3,
+    }
+    if _last_failure_time:
+        resp["email"]["last_failure"] = datetime.fromtimestamp(_last_failure_time, tz=timezone.utc).isoformat()
     return resp
 
 
