@@ -6,6 +6,16 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.53] — 2026-05-09
+
+### Added
+- add is_external visitor attribution to checkout funnel events
+
+### Fixed
+- email delivery monitoring + per-email rate limiting
+
+---
+
 ## [1.3.52] — 2026-05-09
 
 _(no user-facing changes)_
