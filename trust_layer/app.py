@@ -52,6 +52,7 @@ _FAILOVER_BLOCKED_PATHS = {
     "/v1/assess",
     "/v1/compliance-report",
     "/v1/contact",
+    "/v1/track/event",
 }
 
 
@@ -822,6 +823,10 @@ async def setup_key(request: Request):
     email_timestamps.append(now_ts)
     _SETUP_RATE_EMAIL[email] = email_timestamps
 
+    referer_header = request.headers.get("referer", "")
+    user_agent = request.headers.get("user-agent", "")
+    visitor = _classify_visitor(client_ip, referer_header, user_agent)
+
     req_mode = body.get("mode", "live")
     is_reserved, _reserved_reason = _is_test_email(email)
     if is_reserved and req_mode != "test":
@@ -895,6 +900,9 @@ async def setup_key(request: Request):
             checkout_meta["utm_campaign"] = utm_campaign
         if referrer:
             checkout_meta["referrer"] = referrer
+        checkout_meta["is_external"] = str(visitor["is_external"]).lower()
+        checkout_meta["source_type"] = visitor["source_type"]
+        checkout_meta["client_ip_hash"] = hashlib.sha256(client_ip.encode()).hexdigest()[:12]
 
         if product == "scanner":
             success_page = f"https://arkforge.tech/{lang}/scanner-pro-success.html?session_id={{CHECKOUT_SESSION_ID}}"
@@ -928,6 +936,17 @@ async def setup_key(request: Request):
             expires_at=int(datetime.now(timezone.utc).timestamp()) + 86400,
             api_key=sk,
         )
+
+        _log_funnel_event("checkout_initiated", client_ip, referer_header, user_agent, extra={
+            "plan": plan_name,
+            "product": product_tag,
+            "email_hash": email[:3] + "***" if email else "",
+            "session_id": session.id,
+            "test_mode": req_mode == "test",
+            "utm_source": utm_source,
+            "utm_medium": utm_medium,
+            "utm_campaign": utm_campaign,
+        })
 
         return {
             "checkout_url": session.url,
@@ -1134,6 +1153,65 @@ def _classify_referrer_source(referrer: str) -> str:
     if "arkforge" in r:
         return "direct"
     return "other"
+
+
+_INTERNAL_IPS = frozenset({"90.105.196.22", "57.131.27.61", "51.91.99.178", "127.0.0.1", "::1"})
+_INTERNAL_REFERER_DOMAINS = frozenset({"arkforge.tech", "arkforge.fr", "localhost"})
+_BOT_UA_RE = re.compile(
+    r"curl|python-requests|python-httpx|python-urllib|wget|bot|spider|crawler"
+    r"|scrapy|headlesschrome|zgrab|censys|semrush|nmap|nikto",
+    re.IGNORECASE,
+)
+
+
+def _classify_visitor(client_ip: str, referer: str, user_agent: str) -> dict:
+    """Classify a visitor as external, internal, or bot for funnel attribution."""
+    if client_ip in _INTERNAL_IPS:
+        return {"is_external": False, "source_type": "internal", "reason": "known_ip"}
+
+    if user_agent and _BOT_UA_RE.search(user_agent):
+        return {"is_external": False, "source_type": "bot", "reason": "bot_ua"}
+
+    referer_domain = ""
+    if referer:
+        try:
+            from urllib.parse import urlparse
+            referer_domain = (urlparse(referer).hostname or "").lower()
+        except Exception:
+            pass
+
+    is_external_referer = bool(referer_domain) and not any(
+        referer_domain.endswith(d) for d in _INTERNAL_REFERER_DOMAINS
+    )
+
+    return {
+        "is_external": True,
+        "source_type": "organic" if is_external_referer else "direct",
+        "referer_domain": referer_domain or "",
+    }
+
+
+def _log_funnel_event(event: str, client_ip: str, referer: str, user_agent: str,
+                      extra: dict | None = None) -> None:
+    """Log a funnel event with visitor classification to both event logs."""
+    vis = _classify_visitor(client_ip, referer, user_agent)
+    record = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "event": event,
+        "is_external": vis["is_external"],
+        "source_type": vis["source_type"],
+        "client_ip_hash": hashlib.sha256(client_ip.encode()).hexdigest()[:12],
+        "referer_domain": vis.get("referer_domain", ""),
+        "user_agent_short": (user_agent or "")[:80],
+    }
+    if extra:
+        record.update(extra)
+    try:
+        with open(CONVERSION_EVENTS_LOG, "a") as f:
+            f.write(json.dumps(record) + "\n")
+    except OSError:
+        pass
+
 
 @app.post("/v1/keys/free-signup")
 async def free_signup(request: Request):
@@ -2009,6 +2087,8 @@ def _process_stripe_event(event_type: str, data: dict, is_test: bool, event_id: 
                 logger.error("Welcome email failed: %s", e)
 
             # Server-side conversion event (authoritative — Stripe-verified, not fakeable)
+            _is_ext = metadata.get("is_external", "") == "true"
+            _src_type = metadata.get("source_type", "unknown")
             try:
                 with open(CONVERSION_EVENTS_LOG, "a") as _cel:
                     _cel.write(json.dumps({
@@ -2018,6 +2098,9 @@ def _process_stripe_event(event_type: str, data: dict, is_test: bool, event_id: 
                         "email_hash": customer_email[:3] + "***" if customer_email else "",
                         "subscription_id": subscription_id,
                         "test_mode": is_test,
+                        "is_external": _is_ext,
+                        "source_type": _src_type,
+                        "client_ip_hash": metadata.get("client_ip_hash", ""),
                     }) + "\n")
                     # Also emit signup_attributed for paid conversions
                     _cel.write(json.dumps({
@@ -2031,6 +2114,8 @@ def _process_stripe_event(event_type: str, data: dict, is_test: bool, event_id: 
                         "utm_campaign": metadata.get("utm_campaign", ""),
                         "referrer": "",
                         "test_mode": is_test,
+                        "is_external": _is_ext,
+                        "source_type": _src_type,
                     }) + "\n")
             except OSError:
                 pass  # Non-critical — don't break webhook on log failure
@@ -2118,6 +2203,8 @@ def _process_stripe_event(event_type: str, data: dict, is_test: bool, event_id: 
                         "plan": plan,
                         "email_hash": customer_email[:3] + "***",
                         "test_mode": is_test,
+                        "is_external": metadata.get("is_external", "") == "true",
+                        "source_type": metadata.get("source_type", "unknown"),
                     }) + "\n")
             except OSError:
                 pass
@@ -2421,6 +2508,50 @@ async def pricing():
         },
         "contact": "contact@arkforge.fr",
     }
+
+
+# --- POST /v1/track/event ---
+
+_TRACK_RATE: dict[str, list[float]] = {}
+_TRACK_MAX_PER_HOUR = 30
+_ALLOWED_TRACK_EVENTS = frozenset({"pricing_page_view"})
+
+@app.post("/v1/track/event")
+async def track_event(request: Request):
+    """Lightweight client-side event tracking for funnel attribution."""
+    import time as _time
+
+    client_ip = (
+        request.headers.get("x-real-ip")
+        or (request.client.host if request.client else "unknown")
+    )
+    now_ts = _time.time()
+    ts_list = _TRACK_RATE.get(client_ip, [])
+    ts_list = [t for t in ts_list if t > now_ts - 3600]
+    if len(ts_list) >= _TRACK_MAX_PER_HOUR:
+        return {"received": True}
+    ts_list.append(now_ts)
+    _TRACK_RATE[client_ip] = ts_list
+
+    try:
+        body = await request.json()
+    except Exception:
+        return {"received": False, "error": "invalid_json"}
+
+    event = (body.get("event") or "").strip()
+    if event not in _ALLOWED_TRACK_EVENTS:
+        return {"received": False, "error": "unknown_event"}
+
+    referer = request.headers.get("referer", "")
+    user_agent = request.headers.get("user-agent", "")
+    utm_source = (body.get("utm_source") or "")[:64]
+    page_url = (body.get("page_url") or "")[:256]
+
+    _log_funnel_event(event, client_ip, referer, user_agent, extra={
+        "utm_source": utm_source,
+        "page_url": page_url,
+    })
+    return {"received": True}
 
 
 # --- GET /v1/pubkey ---
