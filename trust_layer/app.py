@@ -823,9 +823,12 @@ async def setup_key(request: Request):
     email_timestamps.append(now_ts)
     _SETUP_RATE_EMAIL[email] = email_timestamps
 
-    referer_header = request.headers.get("referer", "")
+    body_referrer = (body.get("referrer") or "").strip()[:256]
+    if body_referrer and "://" not in body_referrer:
+        body_referrer = f"https://{body_referrer}"
+    referer_for_classify = body_referrer or request.headers.get("referer", "")
     user_agent = request.headers.get("user-agent", "")
-    visitor = _classify_visitor(client_ip, referer_header, user_agent)
+    visitor = _classify_visitor(client_ip, referer_for_classify, user_agent)
 
     req_mode = body.get("mode", "live")
     is_reserved, _reserved_reason = _is_test_email(email)
@@ -853,7 +856,7 @@ async def setup_key(request: Request):
     utm_source = (body.get("utm_source") or "")[:64]
     utm_medium = (body.get("utm_medium") or "")[:64]
     utm_campaign = (body.get("utm_campaign") or "")[:64]
-    referrer = (body.get("referrer") or "")[:256]
+    referrer = body_referrer
 
     if plan == "enterprise":
         price_id = STRIPE_ENTERPRISE_PRICE_ID_TEST if req_mode == "test" else STRIPE_ENTERPRISE_PRICE_ID
@@ -937,7 +940,7 @@ async def setup_key(request: Request):
             api_key=sk,
         )
 
-        _log_funnel_event("checkout_initiated", client_ip, referer_header, user_agent, extra={
+        _log_funnel_event("checkout_initiated", client_ip, referer_for_classify, user_agent, extra={
             "plan": plan_name,
             "product": product_tag,
             "email_hash": email[:3] + "***" if email else "",
@@ -2542,7 +2545,10 @@ async def track_event(request: Request):
     if event not in _ALLOWED_TRACK_EVENTS:
         return {"received": False, "error": "unknown_event"}
 
-    referer = request.headers.get("referer", "")
+    body_referrer = (body.get("referrer") or "").strip()[:128]
+    if body_referrer and "://" not in body_referrer:
+        body_referrer = f"https://{body_referrer}"
+    referer = body_referrer or request.headers.get("referer", "")
     user_agent = request.headers.get("user-agent", "")
     utm_source = (body.get("utm_source") or "")[:64]
     page_url = (body.get("page_url") or "")[:256]

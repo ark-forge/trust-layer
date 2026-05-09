@@ -129,6 +129,30 @@ class TestTrackEvent:
         assert pv[0]["is_external"] is False
         assert pv[0]["source_type"] == "bot"
 
+    def test_body_referrer_overrides_http_referer(self, client, tmp_path):
+        resp = client.post(
+            "/v1/track/event",
+            json={
+                "event": "pricing_page_view",
+                "page_url": "/en/pricing.html",
+                "referrer": "dev.to",
+            },
+            headers={
+                "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0",
+                "referer": "https://arkforge.tech/en/pricing.html",
+                "x-real-ip": "203.0.113.99",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["received"] is True
+
+        events = _read_conversion_events(tmp_path)
+        pv = [e for e in events if e["event"] == "pricing_page_view"]
+        assert len(pv) == 1
+        assert pv[0]["is_external"] is True
+        assert pv[0]["source_type"] == "organic"
+        assert pv[0]["referer_domain"] == "dev.to"
+
     def test_unknown_event_rejected(self, client):
         resp = client.post("/v1/track/event", json={"event": "unknown_event"})
         assert resp.status_code == 200
