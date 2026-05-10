@@ -6,6 +6,14 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.54] — 2026-05-10
+
+### Fixed
+- force test mode for diagnostic/internal emails
+- use body referrer for visitor classification in /v1/keys/setup
+
+---
+
 ## [1.3.53] — 2026-05-09
 
 ### Added
