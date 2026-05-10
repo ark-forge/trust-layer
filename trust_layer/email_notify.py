@@ -24,9 +24,11 @@ _TEST_DOMAINS = {
     "example.com", "example.org", "example.net", "example.io",
     "test.com", "test.org", "test.net",
     "smoke.invalid", "smoke.local",
+    "arkforge.tech", "arkforge.fr",
 }
 # Local-part prefixes that are never real recipients
-_TEST_LOCAL_PREFIXES = ("smoke_", "smoke-", "noreply", "no-reply", "mailer-daemon")
+_TEST_LOCAL_PREFIXES = ("smoke_", "smoke-", "noreply", "no-reply", "mailer-daemon",
+                        "diagnostic", "e2e", "ceo-test", "healthcheck")
 
 
 def _is_test_email(to: str) -> tuple[bool, str]:

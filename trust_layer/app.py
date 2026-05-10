@@ -836,8 +836,9 @@ async def setup_key(request: Request):
         req_mode = "test"
     if req_mode == "live" and "mode" not in body:
         local_part = email.split("@")[0].lower() if "@" in email else ""
-        if "test" in local_part:
-            logger.warning("keys/setup: email %r looks like test but mode defaulted to live (no mode param sent)", email)
+        if "test" in local_part or "diag" in local_part or "e2e" in local_part or "healthcheck" in local_part:
+            logger.warning("keys/setup: email %r looks like test — forcing test mode (no explicit mode param)", email)
+            req_mode = "test"
     lang = body.get("lang", "fr")
     if lang not in ("en", "fr"):
         lang = "fr"
