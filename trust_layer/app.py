@@ -2019,7 +2019,12 @@ async def stripe_webhook(request: Request):
 
     if event is None:
         if secrets_to_try:
-            logger.error("Webhook signature verification failed")
+            _diag_type = "?"
+            try:
+                _diag_type = json.loads(payload).get("type", "?")
+            except Exception:
+                pass
+            logger.error("Webhook signature verification failed (event_type=%s, sig_prefix=%s)", _diag_type, sig_header[:40] if sig_header else "none")
             raise HTTPException(400, "Invalid signature")
         # No secrets configured — reject all unauthenticated webhook calls.
         # Accepting unsigned events would allow anyone to trigger credit grants.
