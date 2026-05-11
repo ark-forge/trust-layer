@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.56] — 2026-05-11
+
+### Fixed
+- harden internal IP mode guard + _is_test_email coverage
+
+---
+
 ## [1.3.55] — 2026-05-11
 
 _(no user-facing changes)_
