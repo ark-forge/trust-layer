@@ -834,10 +834,13 @@ async def setup_key(request: Request):
     is_reserved, _reserved_reason = _is_test_email(email)
     if is_reserved and req_mode != "test":
         req_mode = "test"
-    if req_mode == "live" and "mode" not in body:
+    if client_ip in _INTERNAL_IPS and req_mode != "test":
+        logger.warning("keys/setup: internal IP %s — forcing test mode", client_ip)
+        req_mode = "test"
+    if req_mode == "live":
         local_part = email.split("@")[0].lower() if "@" in email else ""
         if "test" in local_part or "diag" in local_part or "e2e" in local_part or "healthcheck" in local_part:
-            logger.warning("keys/setup: email %r looks like test — forcing test mode (no explicit mode param)", email)
+            logger.warning("keys/setup: email %r looks like test — forcing test mode", email)
             req_mode = "test"
     lang = body.get("lang", "fr")
     if lang not in ("en", "fr"):
@@ -2194,11 +2197,14 @@ def _process_stripe_event(event_type: str, data: dict, is_test: bool, event_id: 
                 pass
         plan = metadata.get("plan", "pro")
         lang = metadata.get("lang", "en")
-        if customer_email:
+        _is_fake, _fake_reason = _is_test_email(customer_email) if customer_email else (True, "no_email")
+        if customer_email and not _is_fake:
             try:
                 send_checkout_abandoned_email(customer_email, plan=plan, lang=lang)
             except Exception as _e:
                 logger.warning("Checkout abandoned email failed: %s", _e)
+        elif _is_fake and customer_email:
+            logger.info("Skipped abandoned email for test/fake address (%s): %s", _fake_reason, customer_email[:3] + "***")
             try:
                 with open(CONVERSION_EVENTS_LOG, "a") as _cel:
                     _cel.write(json.dumps({

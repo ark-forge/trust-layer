@@ -26,6 +26,10 @@ _TEST_DOMAINS = {
     "smoke.invalid", "smoke.local",
     "arkforge.tech", "arkforge.fr",
 }
+# Unregistered or parked domains seen in bot/diagnostic traffic
+_FAKE_DOMAINS = {
+    "funnel-check.com", "hacker-news.com",
+}
 # Local-part prefixes that are never real recipients
 _TEST_LOCAL_PREFIXES = ("smoke_", "smoke-", "noreply", "no-reply", "mailer-daemon",
                         "diagnostic", "e2e", "ceo-test", "healthcheck")
@@ -42,6 +46,8 @@ def _is_test_email(to: str) -> tuple[bool, str]:
         return True, f"reserved_tld:.{tld}"
     if domain in _TEST_DOMAINS:
         return True, f"reserved_domain:{domain}"
+    if domain in _FAKE_DOMAINS:
+        return True, f"fake_domain:{domain}"
     if any(local.startswith(p) for p in _TEST_LOCAL_PREFIXES):
         return True, f"test_local_prefix:{local}"
     return False, ""
