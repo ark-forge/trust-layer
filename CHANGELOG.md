@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.57] — 2026-05-11
+
+### Fixed
+- add diagnostic event_type+sig_prefix to signature failure logs
+
+---
+
 ## [1.3.56] — 2026-05-11
 
 ### Fixed
