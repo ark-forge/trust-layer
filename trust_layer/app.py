@@ -813,6 +813,9 @@ async def setup_key(request: Request):
     setup_timestamps = [t for t in setup_timestamps if t > now_ts - 3600]
     if len(setup_timestamps) >= _SETUP_MAX_PER_HOUR:
         return _error_response("rate_limited", "Too many checkout attempts. Try again later.", 429)
+    burst_count = sum(1 for t in setup_timestamps if t > now_ts - 600)
+    if burst_count >= 3:
+        return _error_response("rate_limited", "Too many checkout attempts. Try again later.", 429)
     setup_timestamps.append(now_ts)
     _SETUP_RATE[client_ip] = setup_timestamps
 
@@ -839,9 +842,12 @@ async def setup_key(request: Request):
         req_mode = "test"
     if req_mode == "live":
         local_part = email.split("@")[0].lower() if "@" in email else ""
-        if "test" in local_part or "diag" in local_part or "e2e" in local_part or "healthcheck" in local_part:
+        if "test" in local_part or "diag" in local_part or "e2e" in local_part or "healthcheck" in local_part or "verify" in local_part or "flow-" in local_part:
             logger.warning("keys/setup: email %r looks like test — forcing test mode", email)
             req_mode = "test"
+    if req_mode == "live" and user_agent and _BOT_UA_RE.search(user_agent):
+        logger.warning("keys/setup: bot UA %r — forcing test mode", user_agent[:80])
+        req_mode = "test"
     lang = body.get("lang", "fr")
     if lang not in ("en", "fr"):
         lang = "fr"
@@ -1162,7 +1168,7 @@ def _classify_referrer_source(referrer: str) -> str:
     return "other"
 
 
-_INTERNAL_IPS = frozenset({"90.105.196.22", "57.131.27.61", "51.91.99.178", "127.0.0.1", "::1"})
+_INTERNAL_IPS = frozenset({"90.105.196.22", "57.131.27.61", "51.91.99.178", "127.0.0.1", "::1", "2001:41d0:2005:100::6fd"})
 _INTERNAL_REFERER_DOMAINS = frozenset({"arkforge.tech", "arkforge.fr", "localhost"})
 _BOT_UA_RE = re.compile(
     r"curl|python-requests|python-httpx|python-urllib|wget|bot|spider|crawler"
@@ -2066,7 +2072,7 @@ def _process_stripe_event(event_type: str, data: dict, is_test: bool, event_id: 
             try:
                 sk = STRIPE_TEST_KEY if is_test else STRIPE_LIVE_KEY
                 cust = stripe.Customer.retrieve(customer_id, api_key=sk)
-                customer_email = cust.get("email", "")
+                customer_email = getattr(cust, "email", "") or ""
             except Exception:
                 pass
         payment_intent_id = data.get("payment_intent", "")
@@ -2197,7 +2203,7 @@ def _process_stripe_event(event_type: str, data: dict, is_test: bool, event_id: 
             try:
                 sk = STRIPE_TEST_KEY if is_test else STRIPE_LIVE_KEY
                 cust = stripe.Customer.retrieve(customer_id, api_key=sk)
-                customer_email = cust.get("email", "")
+                customer_email = getattr(cust, "email", "") or ""
             except Exception:
                 pass
         plan = metadata.get("plan", "pro")
