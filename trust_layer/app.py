@@ -1092,7 +1092,7 @@ async def create_trial(request: Request):
     existing = find_active_trial_by_email(email)
     if existing:
         trial_ends = existing.get("trial_ends", "")
-        upgrade_url = f"https://arkforge.tech/{lang}/pro-signup.html?utm_source=email&utm_medium=trial_existing"
+        upgrade_url = f"https://arkforge.tech/{lang}/pricing.html?utm_source=email&utm_medium=trial_existing#trust"
         try:
             sk = STRIPE_TEST_KEY if req_mode == "test" else STRIPE_LIVE_KEY
             if sk:
@@ -1141,7 +1141,7 @@ async def create_trial(request: Request):
     trial_ends = trial_info.get("trial_ends", "")
 
     # Create Stripe checkout session (upgrade path — optional for user)
-    upgrade_url = f"https://arkforge.tech/{lang}/pro-signup.html?utm_source=trial_key&utm_medium=email"
+    upgrade_url = f"https://arkforge.tech/{lang}/pricing.html?utm_source=trial_key&utm_medium=email#trust"
     try:
         sk = STRIPE_TEST_KEY if req_mode == "test" else STRIPE_LIVE_KEY
         if sk:
