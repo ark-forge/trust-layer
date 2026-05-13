@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.60] — 2026-05-13
+
+### Fixed
+- add is_external safety net to prevent LIVE customer creation from non-external visitors
+
+---
+
 ## [1.3.59] — 2026-05-13
 
 ### Added
