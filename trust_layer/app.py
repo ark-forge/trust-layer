@@ -41,6 +41,7 @@ _FAILOVER_BLOCKED_PATHS = {
     "/v1/proxy",
     "/v1/demo",
     "/v1/keys/setup",
+    "/v1/keys/trial",
     "/v1/keys/portal",
     "/v1/keys/free-signup",
     "/api/register",
@@ -147,6 +148,8 @@ from .config import (
 from .keys import (
     validate_api_key, create_api_key, deactivate_key_by_ref, reactivate_key_by_ref, is_test_key, is_free_key,
     get_overage_settings, update_overage_settings, get_key_plan, is_internal_key, find_key_info_by_ref,
+    create_trial_key, find_active_trial_by_email, find_expiring_trial_keys, find_expired_trial_keys,
+    deactivate_trial_key,
 )
 from .credits import add_credits, get_balance
 from .proofs import load_proof, store_proof, get_public_proof, get_full_proof, verify_proof_integrity, sha256_hex
@@ -167,6 +170,8 @@ from .email_notify import (
     send_subscription_suspended_email,
     send_subscription_reactivated_email,
     send_checkout_abandoned_email,
+    send_trial_welcome_email,
+    send_trial_upgrade_reminder_email,
     _is_test_email,
 )
 from .timestamps import submit_hash
@@ -386,6 +391,35 @@ async def _recover_pending_tsa():
         logger.info("TSA recovery complete: %d recovered, %d still failed", recovered, failed)
 
 
+async def _trial_maintenance_loop():
+    """Daily background job: send upgrade reminders + deactivate expired trial keys."""
+    from datetime import timedelta as _td
+    while True:
+        now = datetime.now(timezone.utc)
+        next_run = now.replace(hour=8, minute=0, second=0, microsecond=0)
+        if next_run <= now:
+            next_run += _td(days=1)
+        await asyncio.sleep((next_run - now).total_seconds())
+        try:
+            expiring = find_expiring_trial_keys(within_hours=24)
+            for info in expiring:
+                _email = info.get("email", "")
+                if _email:
+                    _upgrade = f"https://arkforge.tech/en/pro-signup.html?utm_source=email&utm_medium=trial_reminder"
+                    send_trial_upgrade_reminder_email(_email, _upgrade, days_remaining=1)
+            logger.info("Trial maintenance: %d expiry reminders sent", len(expiring))
+            expired = find_expired_trial_keys()
+            for info in expired:
+                deactivate_trial_key(info["_key"], reason="trial_expired")
+                _email = info.get("email", "")
+                if _email:
+                    send_trial_ended_email(_email, info["_key"])
+            if expired:
+                logger.info("Trial maintenance: %d keys deactivated", len(expired))
+        except Exception as _e:
+            logger.warning("Trial maintenance loop error: %s", _e)
+
+
 @asynccontextmanager
 async def lifespan(app):
     """Startup: recover pending TSA, restore abuse counters. Shutdown: drain background tasks."""
@@ -396,6 +430,9 @@ async def lifespan(app):
     # Startup — fire TSA recovery in background (non-blocking)
     recovery_task = asyncio.create_task(_recover_pending_tsa())
     _track_task(recovery_task)
+    # Startup — trial key maintenance (daily at 08:00 UTC)
+    trial_task = asyncio.create_task(_trial_maintenance_loop())
+    _track_task(trial_task)
     yield
     # Shutdown — wait for active tasks to finish (10s grace)
     drained = await drain_background_tasks(timeout=10.0)
@@ -974,6 +1011,149 @@ async def setup_key(request: Request):
     except stripe.StripeError as e:
         logger.error("Stripe setup error: %s", e)
         return _error_response("internal_error", f"Stripe error: {str(e)}", 500)
+
+
+# --- POST /v1/keys/trial ---
+
+@app.post("/v1/keys/trial")
+async def create_trial(request: Request):
+    """Create a card-free 14-day trial API key. Returns key immediately — no Stripe required.
+
+    Also creates a Stripe checkout session so the user can add a card at their convenience.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _error_response("invalid_request", "Invalid JSON body", 400)
+
+    if body.get("website"):
+        return {"api_key": "", "trial_ends": "", "upgrade_url": "", "mode": "live"}
+
+    email = (body.get("email") or "").strip().lower()
+    if not email or not _EMAIL_RE.match(email):
+        return _error_response("invalid_request", "A valid email is required", 400)
+    local_part = email.split("@")[0]
+    if len(email) > 320 or len(local_part) > 64:
+        return _error_response("invalid_request", "Email address exceeds maximum allowed length", 400)
+    if _looks_like_gibberish(local_part):
+        return _error_response("invalid_request", "Please use a valid email address", 400)
+
+    import time as _time
+    client_ip = (
+        request.headers.get("x-real-ip")
+        or (request.client.host if request.client else "unknown")
+    )
+
+    # Rate limit (reuse setup rate limiters)
+    now_ts = _time.time()
+    setup_timestamps = _SETUP_RATE.get(client_ip, [])
+    setup_timestamps = [t for t in setup_timestamps if t > now_ts - 3600]
+    if len(setup_timestamps) >= _SETUP_MAX_PER_HOUR:
+        return _error_response("rate_limited", "Too many attempts. Try again later.", 429)
+    burst_count = sum(1 for t in setup_timestamps if t > now_ts - 600)
+    if burst_count >= 3:
+        return _error_response("rate_limited", "Too many attempts. Try again later.", 429)
+    setup_timestamps.append(now_ts)
+    _SETUP_RATE[client_ip] = setup_timestamps
+
+    email_timestamps = _SETUP_RATE_EMAIL.get(email, [])
+    email_timestamps = [t for t in email_timestamps if t > now_ts - 3600]
+    if len(email_timestamps) >= _SETUP_MAX_PER_EMAIL_PER_HOUR:
+        return _error_response("rate_limited", "Too many attempts for this email. Try again later.", 429)
+    email_timestamps.append(now_ts)
+    _SETUP_RATE_EMAIL[email] = email_timestamps
+
+    user_agent = request.headers.get("user-agent", "")
+    req_mode = "live"
+    is_reserved, _reserved_reason = _is_test_email(email)
+    if is_reserved:
+        req_mode = "test"
+    if client_ip in _INTERNAL_IPS:
+        req_mode = "test"
+    if req_mode == "live":
+        if "test" in local_part or "diag" in local_part or "e2e" in local_part or "healthcheck" in local_part:
+            req_mode = "test"
+    if req_mode == "live" and user_agent and _BOT_UA_RE.search(user_agent):
+        req_mode = "test"
+
+    lang = body.get("lang", "en")
+    if lang not in ("en", "fr"):
+        lang = "en"
+
+    # One active trial per email
+    existing = find_active_trial_by_email(email)
+    if existing:
+        trial_ends = existing.get("trial_ends", "")
+        upgrade_url = f"https://arkforge.tech/{lang}/pro-signup.html?utm_source=email&utm_medium=trial_existing"
+        return {
+            "api_key": existing["_key"],
+            "trial_ends": trial_ends,
+            "upgrade_url": upgrade_url,
+            "mode": req_mode,
+            "already_exists": True,
+        }
+
+    # Create trial key
+    trial_key = create_trial_key(email, trial_days=14, test_mode=(req_mode == "test"))
+    from .keys import load_api_keys as _lak
+    trial_info = _lak().get(trial_key, {})
+    trial_ends = trial_info.get("trial_ends", "")
+
+    # Create Stripe checkout session (upgrade path — optional for user)
+    upgrade_url = f"https://arkforge.tech/{lang}/pro-signup.html?utm_source=trial_key&utm_medium=email"
+    try:
+        sk = STRIPE_TEST_KEY if req_mode == "test" else STRIPE_LIVE_KEY
+        if sk:
+            customers = stripe.Customer.list(email=email, limit=1, api_key=sk)
+            customer = customers.data[0] if customers.data else stripe.Customer.create(
+                email=email,
+                metadata={"source": "trust-layer-trial"},
+                api_key=sk,
+            )
+            utm_source = (body.get("utm_source") or "")[:64]
+            session = stripe.checkout.Session.create(
+                mode="subscription",
+                payment_method_types=["card", "link"],
+                customer=customer.id,
+                client_reference_id="trial_upgrade_pro",
+                line_items=[{"price": STRIPE_PRO_PRICE_ID_TEST if req_mode == "test" else STRIPE_PRO_PRICE_ID, "quantity": 1}],
+                success_url=f"https://arkforge.tech/{lang}/tl-pro-success.html?session_id={{CHECKOUT_SESSION_ID}}",
+                cancel_url=f"https://arkforge.tech/{lang}/pricing.html?utm_source=trial_cancel#trust",
+                metadata={
+                    "product": "trust_layer_pro_subscription",
+                    "email": email,
+                    "plan": "pro",
+                    "lang": lang,
+                    "stripe_mode": req_mode,
+                    "trial_key_ref": trial_key[:16],
+                    "utm_source": utm_source or "trial_flow",
+                },
+                subscription_data={
+                    "trial_period_days": 14,
+                    "metadata": {"product": "trust_layer_pro_subscription", "email": email, "plan": "pro"},
+                },
+                expires_at=int(datetime.now(timezone.utc).timestamp()) + 86400 * 14,
+                api_key=sk,
+            )
+            upgrade_url = session.url
+    except Exception as _stripe_err:
+        logger.warning("Trial: Stripe session creation failed (non-blocking): %s", _stripe_err)
+
+    # Send welcome email
+    send_trial_welcome_email(email, trial_key, trial_ends, upgrade_url, lang=lang)
+
+    _log_funnel_event("trial_key_created", client_ip, request.headers.get("referer", ""), user_agent, extra={
+        "email_hash": email[:3] + "***",
+        "test_mode": req_mode == "test",
+        "lang": lang,
+    })
+
+    return {
+        "api_key": trial_key,
+        "trial_ends": trial_ends,
+        "upgrade_url": upgrade_url,
+        "mode": req_mode,
+    }
 
 
 # --- POST /v1/keys/portal ---

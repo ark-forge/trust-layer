@@ -39,6 +39,7 @@ def get_daily_limit(api_key: str) -> int:
 # Monthly quotas per plan (None = no monthly quota, daily cap only)
 _MONTHLY_LIMITS = {
     "free": FREE_TIER_MONTHLY_LIMIT,
+    "trial": _PRO_MONTHLY_LIMIT,
     "pro": _PRO_MONTHLY_LIMIT,
     "enterprise": _ENTERPRISE_MONTHLY_LIMIT,
     "platform": _PLATFORM_MONTHLY_LIMIT,

@@ -136,6 +136,7 @@ PLATFORM_MONTHLY_LIMIT = 500_000      # Platform €599/month: 500 000 proofs/mo
 # Test keys: hard 100/day guard (no monthly quota, prevents infinite runaway loops).
 DAILY_LIMITS_PER_PLAN = {
     "free":       FREE_TIER_MONTHLY_LIMIT,   # 500  — daily cap = monthly quota
+    "trial":      PRO_MONTHLY_LIMIT,          # 5 000 — same as pro (card-free trial)
     "pro":        PRO_MONTHLY_LIMIT,          # 5 000 — daily cap = monthly quota
     "enterprise": ENTERPRISE_MONTHLY_LIMIT,   # 50 000 — daily cap = monthly quota
     "platform":   PLATFORM_MONTHLY_LIMIT,     # 500 000 — daily cap = monthly quota

@@ -5,7 +5,7 @@ import os
 import secrets
 import threading
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -95,6 +95,8 @@ def generate_api_key(test_mode: bool = False, plan: str = "pro") -> str:
     """
     if plan == "free":
         prefix = "mcp_free_"
+    elif plan == "trial":
+        prefix = "mcp_trial_"
     elif plan == "enterprise":
         prefix = "mcp_ent_"
     elif plan == "platform":
@@ -109,12 +111,24 @@ def generate_api_key(test_mode: bool = False, plan: str = "pro") -> str:
 
 
 def validate_api_key(key: str) -> Optional[dict]:
-    """Return key info if valid and active, else None."""
+    """Return key info if valid and active, else None. Lazily expires trial keys."""
     keys = load_api_keys()
     info = keys.get(key)
-    if info and info.get("active"):
-        return info
-    return None
+    if not info or not info.get("active"):
+        return None
+    if info.get("plan") == "trial":
+        trial_ends = info.get("trial_ends", "")
+        if trial_ends and datetime.now(timezone.utc).isoformat() > trial_ends:
+            with _KEYS_LOCK:
+                keys2 = load_api_keys()
+                if keys2.get(key, {}).get("active"):
+                    keys2[key]["active"] = False
+                    keys2[key]["deactivated_at"] = datetime.now(timezone.utc).isoformat()
+                    keys2[key]["deactivation_reason"] = "trial_expired"
+                    save_api_keys(keys2)
+            logger.info("Trial key lazily expired: %s***", key[:16])
+            return None
+    return info
 
 
 def create_api_key(stripe_customer_id: str, ref_id: str, email: str = "",
@@ -186,6 +200,82 @@ def find_key_info_by_ref(ref_id: str) -> Optional[dict]:
     return None
 
 
+def create_trial_key(email: str, trial_days: int = 14, test_mode: bool = False) -> str:
+    """Create an immediate card-free trial API key (no Stripe required)."""
+    key = generate_api_key(test_mode=test_mode, plan="trial")
+    trial_ends = (datetime.now(timezone.utc) + timedelta(days=trial_days)).isoformat()
+    with _KEYS_LOCK:
+        keys = load_api_keys()
+        keys[key] = {
+            "active": True,
+            "plan": "trial",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "trial_ends": trial_ends,
+            "stripe_customer_id": "",
+            "stripe_ref_id": "",
+            "email": email,
+            "transactions_total": 0,
+            "credit_balance": 0.0,
+            "total_credits_purchased": 0.0,
+            "overage_enabled": False,
+            "overage_cap_eur": OVERAGE_CAP_DEFAULT,
+            "overage_consent_at": None,
+            "overage_consent_rate": None,
+            "overage_disabled_at": None,
+        }
+        save_api_keys(keys)
+    logger.info("Trial API key created for %s*** (trial_ends=%s)", email[:3], trial_ends[:10])
+    return key
+
+
+def find_active_trial_by_email(email: str) -> Optional[dict]:
+    """Return active trial key info for an email, or None."""
+    keys = load_api_keys()
+    for key, info in keys.items():
+        if (info.get("active") and info.get("plan") == "trial"
+                and info.get("email", "").lower() == email.lower()):
+            return {**info, "_key": key}
+    return None
+
+
+def find_expiring_trial_keys(within_hours: int = 24) -> list:
+    """Return active trial keys expiring within the given window."""
+    now = datetime.now(timezone.utc)
+    cutoff = (now + timedelta(hours=within_hours)).isoformat()
+    now_iso = now.isoformat()
+    keys = load_api_keys()
+    return [
+        {**info, "_key": key}
+        for key, info in keys.items()
+        if (info.get("active") and info.get("plan") == "trial"
+            and now_iso < info.get("trial_ends", "") <= cutoff)
+    ]
+
+
+def find_expired_trial_keys() -> list:
+    """Return active trial keys whose trial_ends has passed."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    keys = load_api_keys()
+    return [
+        {**info, "_key": key}
+        for key, info in keys.items()
+        if (info.get("active") and info.get("plan") == "trial"
+            and info.get("trial_ends", "") <= now_iso)
+    ]
+
+
+def deactivate_trial_key(key: str, reason: str = "trial_expired"):
+    """Deactivate a trial key."""
+    with _KEYS_LOCK:
+        keys = load_api_keys()
+        if keys.get(key) and keys[key].get("active"):
+            keys[key]["active"] = False
+            keys[key]["deactivated_at"] = datetime.now(timezone.utc).isoformat()
+            keys[key]["deactivation_reason"] = reason
+            save_api_keys(keys)
+            logger.info("Trial key deactivated (%s): %s***", reason, key[:16])
+
+
 def is_test_key(api_key: str) -> bool:
     """Check if an API key is a test mode key."""
     return api_key.startswith("mcp_test_")
@@ -207,9 +297,11 @@ def is_platform_key(api_key: str) -> bool:
 
 
 def get_key_plan(api_key: str) -> str:
-    """Return the plan for an API key ('free', 'pro', 'enterprise', 'platform', 'test', or 'internal')."""
+    """Return the plan for an API key ('free', 'trial', 'pro', 'enterprise', 'platform', 'test', or 'internal')."""
     if api_key.startswith("mcp_free_"):
         return "free"
+    if api_key.startswith("mcp_trial_"):
+        return "trial"
     if api_key.startswith("mcp_test_"):
         return "test"
     if api_key.startswith("mcp_ent_"):

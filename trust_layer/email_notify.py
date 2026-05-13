@@ -32,7 +32,8 @@ _FAKE_DOMAINS = {
 }
 # Local-part prefixes that are never real recipients
 _TEST_LOCAL_PREFIXES = ("smoke_", "smoke-", "noreply", "no-reply", "mailer-daemon",
-                        "diagnostic", "e2e", "ceo-test", "healthcheck")
+                        "diagnostic", "e2e", "ceo-test", "healthcheck",
+                        "verify-", "flow-")
 
 
 def _is_test_email(to: str) -> tuple[bool, str]:
@@ -674,3 +675,68 @@ Support: contact@arkforge.tech
         logger.info("Checkout abandoned recovery email sent to %s (plan=%s)", email, plan)
     except Exception as e:
         logger.warning("Checkout abandoned email failed: %s", e)
+
+
+def send_trial_welcome_email(email: str, api_key: str, trial_ends: str, upgrade_url: str, lang: str = "en"):
+    """Send immediate welcome email with trial API key (card-free trial)."""
+    trial_ends_date = trial_ends[:10]
+    subject = "Your ArkForge API key — 14-day free trial"
+    body = f"""Welcome to ArkForge Trust Layer!
+
+Your API key is active now. No credit card required.
+
+  Key: {api_key}
+
+Trial active until: {trial_ends_date}
+Access: 5,000 proofs/month (full Pro quota)
+
+Get started now — copy and run this:
+
+  curl -X POST https://trust.arkforge.tech/v1/proxy \\
+    -H "X-Api-Key: {api_key}" \\
+    -H "Content-Type: application/json" \\
+    -d '{{"target": "https://httpbin.org/post",
+         "payload": {{"test": "my first proof"}}}}'
+
+Check your usage anytime:
+
+  curl https://trust.arkforge.tech/v1/usage \\
+    -H "X-Api-Key: {api_key}"
+
+Keep access after day 14 — add a payment method:
+
+  {upgrade_url}
+
+No charge until your trial ends. Cancel anytime.
+
+Docs: https://arkforge.tech/trust?utm_source=email&utm_medium=trial_welcome
+Support: contact@arkforge.tech
+"""
+    try:
+        _send_email(email, subject, body)
+        logger.info("Trial welcome email sent to %s***", email[:3])
+    except Exception as e:
+        logger.warning("Trial welcome email failed: %s", e)
+
+
+def send_trial_upgrade_reminder_email(email: str, upgrade_url: str, days_remaining: int = 1, lang: str = "en"):
+    """Send trial expiry reminder prompting the user to add a payment method."""
+    plural = "s" if days_remaining != 1 else ""
+    subject = f"Your ArkForge trial ends in {days_remaining} day{plural}"
+    body = f"""Your ArkForge Trust Layer trial ends in {days_remaining} day{plural}.
+
+To keep your API key active, add a payment method before your trial ends.
+
+  {upgrade_url}
+
+29 EUR/month. No charge until after the trial. Cancel anytime.
+
+Questions? Reply to this email — we read every message.
+
+Support: contact@arkforge.tech
+"""
+    try:
+        _send_email(email, subject, body)
+        logger.info("Trial upgrade reminder sent to %s*** (%d days remaining)", email[:3], days_remaining)
+    except Exception as e:
+        logger.warning("Trial upgrade reminder email failed: %s", e)
