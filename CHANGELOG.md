@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.62] — 2026-05-13
+
+### Fixed
+- expires_at 14d→23h + Stripe session for existing trials
+
+---
+
 ## [1.3.61] — 2026-05-13
 
 ### Documentation
