@@ -1093,6 +1093,39 @@ async def create_trial(request: Request):
     if existing:
         trial_ends = existing.get("trial_ends", "")
         upgrade_url = f"https://arkforge.tech/{lang}/pro-signup.html?utm_source=email&utm_medium=trial_existing"
+        try:
+            sk = STRIPE_TEST_KEY if req_mode == "test" else STRIPE_LIVE_KEY
+            if sk:
+                utm_source = (body.get("utm_source") or "")[:64]
+                customers = stripe.Customer.list(email=email, limit=1, api_key=sk)
+                customer = customers.data[0] if customers.data else stripe.Customer.create(
+                    email=email, metadata={"source": "trust-layer-trial"}, api_key=sk,
+                )
+                session = stripe.checkout.Session.create(
+                    mode="subscription",
+                    payment_method_types=["card", "link"],
+                    customer=customer.id,
+                    client_reference_id="trial_upgrade_pro",
+                    line_items=[{"price": STRIPE_PRO_PRICE_ID_TEST if req_mode == "test" else STRIPE_PRO_PRICE_ID, "quantity": 1}],
+                    success_url=f"https://arkforge.tech/{lang}/tl-pro-success.html?session_id={{CHECKOUT_SESSION_ID}}",
+                    cancel_url=f"https://arkforge.tech/{lang}/pricing.html?utm_source=trial_cancel#trust",
+                    metadata={
+                        "product": "trust_layer_pro_subscription",
+                        "email": email, "plan": "pro", "lang": lang,
+                        "stripe_mode": req_mode,
+                        "trial_key_ref": existing["_key"][:16],
+                        "utm_source": utm_source or "trial_existing",
+                    },
+                    subscription_data={
+                        "trial_period_days": 14,
+                        "metadata": {"product": "trust_layer_pro_subscription", "email": email, "plan": "pro"},
+                    },
+                    expires_at=int(datetime.now(timezone.utc).timestamp()) + 82800,
+                    api_key=sk,
+                )
+                upgrade_url = session.url
+        except Exception as _stripe_err:
+            logger.warning("Trial (existing): Stripe session failed: %s", _stripe_err)
         return {
             "api_key": existing["_key"],
             "trial_ends": trial_ends,
@@ -1140,7 +1173,7 @@ async def create_trial(request: Request):
                     "trial_period_days": 14,
                     "metadata": {"product": "trust_layer_pro_subscription", "email": email, "plan": "pro"},
                 },
-                expires_at=int(datetime.now(timezone.utc).timestamp()) + 86400 * 14,
+                expires_at=int(datetime.now(timezone.utc).timestamp()) + 82800,
                 api_key=sk,
             )
             upgrade_url = session.url
