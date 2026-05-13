@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.63] — 2026-05-13
+
+### Fixed
+- break circular upgrade_url fallback pro-signup→pricing
+
+---
+
 ## [1.3.62] — 2026-05-13
 
 ### Fixed
