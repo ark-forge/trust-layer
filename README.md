@@ -13,6 +13,7 @@ curl -X POST https://trust.arkforge.tech/v1/keys/free-signup \
 ```
 
 [![Live](https://img.shields.io/badge/live-arkforge.tech-green)](https://trust.arkforge.tech/v1/health)
+[![Free Tier](https://img.shields.io/badge/Free_Tier-500_proofs%2Fmo-green)](https://arkforge.tech/en/pro-signup.html?utm_source=github&utm_medium=readme&utm_campaign=trust_layer)
 [![Spec](https://img.shields.io/badge/proof--spec-open-blue)](https://github.com/ark-forge/proof-spec)
 [![License: MIT](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
 
