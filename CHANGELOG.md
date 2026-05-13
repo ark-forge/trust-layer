@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.61] — 2026-05-13
+
+### Documentation
+- add Free Tier badge + signup CTA
+
+---
+
 ## [1.3.60] — 2026-05-13
 
 ### Fixed
