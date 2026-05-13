@@ -1,3 +1,3 @@
 """ArkForge Trust Layer — Certifying proxy for agent-to-agent payments."""
 
-__version__ = "1.3.61"
+__version__ = "1.3.62"
