@@ -6,6 +6,17 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.59] — 2026-05-13
+
+### Added
+- card-free 14-day trial via POST /v1/keys/trial
+
+### Fixed
+- upgrade urllib3 (CVE-2026-44431, CVE-2026-44432), pytest (CVE-2025-71176), and refresh dependency versions
+- add OVH IPv6 to _INTERNAL_IPS, 'verify'/'flow-' to test-email guards, burst rate-limit 3/10min
+
+---
+
 ## [1.3.58] — 2026-05-12
 
 _(no user-facing changes)_
