@@ -885,6 +885,9 @@ async def setup_key(request: Request):
     if req_mode == "live" and user_agent and _BOT_UA_RE.search(user_agent):
         logger.warning("keys/setup: bot UA %r — forcing test mode", user_agent[:80])
         req_mode = "test"
+    if req_mode == "live" and not visitor.get("is_external", True):
+        logger.warning("keys/setup: visitor classified non-external (%s) — forcing test mode", visitor.get("reason", "unknown"))
+        req_mode = "test"
     lang = body.get("lang", "fr")
     if lang not in ("en", "fr"):
         lang = "fr"
@@ -1064,6 +1067,8 @@ async def create_trial(request: Request):
     _SETUP_RATE_EMAIL[email] = email_timestamps
 
     user_agent = request.headers.get("user-agent", "")
+    referer_for_classify = request.headers.get("referer", "")
+    visitor = _classify_visitor(client_ip, referer_for_classify, user_agent)
     req_mode = "live"
     is_reserved, _reserved_reason = _is_test_email(email)
     if is_reserved:
@@ -1071,9 +1076,12 @@ async def create_trial(request: Request):
     if client_ip in _INTERNAL_IPS:
         req_mode = "test"
     if req_mode == "live":
-        if "test" in local_part or "diag" in local_part or "e2e" in local_part or "healthcheck" in local_part:
+        if "test" in local_part or "diag" in local_part or "e2e" in local_part or "healthcheck" in local_part or "verify" in local_part or "flow-" in local_part:
             req_mode = "test"
     if req_mode == "live" and user_agent and _BOT_UA_RE.search(user_agent):
+        req_mode = "test"
+    if req_mode == "live" and not visitor.get("is_external", True):
+        logger.warning("keys/free-signup: visitor classified non-external (%s) — forcing test mode", visitor.get("reason", "unknown"))
         req_mode = "test"
 
     lang = body.get("lang", "en")

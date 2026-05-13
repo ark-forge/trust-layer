@@ -162,3 +162,57 @@ class TestTrackEvent:
         resp = client.post("/v1/track/event", content=b"not json", headers={"content-type": "application/json"})
         assert resp.status_code == 200
         assert resp.json()["received"] is False
+
+
+class TestIsExternalGuardForcesTestMode:
+    """Verify that non-external visitors (internal IP, bot) are forced to test mode in checkout endpoints."""
+
+    def test_setup_internal_ip_forces_test_mode(self, client, monkeypatch):
+        from unittest.mock import MagicMock, patch
+        import trust_layer.app as app_mod
+        monkeypatch.setattr(app_mod, "STRIPE_TEST_KEY", "sk_test_fake")
+        monkeypatch.setattr(app_mod, "STRIPE_PRO_PRICE_ID_TEST", "price_test_pro")
+
+        mock_customer = MagicMock()
+        mock_customer.id = "cus_test_internal"
+        mock_list = MagicMock()
+        mock_list.data = []
+        mock_session = MagicMock()
+        mock_session.url = "https://checkout.stripe.com/pay/cs_test"
+        mock_session.id = "cs_test"
+
+        with patch("stripe.Customer.list", return_value=mock_list), \
+             patch("stripe.Customer.create", return_value=mock_customer) as mock_create, \
+             patch("stripe.checkout.Session.create", return_value=mock_session) as mock_checkout:
+            r = client.post("/v1/keys/setup", json={
+                "email": "real-user@gmail.com",
+            }, headers={"x-real-ip": "57.131.27.61"})
+
+        assert r.status_code == 200
+        assert mock_create.call_args.kwargs["api_key"] == "sk_test_fake"
+        assert mock_checkout.call_args.kwargs["metadata"]["stripe_mode"] == "test"
+
+    def test_setup_bot_ua_forces_test_mode(self, client, monkeypatch):
+        from unittest.mock import MagicMock, patch
+        import trust_layer.app as app_mod
+        monkeypatch.setattr(app_mod, "STRIPE_TEST_KEY", "sk_test_fake")
+        monkeypatch.setattr(app_mod, "STRIPE_PRO_PRICE_ID_TEST", "price_test_pro")
+
+        mock_customer = MagicMock()
+        mock_customer.id = "cus_test_bot"
+        mock_list = MagicMock()
+        mock_list.data = []
+        mock_session = MagicMock()
+        mock_session.url = "https://checkout.stripe.com/pay/cs_test"
+        mock_session.id = "cs_test"
+
+        with patch("stripe.Customer.list", return_value=mock_list), \
+             patch("stripe.Customer.create", return_value=mock_customer) as mock_create, \
+             patch("stripe.checkout.Session.create", return_value=mock_session) as mock_checkout:
+            r = client.post("/v1/keys/setup", json={
+                "email": "real-user@gmail.com",
+            }, headers={"user-agent": "python-requests/2.31.0", "x-real-ip": "8.8.8.8"})
+
+        assert r.status_code == 200
+        assert mock_create.call_args.kwargs["api_key"] == "sk_test_fake"
+        assert mock_checkout.call_args.kwargs["metadata"]["stripe_mode"] == "test"
