@@ -144,6 +144,8 @@ from .config import (
     STRIPE_ENTERPRISE_PRICE_ID_TEST,
     STRIPE_PLATFORM_PRICE_ID,
     STRIPE_PLATFORM_PRICE_ID_TEST,
+    STRIPE_SCANNER_PRO_PRICE_ID,
+    STRIPE_SCANNER_PRO_PRICE_ID_TEST,
 )
 from .keys import (
     validate_api_key, create_api_key, deactivate_key_by_ref, reactivate_key_by_ref, is_test_key, is_free_key,
@@ -920,7 +922,10 @@ async def setup_key(request: Request):
         price_monthly = 599.0
         proofs_per_month = 500000
     else:
-        price_id = STRIPE_PRO_PRICE_ID_TEST if req_mode == "test" else STRIPE_PRO_PRICE_ID
+        if product == "scanner":
+            price_id = STRIPE_SCANNER_PRO_PRICE_ID_TEST if req_mode == "test" else STRIPE_SCANNER_PRO_PRICE_ID
+        else:
+            price_id = STRIPE_PRO_PRICE_ID_TEST if req_mode == "test" else STRIPE_PRO_PRICE_ID
         plan_name = "pro"
         price_monthly = 29.0
         proofs_per_month = 5000
@@ -1218,10 +1223,19 @@ async def create_trial(request: Request):
         product_tag = "scanner_pro_subscription"
         success_html = "scanner-pro-success.html"
         cancel_anchor = "scanner"
+        trial_price_id = STRIPE_SCANNER_PRO_PRICE_ID_TEST if req_mode == "test" else STRIPE_SCANNER_PRO_PRICE_ID
     else:
         product_tag = "trust_layer_pro_subscription"
         success_html = "tl-pro-success.html"
         cancel_anchor = "trust"
+        trial_price_id = STRIPE_PRO_PRICE_ID_TEST if req_mode == "test" else STRIPE_PRO_PRICE_ID
+
+    if not trial_price_id:
+        logger.error("TRIAL_PRICING_MISCONFIGURED: product=%s mode=%s — Stripe price ID is empty", product, req_mode)
+        _log_funnel_event("trial_checkout_blocked_no_price_id", client_ip, request.headers.get("referer", ""), user_agent, extra={
+            "product": product, "mode": req_mode,
+        })
+        send_admin_alert("TRIAL_PRICING_MISCONFIGURED", f"product={product} mode={req_mode} — Stripe price ID is empty. A trial user was blocked from upgrade checkout.")
 
     # One active trial per email
     existing = find_active_trial_by_email(email)
@@ -1241,7 +1255,7 @@ async def create_trial(request: Request):
                     payment_method_types=["card", "link"],
                     customer=customer.id,
                     client_reference_id=f"trial_upgrade_{product}",
-                    line_items=[{"price": STRIPE_PRO_PRICE_ID_TEST if req_mode == "test" else STRIPE_PRO_PRICE_ID, "quantity": 1}],
+                    line_items=[{"price": trial_price_id, "quantity": 1}],
                     success_url=f"https://arkforge.tech/{lang}/{success_html}?session_id={{CHECKOUT_SESSION_ID}}",
                     cancel_url=f"https://arkforge.tech/{lang}/pricing.html?utm_source=trial_cancel#{cancel_anchor}",
                     metadata={
@@ -1292,7 +1306,7 @@ async def create_trial(request: Request):
                 payment_method_types=["card", "link"],
                 customer=customer.id,
                 client_reference_id=f"trial_upgrade_{product}",
-                line_items=[{"price": STRIPE_PRO_PRICE_ID_TEST if req_mode == "test" else STRIPE_PRO_PRICE_ID, "quantity": 1}],
+                line_items=[{"price": trial_price_id, "quantity": 1}],
                 success_url=f"https://arkforge.tech/{lang}/{success_html}?session_id={{CHECKOUT_SESSION_ID}}",
                 cancel_url=f"https://arkforge.tech/{lang}/pricing.html?utm_source=trial_cancel#{cancel_anchor}",
                 metadata={

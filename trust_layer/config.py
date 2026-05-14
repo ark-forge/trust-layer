@@ -58,6 +58,8 @@ def _load_secrets() -> None:
             "STRIPE_ENTERPRISE_PRICE_ID_TEST":     _stripe.get("enterprise_price_id_test", ""),
             "STRIPE_PLATFORM_PRICE_ID":            _stripe.get("platform_price_id", ""),
             "STRIPE_PLATFORM_PRICE_ID_TEST":       _stripe.get("platform_price_id_test", ""),
+            "STRIPE_SCANNER_PRO_PRICE_ID":         _stripe.get("scanner_pro_price_id", ""),
+            "STRIPE_SCANNER_PRO_PRICE_ID_TEST":    _stripe.get("scanner_pro_price_id_test", ""),
             "STRIPE_PRO_PRODUCT_ID":               _stripe.get("pro_product_id", ""),
             "SMTP_HOST":                      _smtp.get("host", ""),
             "SMTP_LOGIN":                     _smtp.get("login", ""),
@@ -101,6 +103,8 @@ STRIPE_ENTERPRISE_PRICE_ID = os.environ.get("STRIPE_ENTERPRISE_PRICE_ID", "")   
 STRIPE_ENTERPRISE_PRICE_ID_TEST = os.environ.get("STRIPE_ENTERPRISE_PRICE_ID_TEST", "")  # test
 STRIPE_PLATFORM_PRICE_ID = os.environ.get("STRIPE_PLATFORM_PRICE_ID", "")           # live
 STRIPE_PLATFORM_PRICE_ID_TEST = os.environ.get("STRIPE_PLATFORM_PRICE_ID_TEST", "")  # test
+STRIPE_SCANNER_PRO_PRICE_ID = os.environ.get("STRIPE_SCANNER_PRO_PRICE_ID", "")           # live
+STRIPE_SCANNER_PRO_PRICE_ID_TEST = os.environ.get("STRIPE_SCANNER_PRO_PRICE_ID_TEST", "")  # test
 STRIPE_PRO_PRODUCT_ID = os.environ.get("STRIPE_PRO_PRODUCT_ID", "")
 
 # --- SMTP ---

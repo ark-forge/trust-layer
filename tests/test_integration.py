@@ -369,6 +369,35 @@ def test_setup_key_subscription_mode(client, monkeypatch):
     assert call_kwargs["metadata"]["product"] == "trust_layer_pro_subscription"
 
 
+def test_setup_scanner_uses_scanner_price(client, monkeypatch):
+    """Scanner product uses STRIPE_SCANNER_PRO_PRICE_ID, not Trust Layer Pro price."""
+    import trust_layer.app as app_mod
+    monkeypatch.setattr(app_mod, "STRIPE_TEST_KEY", "sk_test_fake")
+    monkeypatch.setattr(app_mod, "STRIPE_SCANNER_PRO_PRICE_ID_TEST", "price_test_scanner_pro")
+
+    mock_customer = MagicMock()
+    mock_customer.id = "cus_test_scanner"
+    mock_customer_list = MagicMock()
+    mock_customer_list.data = []
+    mock_session = MagicMock()
+    mock_session.url = "https://checkout.stripe.com/pay/cs_test_scanner"
+    mock_session.id = "cs_test_scanner"
+
+    with patch("stripe.Customer.list", return_value=mock_customer_list), \
+         patch("stripe.Customer.create", return_value=mock_customer), \
+         patch("stripe.checkout.Session.create", return_value=mock_session) as mock_create:
+        r = client.post("/v1/keys/setup", json={
+            "email": "scanner@test.com",
+            "product": "scanner",
+            "mode": "test",
+        })
+
+    assert r.status_code == 200
+    call_kwargs = mock_create.call_args.kwargs
+    assert call_kwargs["line_items"][0]["price"] == "price_test_scanner_pro"
+    assert call_kwargs["metadata"]["product"] == "scanner_pro_subscription"
+
+
 def test_setup_key_no_price_id_returns_500(client, monkeypatch):
     """Sans price_id configuré, retourne 500."""
     import trust_layer.app as app_mod
