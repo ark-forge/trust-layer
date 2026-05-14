@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.66] — 2026-05-14
+
+### Fixed
+- trial endpoint respects product=scanner + admin alert on pricing misconfigured
+
+---
+
 ## [1.3.65] — 2026-05-14
 
 _(no user-facing changes)_
