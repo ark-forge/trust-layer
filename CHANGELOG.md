@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.67] — 2026-05-14
+
+### Fixed
+- route Scanner Pro to separate Stripe product/price
+
+---
+
 ## [1.3.66] — 2026-05-14
 
 ### Fixed
