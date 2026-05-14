@@ -192,19 +192,21 @@ class TestIsExternalGuardForcesTestMode:
         assert mock_create.call_args.kwargs["api_key"] == "sk_test_fake"
         assert mock_checkout.call_args.kwargs["metadata"]["stripe_mode"] == "test"
 
-    def test_setup_bot_ua_forces_test_mode(self, client, monkeypatch):
+    def test_setup_bot_ua_keeps_live_mode(self, client, monkeypatch):
+        """Bot-like UAs (python-requests, curl) should NOT be forced to test mode —
+        real SDK users would be silently blocked from paying. Rate-limiting protects against abuse."""
         from unittest.mock import MagicMock, patch
         import trust_layer.app as app_mod
         monkeypatch.setattr(app_mod, "STRIPE_TEST_KEY", "sk_test_fake")
         monkeypatch.setattr(app_mod, "STRIPE_PRO_PRICE_ID_TEST", "price_test_pro")
 
         mock_customer = MagicMock()
-        mock_customer.id = "cus_test_bot"
+        mock_customer.id = "cus_live_sdk"
         mock_list = MagicMock()
         mock_list.data = []
         mock_session = MagicMock()
-        mock_session.url = "https://checkout.stripe.com/pay/cs_test"
-        mock_session.id = "cs_test"
+        mock_session.url = "https://checkout.stripe.com/pay/cs_live"
+        mock_session.id = "cs_live"
 
         with patch("stripe.Customer.list", return_value=mock_list), \
              patch("stripe.Customer.create", return_value=mock_customer) as mock_create, \
@@ -214,5 +216,5 @@ class TestIsExternalGuardForcesTestMode:
             }, headers={"user-agent": "python-requests/2.31.0", "x-real-ip": "8.8.8.8"})
 
         assert r.status_code == 200
-        assert mock_create.call_args.kwargs["api_key"] == "sk_test_fake"
-        assert mock_checkout.call_args.kwargs["metadata"]["stripe_mode"] == "test"
+        assert mock_create.call_args.kwargs["api_key"] != "sk_test_fake"
+        assert mock_checkout.call_args.kwargs["metadata"]["stripe_mode"] == "live"

@@ -886,11 +886,7 @@ async def setup_key(request: Request):
             logger.warning("keys/setup: email %r looks like test — forcing test mode", email)
             req_mode = "test"
     if req_mode == "live" and user_agent and _BOT_UA_RE.search(user_agent):
-        logger.warning("keys/setup: bot UA %r — forcing test mode", user_agent[:80])
-        req_mode = "test"
-    if req_mode == "live" and not visitor.get("is_external", True):
-        logger.warning("keys/setup: visitor classified non-external (%s) — forcing test mode", visitor.get("reason", "unknown"))
-        req_mode = "test"
+        logger.info("keys/setup: bot-like UA %r — keeping live mode (rate-limit protects)", user_agent[:80])
     lang = body.get("lang", "fr")
     if lang not in ("en", "fr"):
         lang = "fr"
@@ -1207,10 +1203,7 @@ async def create_trial(request: Request):
         if "test" in local_part or "diag" in local_part or "e2e" in local_part or "healthcheck" in local_part or "verify" in local_part or "flow-" in local_part:
             req_mode = "test"
     if req_mode == "live" and user_agent and _BOT_UA_RE.search(user_agent):
-        req_mode = "test"
-    if req_mode == "live" and not visitor.get("is_external", True):
-        logger.warning("keys/free-signup: visitor classified non-external (%s) — forcing test mode", visitor.get("reason", "unknown"))
-        req_mode = "test"
+        logger.info("keys/trial: bot-like UA %r — keeping live mode (rate-limit protects)", user_agent[:80])
 
     lang = body.get("lang", "en")
     if lang not in ("en", "fr"):
