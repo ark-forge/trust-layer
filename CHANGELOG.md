@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.68] — 2026-05-14
+
+### Fixed
+- stop bot-UA guard from silently blocking real customers in checkout
+
+---
+
 ## [1.3.67] — 2026-05-14
 
 ### Fixed
