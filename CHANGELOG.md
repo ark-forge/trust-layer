@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.64] — 2026-05-14
+
+### Added
+- add GET /trial landing page for badge and CLI CTAs
+
+---
+
 ## [1.3.63] — 2026-05-13
 
 ### Fixed
