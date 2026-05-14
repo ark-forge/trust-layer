@@ -1016,6 +1016,123 @@ async def setup_key(request: Request):
         return _error_response("internal_error", f"Stripe error: {str(e)}", 500)
 
 
+# --- GET /trial (landing page for README/CLI badge links) ---
+
+@app.get("/trial")
+async def trial_landing(request: Request):
+    """Landing page for trial signup — linked from PyPI README badges and CLI post-scan CTA."""
+    utm_source = (request.query_params.get("utm_source") or "")[:64]
+    utm_medium = (request.query_params.get("utm_medium") or "")[:64]
+
+    try:
+        client_ip = (
+            request.headers.get("x-real-ip")
+            or (request.client.host if request.client else "unknown")
+        )
+        with open(FUNNEL_EVENTS_LOG, "a") as _f:
+            _f.write(json.dumps({
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "event": "trial_page_visit",
+                "client_ip_hash": hashlib.sha256(client_ip.encode()).hexdigest()[:12],
+                "referrer": (request.headers.get("referer") or "")[:200],
+                "utm_source": utm_source,
+                "utm_medium": utm_medium,
+            }) + "\n")
+    except Exception:
+        pass
+
+    utm_qs = f"&utm_source={utm_source}" if utm_source else ""
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Start Your Free 14-Day Trial — ArkForge Trust Layer</title>
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0a0a0f;color:#e0e0e0;min-height:100vh;display:flex;align-items:center;justify-content:center}}
+.card{{background:#14141f;border:1px solid #2a2a3a;border-radius:12px;padding:2.5rem;max-width:440px;width:90%}}
+h1{{font-size:1.5rem;margin-bottom:.3rem;color:#fff}}
+.sub{{font-size:1rem;color:#f5a623;margin-bottom:1.2rem;font-weight:600}}
+p{{font-size:.9rem;color:#a0a0b0;margin-bottom:1.5rem;line-height:1.5}}
+label{{font-size:.85rem;color:#c0c0d0;display:block;margin-bottom:.4rem}}
+input[type=email]{{width:100%;padding:.75rem 1rem;border:1px solid #2a2a3a;border-radius:8px;background:#0a0a0f;color:#fff;font-size:1rem;outline:none;transition:border-color .2s}}
+input[type=email]:focus{{border-color:#f5a623}}
+button{{width:100%;padding:.75rem;margin-top:1rem;border:none;border-radius:8px;background:#f5a623;color:#0a0a0f;font-size:1rem;font-weight:700;cursor:pointer;transition:background .2s}}
+button:hover{{background:#e6971a}}
+button:disabled{{background:#333;color:#888;cursor:wait}}
+.result{{margin-top:1rem;padding:1rem;border-radius:8px;font-size:.9rem;line-height:1.5}}
+.result.ok{{background:#0d2818;border:1px solid #1a5c2e;color:#6fcf97}}
+.result.err{{background:#2d1215;border:1px solid #5c1a1f;color:#cf6f6f}}
+.key-box{{font-family:monospace;background:#0a0a0f;padding:.5rem .75rem;border-radius:6px;margin-top:.5rem;word-break:break-all;display:flex;align-items:center;gap:.5rem}}
+.copy-btn{{background:none;border:1px solid #2a2a3a;color:#a0a0b0;padding:.25rem .5rem;border-radius:4px;cursor:pointer;font-size:.75rem;width:auto;margin:0}}
+.copy-btn:hover{{border-color:#f5a623;color:#f5a623;background:none}}
+.features{{list-style:none;margin-top:1.5rem;font-size:.85rem;color:#a0a0b0}}
+.features li::before{{content:'\\2713 ';color:#6fcf97}}
+.features li{{margin-bottom:.4rem}}
+.fine{{font-size:.78rem;color:#666;margin-top:1.2rem;line-height:1.4}}
+</style>
+</head>
+<body>
+<div class="card">
+<h1>Trust Layer Pro Trial</h1>
+<div class="sub">14 days free — no credit card required</div>
+<p>Get a Pro-grade API key instantly. 5,000 certified proofs/month, full compliance reports, CI/CD integration.</p>
+<form id="trialform">
+<label for="email">Work email</label>
+<input type="email" id="email" name="email" placeholder="you@company.com" required autofocus>
+<button type="submit" id="btn">Start free trial</button>
+</form>
+<div id="result" style="display:none"></div>
+<ul class="features">
+<li>5,000 tamper-proof certifications/month</li>
+<li>EU AI Act + GDPR compliance evidence</li>
+<li>CI/CD pipeline integration</li>
+<li>Compliance trend dashboard</li>
+<li>Cancel anytime — no commitment</li>
+</ul>
+<p class="fine">After 14 days, continue at &euro;29/mo or downgrade to the free tier (500 proofs/month). No automatic charge.</p>
+</div>
+<script>
+document.getElementById('trialform').addEventListener('submit', async(e)=>{{
+e.preventDefault();
+const btn=document.getElementById('btn');
+const res=document.getElementById('result');
+const email=document.getElementById('email').value.trim();
+if(!email)return;
+btn.disabled=true;btn.textContent='Activating...';
+res.style.display='none';
+try{{
+const r=await fetch('/v1/keys/trial',{{
+method:'POST',
+headers:{{'Content-Type':'application/json'}},
+body:JSON.stringify({{email:email,utm_source:'{utm_source}',lang:'en'}})
+}});
+const d=await r.json();
+if(r.ok&&d.api_key){{
+res.className='result ok';
+let msg='Your trial key is active!<div class="key-box"><span>'+d.api_key+'</span><button class="copy-btn" onclick="navigator.clipboard.writeText(\\''+d.api_key+'\\');this.textContent=\\'Copied\\'">Copy</button></div>';
+if(d.trial_ends)msg+='<p style="margin-top:.5rem;font-size:.85rem;color:#a0a0b0">Trial ends: '+d.trial_ends+'</p>';
+msg+='<p style="margin-top:.5rem;font-size:.85rem;color:#a0a0b0">Key also sent to '+email+'</p>';
+btn.textContent='Done';
+res.innerHTML=msg;
+}}else{{
+throw new Error(d.detail||d.error||'Could not create trial');
+}}
+}}catch(err){{
+res.className='result err';
+res.textContent=err.message;
+btn.disabled=false;btn.textContent='Start free trial';
+}}
+res.style.display='block';
+}});
+</script>
+</body>
+</html>"""
+    return HTMLResponse(content=html)
+
+
 # --- POST /v1/keys/trial ---
 
 @app.post("/v1/keys/trial")
