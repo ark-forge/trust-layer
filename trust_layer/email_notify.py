@@ -4,6 +4,7 @@ import logging
 import smtplib
 import ssl
 import time
+from datetime import datetime, timezone
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.utils import formatdate, make_msgid
@@ -740,3 +741,46 @@ Support: contact@arkforge.tech
         logger.info("Trial upgrade reminder sent to %s*** (%d days remaining)", email[:3], days_remaining)
     except Exception as e:
         logger.warning("Trial upgrade reminder email failed: %s", e)
+
+
+_ADMIN_ALERT_SENT: dict[str, float] = {}
+_ADMIN_ALERT_COOLDOWN = 3600
+
+
+def send_admin_alert(alert_type: str, details: str):
+    """Send a critical alert email to admin. Rate-limited: 1 per type per hour."""
+    import time as _t
+    now = _t.time()
+    last = _ADMIN_ALERT_SENT.get(alert_type, 0)
+    if now - last < _ADMIN_ALERT_COOLDOWN:
+        return
+    _ADMIN_ALERT_SENT[alert_type] = now
+
+    subject = f"[ArkForge ALERT] {alert_type}"
+    body = f"""ArkForge Trust Layer — System Alert
+{'=' * 50}
+
+Type: {alert_type}
+Time: {datetime.now(timezone.utc).isoformat()}
+
+{details}
+
+{'=' * 50}
+Automated alert — no reply needed.
+"""
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = f"ArkForge <{SMTP_USER}>"
+        msg["To"] = SMTP_CONTACT
+        msg["Date"] = formatdate(localtime=True)
+        msg["Message-ID"] = make_msgid(domain="arkforge.tech")
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+
+        context = ssl.create_default_context()
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context, timeout=15) as server:
+            server.login(SMTP_LOGIN, SMTP_PASSWORD)
+            server.sendmail(SMTP_USER, SMTP_CONTACT, msg.as_string())
+        logger.info("Admin alert sent: %s", alert_type)
+    except Exception as e:
+        logger.warning("Admin alert email failed (%s): %s", alert_type, e)

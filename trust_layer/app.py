@@ -172,6 +172,7 @@ from .email_notify import (
     send_checkout_abandoned_email,
     send_trial_welcome_email,
     send_trial_upgrade_reminder_email,
+    send_admin_alert,
     _is_test_email,
 )
 from .timestamps import submit_hash
@@ -925,6 +926,11 @@ async def setup_key(request: Request):
         proofs_per_month = 5000
 
     if not price_id:
+        logger.error("PRICING_MISCONFIGURED: plan=%s product=%s mode=%s — Stripe price ID is empty", plan_name, product, req_mode)
+        _log_funnel_event("checkout_blocked_no_price_id", client_ip, referer_for_classify, user_agent, extra={
+            "plan": plan_name, "product": product, "mode": req_mode,
+        })
+        send_admin_alert("PRICING_MISCONFIGURED", f"plan={plan_name} product={product} mode={req_mode} — Stripe price ID is empty. A real customer was blocked from checkout.")
         return _error_response("internal_error", f"Stripe {plan_name} price ID not configured", 500)
 
     try:
@@ -1205,11 +1211,23 @@ async def create_trial(request: Request):
     if lang not in ("en", "fr"):
         lang = "en"
 
+    product = (body.get("product") or "trust_layer").lower()
+    if product not in ("trust_layer", "scanner"):
+        product = "trust_layer"
+    if product == "scanner":
+        product_tag = "scanner_pro_subscription"
+        success_html = "scanner-pro-success.html"
+        cancel_anchor = "scanner"
+    else:
+        product_tag = "trust_layer_pro_subscription"
+        success_html = "tl-pro-success.html"
+        cancel_anchor = "trust"
+
     # One active trial per email
     existing = find_active_trial_by_email(email)
     if existing:
         trial_ends = existing.get("trial_ends", "")
-        upgrade_url = f"https://arkforge.tech/{lang}/pricing.html?utm_source=email&utm_medium=trial_existing#trust"
+        upgrade_url = f"https://arkforge.tech/{lang}/pricing.html?utm_source=email&utm_medium=trial_existing#{cancel_anchor}"
         try:
             sk = STRIPE_TEST_KEY if req_mode == "test" else STRIPE_LIVE_KEY
             if sk:
@@ -1222,12 +1240,12 @@ async def create_trial(request: Request):
                     mode="subscription",
                     payment_method_types=["card", "link"],
                     customer=customer.id,
-                    client_reference_id="trial_upgrade_pro",
+                    client_reference_id=f"trial_upgrade_{product}",
                     line_items=[{"price": STRIPE_PRO_PRICE_ID_TEST if req_mode == "test" else STRIPE_PRO_PRICE_ID, "quantity": 1}],
-                    success_url=f"https://arkforge.tech/{lang}/tl-pro-success.html?session_id={{CHECKOUT_SESSION_ID}}",
-                    cancel_url=f"https://arkforge.tech/{lang}/pricing.html?utm_source=trial_cancel#trust",
+                    success_url=f"https://arkforge.tech/{lang}/{success_html}?session_id={{CHECKOUT_SESSION_ID}}",
+                    cancel_url=f"https://arkforge.tech/{lang}/pricing.html?utm_source=trial_cancel#{cancel_anchor}",
                     metadata={
-                        "product": "trust_layer_pro_subscription",
+                        "product": product_tag,
                         "email": email, "plan": "pro", "lang": lang,
                         "stripe_mode": req_mode,
                         "trial_key_ref": existing["_key"][:16],
@@ -1235,7 +1253,7 @@ async def create_trial(request: Request):
                     },
                     subscription_data={
                         "trial_period_days": 14,
-                        "metadata": {"product": "trust_layer_pro_subscription", "email": email, "plan": "pro"},
+                        "metadata": {"product": product_tag, "email": email, "plan": "pro"},
                     },
                     expires_at=int(datetime.now(timezone.utc).timestamp()) + 82800,
                     api_key=sk,
@@ -1258,7 +1276,7 @@ async def create_trial(request: Request):
     trial_ends = trial_info.get("trial_ends", "")
 
     # Create Stripe checkout session (upgrade path — optional for user)
-    upgrade_url = f"https://arkforge.tech/{lang}/pricing.html?utm_source=trial_key&utm_medium=email#trust"
+    upgrade_url = f"https://arkforge.tech/{lang}/pricing.html?utm_source=trial_key&utm_medium=email#{cancel_anchor}"
     try:
         sk = STRIPE_TEST_KEY if req_mode == "test" else STRIPE_LIVE_KEY
         if sk:
@@ -1273,12 +1291,12 @@ async def create_trial(request: Request):
                 mode="subscription",
                 payment_method_types=["card", "link"],
                 customer=customer.id,
-                client_reference_id="trial_upgrade_pro",
+                client_reference_id=f"trial_upgrade_{product}",
                 line_items=[{"price": STRIPE_PRO_PRICE_ID_TEST if req_mode == "test" else STRIPE_PRO_PRICE_ID, "quantity": 1}],
-                success_url=f"https://arkforge.tech/{lang}/tl-pro-success.html?session_id={{CHECKOUT_SESSION_ID}}",
-                cancel_url=f"https://arkforge.tech/{lang}/pricing.html?utm_source=trial_cancel#trust",
+                success_url=f"https://arkforge.tech/{lang}/{success_html}?session_id={{CHECKOUT_SESSION_ID}}",
+                cancel_url=f"https://arkforge.tech/{lang}/pricing.html?utm_source=trial_cancel#{cancel_anchor}",
                 metadata={
-                    "product": "trust_layer_pro_subscription",
+                    "product": product_tag,
                     "email": email,
                     "plan": "pro",
                     "lang": lang,
@@ -1288,7 +1306,7 @@ async def create_trial(request: Request):
                 },
                 subscription_data={
                     "trial_period_days": 14,
-                    "metadata": {"product": "trust_layer_pro_subscription", "email": email, "plan": "pro"},
+                    "metadata": {"product": product_tag, "email": email, "plan": "pro"},
                 },
                 expires_at=int(datetime.now(timezone.utc).timestamp()) + 82800,
                 api_key=sk,
