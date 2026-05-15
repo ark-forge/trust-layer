@@ -30,5 +30,4 @@ jobs:
       - name: Audit dependencies
         run: |
           pip install pip-audit
-          pip-audit
-        continue-on-error: true
+          pip-audit --skip-editable
