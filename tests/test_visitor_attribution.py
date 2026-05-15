@@ -198,6 +198,8 @@ class TestIsExternalGuardForcesTestMode:
         from unittest.mock import MagicMock, patch
         import trust_layer.app as app_mod
         monkeypatch.setattr(app_mod, "STRIPE_TEST_KEY", "sk_test_fake")
+        monkeypatch.setattr(app_mod, "STRIPE_LIVE_KEY", "sk_live_fake")
+        monkeypatch.setattr(app_mod, "STRIPE_PRO_PRICE_ID", "price_live_pro")
         monkeypatch.setattr(app_mod, "STRIPE_PRO_PRICE_ID_TEST", "price_test_pro")
 
         mock_customer = MagicMock()
