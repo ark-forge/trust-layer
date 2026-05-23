@@ -218,5 +218,36 @@ class TestIsExternalGuardForcesTestMode:
             }, headers={"user-agent": "python-requests/2.31.0", "x-real-ip": "8.8.8.8"})
 
         assert r.status_code == 200
-        assert mock_create.call_args.kwargs["api_key"] != "sk_test_fake"
+        assert mock_create.call_args.kwargs["api_key"] == "sk_live_fake"
+        assert mock_checkout.call_args.kwargs["metadata"]["stripe_mode"] == "live"
+
+    def test_trial_bot_ua_keeps_live_mode(self, client, monkeypatch):
+        """Same bot-UA live-mode behavior must hold for /v1/keys/trial."""
+        from unittest.mock import MagicMock, patch
+        import trust_layer.app as app_mod
+        monkeypatch.setattr(app_mod, "STRIPE_TEST_KEY", "sk_test_fake")
+        monkeypatch.setattr(app_mod, "STRIPE_LIVE_KEY", "sk_live_fake")
+        monkeypatch.setattr(app_mod, "STRIPE_PRO_PRICE_ID", "price_live_pro")
+        monkeypatch.setattr(app_mod, "STRIPE_PRO_PRICE_ID_TEST", "price_test_pro")
+
+        mock_customer = MagicMock()
+        mock_customer.id = "cus_live_trial"
+        mock_list = MagicMock()
+        mock_list.data = []
+        mock_session = MagicMock()
+        mock_session.url = "https://checkout.stripe.com/pay/cs_live_trial"
+        mock_session.id = "cs_live_trial"
+
+        with patch("trust_layer.app.find_active_trial_by_email", return_value=None), \
+             patch("trust_layer.app.create_trial_key", return_value="tl_trial_fake"), \
+             patch("trust_layer.keys.load_api_keys", return_value={"tl_trial_fake": {"trial_ends": "2026-06-01"}}), \
+             patch("stripe.Customer.list", return_value=mock_list), \
+             patch("stripe.Customer.create", return_value=mock_customer) as mock_create, \
+             patch("stripe.checkout.Session.create", return_value=mock_session) as mock_checkout:
+            r = client.post("/v1/keys/trial", json={
+                "email": "sdk-user@company.com",
+            }, headers={"user-agent": "python-requests/2.31.0", "x-real-ip": "8.8.8.8"})
+
+        assert r.status_code == 200
+        assert mock_create.call_args.kwargs["api_key"] == "sk_live_fake"
         assert mock_checkout.call_args.kwargs["metadata"]["stripe_mode"] == "live"

@@ -276,6 +276,27 @@ def deactivate_trial_key(key: str, reason: str = "trial_expired"):
             logger.info("Trial key deactivated (%s): %s***", reason, key[:16])
 
 
+def deactivate_trial_keys_for_email(email: str, reason: str = "upgraded_to_paid") -> int:
+    """Deactivate all active trial keys for an email. Returns count deactivated."""
+    if not email:
+        return 0
+    now = datetime.now(timezone.utc).isoformat()
+    count = 0
+    with _KEYS_LOCK:
+        keys = load_api_keys()
+        for key, info in keys.items():
+            if (info.get("active") and info.get("plan") == "trial"
+                    and info.get("email", "").lower() == email.lower()):
+                info["active"] = False
+                info["deactivated_at"] = now
+                info["deactivation_reason"] = reason
+                count += 1
+                logger.info("Trial key deactivated (%s): %s***", reason, key[:16])
+        if count:
+            save_api_keys(keys)
+    return count
+
+
 def is_test_key(api_key: str) -> bool:
     """Check if an API key is a test mode key."""
     return api_key.startswith("mcp_test_")

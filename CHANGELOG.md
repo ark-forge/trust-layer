@@ -6,6 +6,14 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.69] — 2026-05-15
+
+### Fixed
+- strengthen bot-UA checkout test assertions (== live key, not != test key)
+- add bot-UA live-mode test coverage for /v1/keys/trial endpoint
+
+---
+
 ## [1.3.68] — 2026-05-14
 
 ### Fixed

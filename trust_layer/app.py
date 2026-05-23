@@ -151,7 +151,7 @@ from .keys import (
     validate_api_key, create_api_key, deactivate_key_by_ref, reactivate_key_by_ref, is_test_key, is_free_key,
     get_overage_settings, update_overage_settings, get_key_plan, is_internal_key, find_key_info_by_ref,
     create_trial_key, find_active_trial_by_email, find_expiring_trial_keys, find_expired_trial_keys,
-    deactivate_trial_key,
+    deactivate_trial_key, deactivate_trial_keys_for_email,
 )
 from .credits import add_credits, get_balance
 from .proofs import load_proof, store_proof, get_public_proof, get_full_proof, verify_proof_integrity, sha256_hex
@@ -2458,6 +2458,13 @@ def _process_stripe_event(event_type: str, data: dict, is_test: bool, event_id: 
                 api_key = create_api_key(customer_id, ref_id, customer_email, test_mode=is_test)
                 logger.info("API key created for %s (ref=%s, product=%s)", customer_email, ref_id, product)
 
+            # Deactivate orphan trial keys when upgrading to paid
+            trial_key_ref = metadata.get("trial_key_ref", "")
+            if trial_key_ref and customer_email:
+                n_deactivated = deactivate_trial_keys_for_email(customer_email, reason="upgraded_to_paid")
+                if n_deactivated:
+                    logger.info("Deactivated %d trial key(s) for %s on upgrade (ref=%s)", n_deactivated, customer_email, trial_key_ref)
+
             try:
                 if product in ("trust_layer_pro_subscription", "scanner_pro_subscription", "trust_layer_enterprise_subscription", "trust_layer_platform_subscription"):
                     plan_label = metadata.get("plan", "pro")
@@ -2498,6 +2505,16 @@ def _process_stripe_event(event_type: str, data: dict, is_test: bool, event_id: 
                         "is_external": _is_ext,
                         "source_type": _src_type,
                     }) + "\n")
+                    if trial_key_ref:
+                        _cel.write(json.dumps({
+                            "ts": datetime.now(timezone.utc).isoformat(),
+                            "event": "trial_to_paid",
+                            "trial_key_ref": trial_key_ref,
+                            "email_hash": customer_email[:3] + "***" if customer_email else "",
+                            "product": product or "free",
+                            "test_mode": is_test,
+                            "utm_source": metadata.get("utm_source", ""),
+                        }) + "\n")
             except OSError:
                 pass  # Non-critical — don't break webhook on log failure
 
@@ -2898,7 +2915,7 @@ async def pricing():
 
 _TRACK_RATE: dict[str, list[float]] = {}
 _TRACK_MAX_PER_HOUR = 30
-_ALLOWED_TRACK_EVENTS = frozenset({"pricing_page_view"})
+_ALLOWED_TRACK_EVENTS = frozenset({"pricing_page_view", "pricing_page_viewed", "pricing_pageview", "pricing_cta_click", "pricing_cta_clicked", "pricing_scroll", "pricing_time", "pricing_leave", "pricing_exit_intent", "js_error", "promise_rejection"})
 
 @app.post("/v1/track/event")
 async def track_event(request: Request):
@@ -2934,9 +2951,14 @@ async def track_event(request: Request):
     utm_source = (body.get("utm_source") or "")[:64]
     page_url = (body.get("page_url") or "")[:256]
 
+    event_data = body.get("data") or {}
+    if isinstance(event_data, dict):
+        event_data = {k: str(v)[:200] for k, v in list(event_data.items())[:10]}
+    else:
+        event_data = {}
     _log_funnel_event(event, client_ip, referer, user_agent, extra={
         "utm_source": utm_source,
-        "page_url": page_url,
+        "page_url": page_url, **event_data,
     })
     return {"received": True}
 
