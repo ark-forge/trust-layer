@@ -6,6 +6,18 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.69] — 2026-05-25
+
+### Added
+- add POST /create-checkout-session endpoint
+
+### Fixed
+- deactivate orphan trial keys on paid upgrade + track trial_to_paid conversions
+- make pip-audit blocking — skip editable packages instead of continue-on-error
+- patch STRIPE_LIVE_KEY in bot-UA checkout test
+
+---
+
 ## [1.3.69] — 2026-05-15
 
 ### Fixed
