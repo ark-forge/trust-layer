@@ -54,6 +54,7 @@ _FAILOVER_BLOCKED_PATHS = {
     "/v1/compliance-report",
     "/v1/contact",
     "/v1/track/event",
+    "/create-checkout-session",
 }
 
 
@@ -1021,6 +1022,19 @@ async def setup_key(request: Request):
     except stripe.StripeError as e:
         logger.error("Stripe setup error: %s", e)
         return _error_response("internal_error", f"Stripe error: {str(e)}", 500)
+
+
+# --- POST /create-checkout-session (pricing page standard checkout) ---
+
+@app.post("/create-checkout-session")
+async def create_checkout_session(request: Request):
+    """Standard Stripe Checkout Session endpoint for pricing page CTAs.
+
+    Delegates to the full /v1/keys/setup handler which creates a Stripe
+    Checkout Session (subscription mode, 14-day trial, Pro at 29 EUR/month).
+    Returns {checkout_url, session_id, customer_id, mode, plan, price_monthly_eur, proofs_per_month}.
+    """
+    return await setup_key(request)
 
 
 # --- GET /trial (landing page for README/CLI badge links) ---
