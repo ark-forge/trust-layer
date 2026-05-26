@@ -833,7 +833,7 @@ async def execute_proxy(
     # 14c. CTA — pricing link for conversion
     result.setdefault("_links", {})["pricing"] = (
         "https://arkforge.tech/en/pricing.html"
-        "?utm_source=proxy_api&utm_medium=json_response"
+        "?utm_source=proxy_api&utm_medium=json_response#trust"
     )
 
     # 15. Cache idempotency

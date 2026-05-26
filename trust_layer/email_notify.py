@@ -213,7 +213,7 @@ def send_quota_alert_email(email: str, api_key: str, used: int, limit: int, peri
         period_label = "monthly"
         upgrade_hint = (
             "Upgrade to Pro for 100 proofs/day and no monthly cap:\n"
-            "  https://arkforge.tech/en/pricing.html?utm_source=email&utm_medium=notification"
+            "  https://arkforge.tech/en/pricing.html?utm_source=email&utm_medium=notification#trust"
         )
     else:
         period_label = "daily"
@@ -484,7 +484,7 @@ Your API key has been deactivated:
   {api_key}
 
 To continue using ArkForge Trust Layer, resubscribe anytime:
-  https://arkforge.tech/en/pricing.html?utm_source=email&utm_medium=notification
+  https://arkforge.tech/en/pricing.html?utm_source=email&utm_medium=notification#trust
 
 Your proofs remain accessible for 30 days after trial end:
   https://trust.arkforge.tech/v1/proof/<proof_id>

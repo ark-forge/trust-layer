@@ -352,7 +352,7 @@ def build_assessment(
         "drift_summary": drift_summary,
         "baseline_status": "updated" if baseline is not None else "created",
         "_links": {
-            "pricing": "https://arkforge.tech/en/pricing.html?utm_source=assess_api&utm_medium=json_response",
+            "pricing": "https://arkforge.tech/en/pricing.html?utm_source=assess_api&utm_medium=json_response#trust",
             "docs": "https://arkforge.tech/en/assess.html",
             "hint": "Continuous MCP monitoring & drift alerts available on paid plans.",
         },
