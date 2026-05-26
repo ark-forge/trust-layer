@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.70] — 2026-05-26
+
+### Fixed
+- add #trust hash to Trust Layer pricing URLs
+
+---
+
 ## [1.3.69] — 2026-05-25
 
 ### Added
