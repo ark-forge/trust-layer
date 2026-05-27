@@ -110,11 +110,8 @@ async def test_stripe_no_payment_method():
             )
 
 
-def test_stripe_no_key():
+@pytest.mark.asyncio
+async def test_stripe_no_key():
     provider = StripeProvider("")
-    # find_payment_method should fail with empty key
-    import asyncio
     with pytest.raises(ValueError, match="Stripe key not configured"):
-        asyncio.get_event_loop().run_until_complete(
-            provider.find_payment_method("cus_123")
-        )
+        await provider.find_payment_method("cus_123")
