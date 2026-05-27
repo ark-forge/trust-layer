@@ -398,11 +398,27 @@ else:
 # ── 12. TSR (RFC 3161) ────────────────────────────────────────
 sec("12. TSR RFC 3161")
 if PROOF_ID_FREE:
-    # freetsa.org times out (~15s) before digicert fallback kicks in — retry up to 24s
+    # Poll proof JSON until timestamp_authority.status == "verified" before fetching TSR.
+    # freetsa.org times out on OVH (~15s), then digicert fallback runs in a thread pool
+    # that may be busy (Redis reconciliation). Budget 90s before giving up.
     tsr_url = BASE + f"/v1/proof/{PROOF_ID_FREE}/tsr"
-    tsr_s, tsr_ct, tsr_len = 0, "", 0
-    for _attempt in range(8):
+    tsr_ready = False
+    for _attempt in range(30):
         time.sleep(3)
+        try:
+            _check_url = BASE + f"/v1/proof/{PROOF_ID_FREE}"
+            _check_req = urllib.request.Request(_check_url,
+                headers={"User-Agent": "ArkForge-SmokeTest/1.0"})
+            with urllib.request.urlopen(_check_req, timeout=10) as _r:
+                _pdata = json.loads(_r.read())
+            if _pdata.get("timestamp_authority", {}).get("status") == "verified":
+                tsr_ready = True
+                break
+        except Exception:
+            pass
+
+    tsr_s, tsr_ct, tsr_len = 0, "", 0
+    if tsr_ready:
         tsr_req = urllib.request.Request(tsr_url, method="GET",
             headers={"User-Agent": "ArkForge-SmokeTest/1.0"})
         try:
@@ -410,10 +426,8 @@ if PROOF_ID_FREE:
                 tsr_s, tsr_ct, tsr_len = r.status, r.headers.get("Content-Type", ""), len(r.read())
         except urllib.error.HTTPError as e:
             tsr_s, tsr_ct, tsr_len = e.code, "", 0
-        if tsr_s == 200 and tsr_len > 100:
-            break
     chk("GET /v1/proof/{id}/tsr → 200 DER",
-        tsr_s == 200 and tsr_len > 100, f"HTTP {tsr_s} size={tsr_len}B")
+        tsr_s == 200 and tsr_len > 100, f"HTTP {tsr_s} size={tsr_len}B (tsr_ready={tsr_ready})")
 
     tsr_head = urllib.request.Request(tsr_url, method="HEAD",
         headers={"User-Agent": "ArkForge-SmokeTest/1.0"})

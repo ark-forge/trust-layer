@@ -378,10 +378,12 @@ async def _recover_pending_tsa():
             proof_id = proof.get("proof_id", proof_file.stem)
             logger.info("TSA recovery: retrying %s", proof_id)
             loop = asyncio.get_running_loop()
-            tsr_bytes = await loop.run_in_executor(None, submit_hash, chain_hash)
-            if tsr_bytes:
+            tsa_result = await loop.run_in_executor(None, submit_hash, chain_hash)
+            if tsa_result:
+                tsr_bytes, tsa_provider = tsa_result
                 (PROOFS_DIR / f"{proof_id}.tsr").write_bytes(tsr_bytes)
                 proof["timestamp_authority"]["status"] = "verified"
+                proof["timestamp_authority"]["provider"] = tsa_provider
                 proof["timestamp_authority"]["tsr_base64"] = _b64.b64encode(tsr_bytes).decode("ascii")
                 _store_proof(proof_id, proof)
                 _log_background_task(proof_id, "tsa_recovery", "success")
