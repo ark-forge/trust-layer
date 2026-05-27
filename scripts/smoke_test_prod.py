@@ -398,15 +398,20 @@ else:
 # ── 12. TSR (RFC 3161) ────────────────────────────────────────
 sec("12. TSR RFC 3161")
 if PROOF_ID_FREE:
-    time.sleep(0.5)
+    # freetsa.org times out (~15s) before digicert fallback kicks in — retry up to 24s
     tsr_url = BASE + f"/v1/proof/{PROOF_ID_FREE}/tsr"
-    tsr_req = urllib.request.Request(tsr_url, method="GET",
-        headers={"User-Agent": "ArkForge-SmokeTest/1.0"})
-    try:
-        with urllib.request.urlopen(tsr_req, timeout=15) as r:
-            tsr_s, tsr_ct, tsr_len = r.status, r.headers.get("Content-Type", ""), len(r.read())
-    except urllib.error.HTTPError as e:
-        tsr_s, tsr_ct, tsr_len = e.code, "", 0
+    tsr_s, tsr_ct, tsr_len = 0, "", 0
+    for _attempt in range(8):
+        time.sleep(3)
+        tsr_req = urllib.request.Request(tsr_url, method="GET",
+            headers={"User-Agent": "ArkForge-SmokeTest/1.0"})
+        try:
+            with urllib.request.urlopen(tsr_req, timeout=15) as r:
+                tsr_s, tsr_ct, tsr_len = r.status, r.headers.get("Content-Type", ""), len(r.read())
+        except urllib.error.HTTPError as e:
+            tsr_s, tsr_ct, tsr_len = e.code, "", 0
+        if tsr_s == 200 and tsr_len > 100:
+            break
     chk("GET /v1/proof/{id}/tsr → 200 DER",
         tsr_s == 200 and tsr_len > 100, f"HTTP {tsr_s} size={tsr_len}B")
 

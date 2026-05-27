@@ -809,6 +809,9 @@ async def get_proof_tsr(proof_id: str, request: Request):
     """Return raw .tsr file (RFC 3161 timestamp response) for independent verification."""
     tsr_path = PROOFS_DIR / f"{proof_id}.tsr"
     if not tsr_path.exists():
+        # HEAD must not carry a body — JSONResponse causes Content-Length mismatch
+        if request.method == "HEAD":
+            return Response(status_code=404)
         return _error_response("not_found", f"TSR file for '{proof_id}' not found", 404)
 
     return Response(
