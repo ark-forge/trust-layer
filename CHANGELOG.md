@@ -6,6 +6,16 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.71] — 2026-05-27
+
+### Fixed
+- unpack submit_hash tuple in recovery + poll proof status before TSR check
+- HEAD 404 body mismatch + smoke test retry for TSA fallback
+- replace get_event_loop() with async def in test_stripe_no_key
+- upgrade starlette 1.0.0→1.1.0 and idna 3.15→3.16
+
+---
+
 ## [1.3.70] — 2026-05-26
 
 ### Fixed
