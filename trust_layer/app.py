@@ -3140,11 +3140,14 @@ async def get_stats():
     now = time.monotonic()
     if cache and now - cache["ts"] < 60:
         return cache["data"]
-    proof_count = sum(1 for f in PROOFS_DIR.iterdir() if f.suffix == ".json") if PROOFS_DIR.exists() else 0
+    proof_files = sorted(PROOFS_DIR.glob("prf_*.json")) if PROOFS_DIR.exists() else []
+    proof_count = len(proof_files)
+    latest_proof_id = proof_files[-1].stem if proof_files else None
     assess_count = sum(1 for f in ASSESSMENTS_DIR.iterdir() if f.suffix == ".json") if ASSESSMENTS_DIR.exists() else 0
     data = {
         "proofs_generated": proof_count,
         "assessments_completed": assess_count,
+        "latest_proof_id": latest_proof_id,
     }
     get_stats._cache = {"ts": now, "data": data}
     return data
