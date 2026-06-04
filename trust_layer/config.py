@@ -5,11 +5,13 @@ from pathlib import Path
 
 # --- Paths ---
 BASE_DIR = Path(__file__).parent.parent
-DATA_DIR = BASE_DIR / "data"
-PROOFS_DIR = BASE_DIR / "proofs"
+# Surchargeable par env — prod ACA : TRUST_DATA_DIR=/mnt/share/data (Azure Files),
+# TRUST_PROOFS_DIR=/mnt/share/proofs. Sans override : data/ et proofs/ du repo.
+DATA_DIR = Path(os.environ.get("TRUST_DATA_DIR") or BASE_DIR / "data")
+PROOFS_DIR = Path(os.environ.get("TRUST_PROOFS_DIR") or BASE_DIR / "proofs")
 ATTESTATIONS_DIR = DATA_DIR / "attestations"
-DATA_DIR.mkdir(exist_ok=True)
-PROOFS_DIR.mkdir(exist_ok=True)
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+PROOFS_DIR.mkdir(parents=True, exist_ok=True)
 ATTESTATIONS_DIR.mkdir(exist_ok=True)
 
 API_KEYS_FILE = DATA_DIR / "api_keys.json"
