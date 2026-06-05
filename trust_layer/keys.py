@@ -393,3 +393,18 @@ def update_overage_settings(api_key: str, enabled: bool, cap_eur: float, overage
         logger.info("Overage billing %s for key %s (cap=%.2f)", "enabled" if enabled else "disabled", api_key[:12], cap_eur)
 
     return get_overage_settings(api_key)
+
+
+def deactivate_smoke_keys() -> list:
+    """Deactivate all ephemeral smoke test keys (identified by smoke.invalid email)."""
+    deactivated = []
+    with _KEYS_LOCK:
+        keys = load_api_keys()
+        for k, info in keys.items():
+            if 'smoke.invalid' in info.get('email', '') and info.get('active'):
+                info['active'] = False
+                deactivated.append(k[:18])
+        if deactivated:
+            save_api_keys(keys)
+    logger.info('smoke cleanup: deactivated %d keys', len(deactivated))
+    return deactivated

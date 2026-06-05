@@ -474,6 +474,8 @@ app.include_router(_assess_router)
 app.include_router(_compliance_router)
 from .routers.verdict import router as _verdict_router
 app.include_router(_verdict_router)
+from .routers.admin import router as _admin_router
+app.include_router(_admin_router)
 
 
 # --- Helpers ---

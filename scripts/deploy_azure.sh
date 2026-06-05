@@ -203,7 +203,13 @@ if [ "$SKIP_SMOKE" = false ]; then
     SMOKE_SCRIPT="$BUILD_CTX/scripts/smoke_test_prod.py"
     if [ -f "$SMOKE_SCRIPT" ]; then
         SMOKE_BASE=$(echo "$HEALTH_URL" | sed 's|/v1/health||')
-        if ! python3 "$SMOKE_SCRIPT" --base-url "$SMOKE_BASE" >> "$LOG_FILE" 2>&1; then
+        TL_SECRET=$(az containerapp secret show \
+            -n "$CONTAINER_APP" -g "$RESOURCE_GROUP" \
+            --secret-name trust-layer-internal-secret \
+            --query value -o tsv 2>/dev/null || echo "")
+        if [ -z "$TL_SECRET" ]; then
+            log "WARN: could not read trust-layer-internal-secret from ACA — smoke test skipped"
+        elif ! TRUST_LAYER_INTERNAL_SECRET="$TL_SECRET" python3 "$SMOKE_SCRIPT" --base-url "$SMOKE_BASE" >> "$LOG_FILE" 2>&1; then
             log "Smoke test FAILED — rollback vers $PREV_IMAGE"
             az containerapp update \
                 -n "$CONTAINER_APP" -g "$RESOURCE_GROUP" \

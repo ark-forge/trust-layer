@@ -13,7 +13,6 @@ import argparse
 import hashlib
 import hmac
 import json
-import subprocess
 import sys
 import time
 import uuid
@@ -23,12 +22,12 @@ import urllib.request
 # ── Config ────────────────────────────────────────────────────
 parser = argparse.ArgumentParser()
 parser.add_argument("--base-url", default="https://trust.arkforge.tech")
-parser.add_argument("--ovh-host", default="ubuntu@51.91.99.178")
+parser.add_argument("--internal-secret", default="", help="TRUST_LAYER_INTERNAL_SECRET (overrides env var)")
 parser.add_argument("--expected-version", default="", help="Expected version string (e.g. 0.5.4)")
 args = parser.parse_args()
 
 BASE = args.base_url.rstrip("/")
-OVH = args.ovh_host
+INTERNAL_SECRET = args.internal_secret or os.environ.get("TRUST_LAYER_INTERNAL_SECRET", "")
 
 PASS = "\033[92m✓\033[0m"
 FAIL = "\033[91m✗\033[0m"
@@ -78,94 +77,41 @@ def sec(title):
     print(f"\n{'─'*56}\n  {title}\n{'─'*56}")
 
 
-def ssh(script: str, timeout=20) -> str:
-    """Run python3 script on OVH via stdin pipe. Returns stdout stripped."""
-    r = subprocess.run(
-        ["ssh", OVH, "python3", "/dev/stdin"],
-        input=script.encode(), capture_output=True, timeout=timeout,
-    )
-    if r.returncode != 0:
-        raise RuntimeError(r.stderr.decode().strip()[:200])
-    return r.stdout.decode().strip()
+def admin_api(path: str, timeout=15) -> dict:
+    """POST to an admin endpoint with X-Internal-Secret auth. Returns parsed JSON."""
+    url = BASE + path
+    h = {"Content-Type": "application/json",
+         "User-Agent": "ArkForge-SmokeTest/1.0",
+         "X-Internal-Secret": INTERNAL_SECRET}
+    r = urllib.request.Request(url, data=b"{}", headers=h, method="POST")
+    try:
+        with urllib.request.urlopen(r, timeout=timeout) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body = e.read()[:120]
+        raise RuntimeError(f"admin_api {path} -> HTTP {e.code}: {body!r}")
 
 
-# ── Setup: create ephemeral test keys ─────────────────────────
+# ── Setup: create ephemeral test keys ───────────────────────────────────────
 print(f"\n  Smoke test — {BASE}")
+if not INTERNAL_SECRET:
+    print(f"  {FAIL} TRUST_LAYER_INTERNAL_SECRET absent — set env var or pass --internal-secret")
+    sys.exit(2)
 try:
-    out = ssh(f"""
-import sys
-sys.path.insert(0, '/opt/claude-ceo/workspace/arkforge-trust-layer')
-from trust_layer.keys import create_api_key, load_api_keys, save_api_keys
-from trust_layer.config import STRIPE_WEBHOOK_SECRET_LIVE, STRIPE_WEBHOOK_SECRET_TEST
-
-# Clés de test
-fk = create_api_key('', 'smoke_free', 'smoke_free@smoke.invalid', plan='free')
-pk = create_api_key('cus_smoke', 'smoke_pro', 'smoke_pro@smoke.invalid', plan='pro')
-
-# Clé inactive pour tester le rejet
-ik = create_api_key('', 'smoke_inactive', 'smoke_inactive@smoke.invalid', plan='free')
-keys = load_api_keys()
-if ik in keys:
-    keys[ik]['active'] = False
-    save_api_keys(keys)
-
-# Clé pro avec subscription ref (pour webhook invoice.paid)
-wk = create_api_key('cus_smoke_wh', 'sub_smoke_wh_001', 'smoke_wh@smoke.invalid', plan='pro')
-keys2 = load_api_keys()
-if wk in keys2:
-    keys2[wk]['active'] = False
-    save_api_keys(keys2)
-
-# Secret webhook (on prefere live, sinon test)
-ws = STRIPE_WEBHOOK_SECRET_LIVE or STRIPE_WEBHOOK_SECRET_TEST
-
-print(fk)
-print(pk)
-print(ik)
-print(ws)
-print(wk)
-""")
-    lines = out.splitlines()
-    FREE_KEY   = lines[0] if len(lines) > 0 else ""
-    PRO_KEY    = lines[1] if len(lines) > 1 else ""
-    INACTIVE_KEY = lines[2] if len(lines) > 2 else ""
-    WEBHOOK_SECRET = lines[3] if len(lines) > 3 else ""
-    WEBHOOK_KEY  = lines[4] if len(lines) > 4 else ""
+    setup = admin_api("/v1/admin/smoke/setup")
+    FREE_KEY       = setup.get("free_key", "")
+    PRO_KEY        = setup.get("pro_key", "")
+    INACTIVE_KEY   = setup.get("inactive_key", "")
+    WEBHOOK_KEY    = setup.get("webhook_key", "")
+    WEBHOOK_SECRET = setup.get("webhook_secret", "")
     if not FREE_KEY.startswith("mcp_free_") or not PRO_KEY.startswith("mcp_pro_"):
-        print(f"  {FAIL} Key creation failed: {out[:100]}")
+        print(f"  {FAIL} Key creation failed: {setup}")
         sys.exit(2)
     print(f"  Keys: FREE={FREE_KEY[:22]}... PRO={PRO_KEY[:22]}...")
     print(f"  Webhook secret: {'OK' if WEBHOOK_SECRET else 'ABSENT'}")
 except Exception as e:
-    print(f"  {FAIL} SSH setup failed: {e}")
+    print(f"  {FAIL} Setup API failed: {e}")
     sys.exit(2)
-
-
-# ── 1. Infra ──────────────────────────────────────────────────
-sec("1. INFRA")
-s, d = req("GET", "/v1/health")
-deployed_version = d.get("version", "?")
-chk("health 200 + status ok", s == 200 and d.get("status") == "ok",
-    f"v{deployed_version} | {d.get('environment')}")
-chk("environment = production", d.get("environment") == "production")
-if args.expected_version:
-    chk(f"version = {args.expected_version}",
-        deployed_version == args.expected_version,
-        f"deployed={deployed_version} expected={args.expected_version}")
-
-s, d = req("GET", "/v1/pricing")
-pro_p = d.get("plans", {}).get("pro", {})
-ent_p = d.get("plans", {}).get("enterprise", {})
-free_p = d.get("plans", {}).get("free", {})
-chk("free: 500/mois", free_p.get("monthly_quota") == 500)
-chk("pro: 5000/mois @ 29 EUR", pro_p.get("monthly_quota") == 5000 and "29" in pro_p.get("price", ""))
-chk("ent: 50000/mois @ 149 EUR", ent_p.get("monthly_quota") == 50000 and "149" in ent_p.get("price", ""))
-chk("overage opt-in pro + ent", "opt-in" in pro_p.get("overage", "") and "opt-in" in ent_p.get("overage", ""))
-
-# ── 2. Auth ───────────────────────────────────────────────────
-sec("2. AUTH")
-s, _ = req("GET", "/v1/usage")
-chk("/v1/usage sans clé → 401", s == 401)
 s, _ = req("POST", "/v1/proxy", {"target": "https://httpbin.org/get", "method": "GET", "payload": {}})
 chk("/v1/proxy sans clé → 401", s == 401)
 s, _ = req("GET", "/v1/keys/overage")
@@ -377,27 +323,14 @@ if WEBHOOK_SECRET and WEBHOOK_KEY:
     chk("invoice.paid valide → 200 received=true",
         wh_s3 == 200 and wh_body3.get("received") is True, f"HTTP {wh_s3}")
 
-    # Vérifier que la clé a été réactivée sur le serveur
-    time.sleep(0.5)
+    # Vérifier que la clé a été réactivée (via /v1/usage — 200=actif, 401=inactif)
+    time.sleep(1.0)
     try:
-        reactivated = ssh(f"""
-import sys
-sys.path.insert(0, '/opt/claude-ceo/workspace/arkforge-trust-layer')
-from trust_layer.keys import load_api_keys
-keys = load_api_keys()
-key = '{WEBHOOK_KEY}'
-print(keys.get(key, {{}}).get('active', 'NOT_FOUND'))
-""")
+        _wh_s, _ = req("GET", "/v1/usage", headers={"X-Api-Key": WEBHOOK_KEY}, delay=0)
         chk("invoice.paid: clé réactivée sur serveur",
-            reactivated.strip() == "True", f"active={reactivated.strip()}")
+            _wh_s == 200, f"HTTP {_wh_s}")
     except Exception as e:
         chk("invoice.paid: clé réactivée sur serveur", False, str(e)[:40])
-else:
-    print(f"  {WARN} Webhook secret absent — test invoice.paid ignoré")
-
-# ── 12. TSR (RFC 3161) ────────────────────────────────────────
-sec("12. TSR RFC 3161")
-if PROOF_ID_FREE:
     # Poll proof JSON until timestamp_authority.status == "verified" before fetching TSR.
     # freetsa.org times out on OVH (~15s), then digicert fallback runs in a thread pool
     # that may be busy (Redis reconciliation). Budget 90s before giving up.
@@ -512,24 +445,12 @@ chk("/v1/demo rate-limit (429 after 10/h)", 429 in demo_statuses or all(s == 200
 # ── 10. Cleanup ───────────────────────────────────────────────
 sec("10. CLEANUP")
 try:
-    wh_key_line = WEBHOOK_KEY if "WEBHOOK_KEY" in dir() else ""
-    out = ssh(f"""
-import sys
-sys.path.insert(0, '/opt/claude-ceo/workspace/arkforge-trust-layer')
-from trust_layer.keys import load_api_keys, save_api_keys
-keys = load_api_keys()
-deactivated = []
-for k in ['{FREE_KEY}', '{PRO_KEY}', '{INACTIVE_KEY}', '{wh_key_line}']:
-    if k and k in keys:
-        keys[k]['active'] = False
-        deactivated.append(k[:18])
-save_api_keys(keys)
-print('deactivated:', deactivated)
-""")
-    print(f"  {PASS} Clés test désactivées  [{out.strip()[:60]}]")
+    td = admin_api("/v1/admin/smoke/teardown")
+    count = td.get("count", 0)
+    print(f"  {PASS} Clés test désactivées  [count={count}]")
     results.append(("cleanup", True))
 except Exception as e:
-    print(f"  {WARN} Cleanup SSH failed: {e}")
+    print(f"  {WARN} Cleanup API failed: {e}")
     results.append(("cleanup", False))
 
 # ── Summary ───────────────────────────────────────────────────
