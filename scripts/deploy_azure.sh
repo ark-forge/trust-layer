@@ -194,6 +194,7 @@ if [ "$HEALTHY" = false ]; then
     fail "Health check FAILED après deploy — rolled back vers $PREV_IMAGE"
 fi
 log "Service healthy"
+sleep 15  # extra warmup before smoke test
 
 # ============================================================
 # PHASE 6 — SMOKE TEST (optionnel)
