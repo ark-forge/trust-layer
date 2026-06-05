@@ -103,3 +103,26 @@ if __name__ == "__main__":
     pubkey = generate_keypair(key_path)
     print(f"Keypair generated. Public key:\n{pubkey}")
     print(f"Private key saved to: {key_path}")
+
+
+def sign_jws(private_key: Ed25519PrivateKey, header: dict, payload: dict) -> str:
+    """Produce a compact JWS (RFC 7515, EdDSA/Ed25519) from header and payload dicts."""
+    import json as _json
+    h = _b64url_encode(_json.dumps(header, separators=(",", ":")).encode("utf-8"))
+    p = _b64url_encode(_json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+    sig = private_key.sign(f"{h}.{p}".encode("utf-8"))
+    return f"{h}.{p}.{_b64url_encode(sig)}"
+
+
+def verify_jws(public_key_b64url: str, token: str) -> dict:
+    """Verify a compact JWS and return the decoded payload. Raises on failure."""
+    import json as _json
+    parts = token.split(".")
+    if len(parts) != 3:
+        raise ValueError("Not a compact JWS")
+    h_b64, p_b64, s_b64 = parts
+    sig = _b64url_decode(s_b64)
+    pub_bytes = _b64url_decode(public_key_b64url)
+    pub = Ed25519PublicKey.from_public_bytes(pub_bytes)
+    pub.verify(sig, f"{h_b64}.{p_b64}".encode("utf-8"))  # raises on bad sig
+    return _json.loads(_b64url_decode(p_b64))
