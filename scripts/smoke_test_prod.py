@@ -297,6 +297,7 @@ if WEBHOOK_SECRET and WEBHOOK_KEY:
         "id": event_id,
         "type": "invoice.paid",
         "livemode": True,
+        "object": "event",
         "data": {
             "object": {
                 "id": f"in_smoke_{uuid.uuid4().hex[:12]}",
