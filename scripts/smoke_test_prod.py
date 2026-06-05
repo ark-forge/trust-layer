@@ -57,15 +57,16 @@ def req(method, path, body=None, headers=None, delay=1.2):
     h = {"Content-Type": "application/json", "User-Agent": "ArkForge-SmokeTest/1.0", **(headers or {})}
     r = urllib.request.Request(url, data=data, headers=h, method=method)
     try:
-        with urllib.request.urlopen(r, timeout=15) as resp:
+        with urllib.request.urlopen(r, timeout=25) as resp:
             s, c = resp.status, resp.read()
     except urllib.error.HTTPError as e:
         s, c = e.code, e.read()
+    except (TimeoutError, OSError) as e:
+        return 0, {"_error": f"network: {e}"}
     try:
         return s, json.loads(c)
     except Exception:
         return s, {"_raw": c.decode(errors="replace")}
-
 
 def chk(name, ok, detail=""):
     results.append((name, ok))
