@@ -1,0 +1,91 @@
+{
+  "vector_id": "neg-rescoped-replay-001",
+  "failure_mode": "rescoped_replay",
+  "description": "Envelope validity.scope_boundary rewritten to session:hijacked-session-v1 while the signed JWS payload still carries the original scope. The signature still verifies over its own payload and the envelope JCS hash is recomputed to match, so jcs_hash and jws_signature pass; the mismatch between envelope scope and signed scope_boundary makes scope_binding fail.",
+  "verification_time": "2026-05-19T20:00:00Z",
+  "fixture": {
+    "_meta": {
+      "fixture_id": "arkforge-tier-upgrade-v1",
+      "ctef_version": "0.3.2",
+      "role": "enforcement_gateway",
+      "issuer_did": "did:web:trust.arkforge.tech",
+      "jwks_url": "https://trust.arkforge.tech/.well-known/did.json",
+      "produced_at": "2026-05-19T19:45:00Z",
+      "description": "Reference tier_upgrade_proof fixture from ArkForge Trust Layer (enforcement_gateway). T1→T2 upgrade verdict signed by did:web:trust.arkforge.tech#key-1 (EdDSA/Ed25519). requester_did closes session-intercept replay; policy_ref pins evaluated policy version for audit."
+    },
+    "input": {
+      "evidence_bundle": {
+        "requester_did": "did:web:requester.example",
+        "intent_code": "TIER_UPGRADE_REQUEST",
+        "current_tier": "T1",
+        "requested_tier": "T2",
+        "requested_action": {
+          "facet": "scope.scheduling.write",
+          "limit": 1,
+          "actual": null
+        },
+        "session_id": "session:hijacked-session-v1"
+      }
+    },
+    "output": {
+      "ctef_envelope": {
+        "claim_type": "authority",
+        "claim_subtype": "tier_upgrade",
+        "issuer": "did:web:trust.arkforge.tech",
+        "issued_at": "2026-05-19T19:45:00Z",
+        "tier_upgrade_proof": {
+          "from_tier": "T1",
+          "to_tier": "T2",
+          "intent_code": "TIER_UPGRADE_REQUEST",
+          "requester_did": "did:web:requester.example",
+          "requested_action": {
+            "facet": "scope.scheduling.write",
+            "limit": 1,
+            "actual": null
+          },
+          "approval_evidence": {
+            "verdict_jws": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDp3ZWI6dHJ1c3QuYXJrZm9yZ2UudGVjaCNrZXktMSJ9.eyJjZXJ0aWZpZWQiOnRydWUsImlzc3Vlcl9kaWQiOiJkaWQ6d2ViOnRydXN0LmFya2ZvcmdlLnRlY2giLCJpc3N1ZWRfYXQiOiIyMDI2LTA1LTE5VDE5OjQ1OjAwWiIsImNvbnN0cmFpbnRfZXZhbHVhdGlvbiI6eyJmYWNldCI6InNjb3BlLnNjaGVkdWxpbmcud3JpdGUiLCJsaW1pdCI6MSwiYWN0dWFsIjowLCJkZWx0YSI6MX0sInJlcXVlc3Rlcl9kaWQiOiJkaWQ6d2ViOnJlcXVlc3Rlci5leGFtcGxlIiwic2NvcGVfYm91bmRhcnkiOiJzZXNzaW9uOmN0ZWYtdGllci11cGdyYWRlLWZpeHR1cmUtdjEiLCJwb2xpY3lfcmVmIjoic2hhMjU2OmFlYjAyMDhhN2RiZTZhMjIxY2E2NDUyMTczMmIwZDE0NWJiY2QxZGFjZDhhYmY4Y2NlYzQzMmYxZmEzYzMzYjgifQ.nCg-Wcp36yPAGlw6mnSDvIeGfn3xeCEPK69N07sPJUT5xbSClAt_GE2G_8-IHvqP2ENDRlcZmJqpYuxWRXOYBw",
+            "approver_did": "did:web:trust.arkforge.tech",
+            "evaluated_at": "2026-05-19T19:45:00Z",
+            "policy_ref": "sha256:aeb0208a7dbe6a221ca64521732b0d145bbcd1dacd8abf8ccec432f1fa3c33b8"
+          },
+          "validity": {
+            "valid_until": "2026-05-19T20:45:00Z",
+            "scope_boundary": "session:hijacked-session-v1",
+            "use_count_max": 1
+          }
+        }
+      },
+      "envelope_sha256": "29b9245ffcadfed465a6257c36cd7885b6941d3e60441288bf028402cbed9e62",
+      "envelope_jcs_bytes": 1331
+    },
+    "verification": {
+      "verdict_jws_alg": "EdDSA",
+      "verdict_jws_kid": "did:web:trust.arkforge.tech#key-1",
+      "public_key_b64url": "ZLlGE0eN0eTNUE9vaK1tStf6AuoFUWqJBvqx7QgxfEY",
+      "public_key_kty": "OKP",
+      "public_key_crv": "Ed25519",
+      "verify_steps": [
+        "1. Resolve did:web:trust.arkforge.tech → https://trust.arkforge.tech/.well-known/did.json",
+        "2. Extract publicKeyJwk.x from verificationMethod id=...#key-1",
+        "3. Verify EdDSA signature on signing_input = base64url(header) + '.' + base64url(payload)",
+        "4. Assert payload.certified == true && payload.requester_did matches requester"
+      ],
+      "expected_certified": true,
+      "policy_snapshot": {
+        "version": "1.0",
+        "rules": [
+          {
+            "facet": "scope.scheduling.write",
+            "max_tier": "T2",
+            "require_did_binding": true
+          }
+        ]
+      }
+    }
+  },
+  "expected": {
+    "valid": false,
+    "failing_check": "scope_binding"
+  }
+}
