@@ -29,5 +29,6 @@ jobs:
 
       - name: Audit dependencies
         run: |
+          pip install --upgrade pip
           pip install pip-audit
           pip-audit --skip-editable
