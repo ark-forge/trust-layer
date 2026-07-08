@@ -77,6 +77,16 @@ class HeadToGetMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Set baseline security response headers on every response."""
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        return response
+
+
 class FailoverReadOnlyMiddleware(BaseHTTPMiddleware):
     """Bloque les écritures en mode failover pour éviter le split-brain."""
     async def dispatch(self, request: Request, call_next):
@@ -466,6 +476,7 @@ app.add_middleware(
 
 # Middleware always active — _is_failover_mode() checks state file dynamically
 app.add_middleware(FailoverReadOnlyMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 
 # --- Feature routers (v1.4+) ---
 from .routers.assess import router as _assess_router
