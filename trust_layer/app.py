@@ -17,7 +17,11 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 # Failover read-only mode — read dynamically from failover_state.json
 # (replaces static systemd env var to avoid stale FAILOVER_MODE after restarts)
-_FAILOVER_STATE_FILE = "/opt/claude-ceo/brain/failover_state.json"
+# Hors du repo par defaut sur le VPS : le backup horaire supprime les fichiers non suivis
+# et effacait ce drapeau, rouvrant les ecritures en silence (constate 2026-08-17).
+_FAILOVER_STATE_FILE = os.environ.get(
+    "FAILOVER_STATE_FILE", "/opt/claude-ceo/brain/failover_state.json"
+)
 _failover_cache = {"value": False, "checked_at": 0.0}
 _writes_cache = {"value": False, "checked_at": 0.0}
 
