@@ -19,6 +19,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 # (replaces static systemd env var to avoid stale FAILOVER_MODE after restarts)
 _FAILOVER_STATE_FILE = "/opt/claude-ceo/brain/failover_state.json"
 _failover_cache = {"value": False, "checked_at": 0.0}
+_writes_cache = {"value": False, "checked_at": 0.0}
 
 def _is_failover_mode() -> bool:
     """Return True if failover_state.json says mode=failover. Cached 10s."""
@@ -35,6 +36,29 @@ def _is_failover_mode() -> bool:
     _failover_cache["value"] = result
     _failover_cache["checked_at"] = now
     return result
+
+def _writes_blocked() -> bool:
+    """True si ce noeud doit refuser les ecritures. Cache 10s.
+
+    `writes` est la source de verite. En son absence on retombe sur
+    `mode == "failover"`, pour rester compatible avec l'ancien format a un seul
+    drapeau (Azure et les deploiements non migres).
+    """
+    import time
+    now = time.monotonic()
+    if now - _writes_cache["checked_at"] < 10:
+        return _writes_cache["value"]
+    try:
+        with open(_FAILOVER_STATE_FILE) as f:
+            state = json.load(f)
+        writes = state.get("writes")
+        result = (writes == "blocked") if writes else (state.get("mode") == "failover")
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        result = False
+    _writes_cache["value"] = result
+    _writes_cache["checked_at"] = now
+    return result
+
 
 # Endpoints d'écriture bloqués en mode failover
 _FAILOVER_BLOCKED_PATHS = {
@@ -90,7 +114,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 class FailoverReadOnlyMiddleware(BaseHTTPMiddleware):
     """Bloque les écritures en mode failover pour éviter le split-brain."""
     async def dispatch(self, request: Request, call_next):
-        if _is_failover_mode() and request.method == "POST":
+        if _writes_blocked() and request.method == "POST":
             path = request.url.path.rstrip("/")
             if path in _FAILOVER_BLOCKED_PATHS:
                 return JSONResponse(
