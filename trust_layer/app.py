@@ -64,6 +64,19 @@ def _writes_blocked() -> bool:
     return result
 
 
+def _node_role() -> str:
+    """Role du noeud : "standby" ou "primary". Repli sur mode=failover."""
+    try:
+        with open(_FAILOVER_STATE_FILE) as f:
+            state = json.load(f)
+        role = state.get("role")
+        if role:
+            return role
+        return "standby" if state.get("mode") == "failover" else "primary"
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return "primary"
+
+
 # Endpoints d'écriture bloqués en mode failover
 _FAILOVER_BLOCKED_PATHS = {
     "/v1/proxy",
@@ -2718,9 +2731,11 @@ async def health():
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "environment": TRUST_LAYER_ENV,
     }
-    failover = _is_failover_mode()
-    resp["mode"] = "failover" if failover else "primary"
-    resp["write_enabled"] = not failover
+    blocked = _writes_blocked()
+    role = _node_role()
+    resp["mode"] = "failover" if (blocked or role == "standby") else "primary"
+    resp["role"] = role
+    resp["write_enabled"] = not blocked
     from .email_notify import _email_failure_count, _email_success_count, _last_failure_time
     resp["email"] = {
         "consecutive_failures": _email_failure_count,
