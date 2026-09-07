@@ -6,7 +6,7 @@ import json
 import logging
 import os
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import stripe
@@ -448,6 +448,53 @@ async def _recover_pending_tsa():
         logger.info("TSA recovery complete: %d recovered, %d still failed", recovered, failed)
 
 
+# --- Anti-doublon des notifications de cycle de vie ---------------------------
+# Deux protections distinctes : le regroupement par adresse evite N mails pour N
+# cles, le journal quotidien evite un second envoi si le service redemarre dans
+# la journee. Sans la seconde, un simple redemarrage refait partir la campagne.
+
+from .config import DATA_DIR as _NOTIFY_DIR
+_NOTIFY_LOG = _NOTIFY_DIR / "lifecycle_notifications.json"
+
+
+def _unique_emails(infos):
+    """Adresses distinctes, dans l ordre de premiere apparition."""
+    seen, out = set(), []
+    for info in infos:
+        email = (info.get("email") or "").strip().lower()
+        if email and email not in seen:
+            seen.add(email)
+            out.append(email)
+    return out
+
+
+def _load_notify_log() -> dict:
+    try:
+        return json.loads(_NOTIFY_LOG.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _notified_today(email: str, kind: str) -> bool:
+    today = datetime.now(timezone.utc).date().isoformat()
+    return _load_notify_log().get(f"{kind}:{email.lower()}") == today
+
+
+def _mark_notified(email: str, kind: str) -> None:
+    log = _load_notify_log()
+    today = datetime.now(timezone.utc).date().isoformat()
+    log[f"{kind}:{email.lower()}"] = today
+    # bornage : on ne garde que les 30 derniers jours
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).date().isoformat()
+    log = {k: v for k, v in log.items() if v >= cutoff}
+    try:
+        tmp = _NOTIFY_LOG.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(log, indent=2))
+        tmp.replace(_NOTIFY_LOG)
+    except OSError as exc:
+        logger.warning("lifecycle notify log write failed: %s", exc)
+
+
 async def _trial_maintenance_loop():
     """Daily background job: send upgrade reminders + deactivate expired trial keys."""
     from datetime import timedelta as _td
@@ -458,21 +505,36 @@ async def _trial_maintenance_loop():
             next_run += _td(days=1)
         await asyncio.sleep((next_run - now).total_seconds())
         try:
+            # find_expiring_trial_keys / find_expired_trial_keys renvoient une entree
+            # PAR CLE. Une meme adresse peut detenir plusieurs cles d essai : sans
+            # regroupement, elle recevait autant de fois le meme mail. Constate en
+            # production, 5 exemplaires identiques le meme jour, deux jours de suite.
             expiring = find_expiring_trial_keys(within_hours=24)
-            for info in expiring:
-                _email = info.get("email", "")
-                if _email:
-                    _upgrade = f"https://arkforge.tech/en/pro-signup.html?utm_source=email&utm_medium=trial_reminder"
-                    send_trial_upgrade_reminder_email(_email, _upgrade, days_remaining=1)
-            logger.info("Trial maintenance: %d expiry reminders sent", len(expiring))
+            reminded = 0
+            for _email in _unique_emails(expiring):
+                if _notified_today(_email, "trial_reminder"):
+                    continue
+                _upgrade = f"https://arkforge.tech/en/pro-signup.html?utm_source=email&utm_medium=trial_reminder"
+                send_trial_upgrade_reminder_email(_email, _upgrade, days_remaining=1)
+                _mark_notified(_email, "trial_reminder")
+                reminded += 1
+            logger.info("Trial maintenance: %d expiry reminders sent for %d keys",
+                        reminded, len(expiring))
+
+            # La desactivation reste par cle : chaque cle expiree doit etre fermee.
             expired = find_expired_trial_keys()
             for info in expired:
                 deactivate_trial_key(info["_key"], reason="trial_expired")
-                _email = info.get("email", "")
-                if _email:
-                    send_trial_ended_email(_email, info["_key"])
+            ended = 0
+            for _email in _unique_emails(expired):
+                if _notified_today(_email, "trial_ended"):
+                    continue
+                send_trial_ended_email(_email, "")
+                _mark_notified(_email, "trial_ended")
+                ended += 1
             if expired:
-                logger.info("Trial maintenance: %d keys deactivated", len(expired))
+                logger.info("Trial maintenance: %d keys deactivated, %d end notices sent",
+                            len(expired), ended)
         except Exception as _e:
             logger.warning("Trial maintenance loop error: %s", _e)
 
