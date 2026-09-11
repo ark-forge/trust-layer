@@ -360,9 +360,9 @@ else
     else
         SMOKE_LOG="$LOG_FILE.smoke"
         SMOKE_BASE_URL="${HEALTH_URL%/v1/health}"  # strip /v1/health → https://arkforge.fr/trust
-        if python3 "$SMOKE_TEST_SCRIPT" \
+        SMOKE_INTERNAL_SECRET=$(grep "^TRUST_LAYER_INTERNAL_SECRET=" "$SETTINGS_ENV" | cut -d= -f2-)
+        if TRUST_LAYER_INTERNAL_SECRET="$SMOKE_INTERNAL_SECRET" python3 "$SMOKE_TEST_SCRIPT" \
                --base-url "$SMOKE_BASE_URL" \
-               --ovh-host "$OVH_HOST" \
                2>&1 | tee -a "$SMOKE_LOG" | tail -6; then
             log "Phase 2.5: Smoke test PASSED"
             SMOKE_RESULT="PASSED"
