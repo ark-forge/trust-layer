@@ -439,6 +439,7 @@ log "Tag $NEW_TAG pushed"
 # ============================================================
 log "--- Phase 3b: Sync arkforge-mcp ---"
 MCP_DIR="/opt/claude-ceo/workspace/mcp-servers/arkforge-trust"
+MCP_PUBLISH_VENV="/opt/arkforge-venvs/mcp-publish"
 MCP_RESULT="skipped"
 
 if [ ! -d "$MCP_DIR" ]; then
@@ -459,9 +460,9 @@ else
     # Build + publish (stderr capturé séparément pour diagnostic)
     MCP_BUILD_OK=false
     MCP_UPLOAD_OK=false
-    if rm -rf dist/ && python3 -m build -q >> "$LOG_FILE" 2>&1; then
+    if rm -rf dist/ && "$MCP_PUBLISH_VENV/bin/python3" -m build -q >> "$LOG_FILE" 2>&1; then
         MCP_BUILD_OK=true
-        TWINE_OUT=$(twine upload dist/* 2>&1)
+        TWINE_OUT=$("$MCP_PUBLISH_VENV/bin/twine" upload dist/* 2>&1)
         echo "$TWINE_OUT" >> "$LOG_FILE"
         if echo "$TWINE_OUT" | grep -q "View at:"; then
             MCP_UPLOAD_OK=true
