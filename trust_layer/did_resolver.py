@@ -38,6 +38,7 @@ _PRIVATE_NETWORKS = [
     ipaddress.ip_network("fe80::/10"),
     ipaddress.ip_network("::ffff:0:0/96"),
     ipaddress.ip_network("2002::/16"),
+    ipaddress.ip_network("2001::/32"),         # Teredo (embeds server + client IPv4)
 ]
 
 # ---------------------------------------------------------------------------

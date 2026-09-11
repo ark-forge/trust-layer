@@ -28,6 +28,7 @@ from .config import (
     BACKGROUND_TASKS_LOG,
     ARKFORGE_PUBLIC_KEY,
     INTERNAL_SECRET,
+    TRUSTED_INTERNAL_HOSTS,
     get_signing_key,
 )
 from .keys import validate_api_key, get_key_plan, _KEYS_LOCK
@@ -128,7 +129,7 @@ async def _post_proof_background(proof_id: str, proof_record: dict, chain_hash: 
         _log_background_task(proof_id, "rekor", status_label)
     except Exception as e:
         logger.warning("Rekor submit failed: %s", e)
-        proof_record["transparency_log"] = {"provider": "sigstore-rekor", "status": "failed", "error": str(e)[:200]}
+        proof_record["transparency_log"] = {"provider": "sigstore-rekor", "status": "failed", "error": "transparency log temporarily unavailable"}
         try:
             store_proof(proof_id, proof_record)
         except Exception:
@@ -211,6 +212,7 @@ _PRIVATE_NETWORKS = [
     ipaddress.ip_network("fe80::/10"),         # IPv6 link-local
     ipaddress.ip_network("::ffff:0:0/96"),     # IPv4-mapped IPv6 (wraps RFC 1918 addresses)
     ipaddress.ip_network("2002::/16"),         # 6to4 (embeds arbitrary IPv4)
+    ipaddress.ip_network("2001::/32"),         # Teredo (embeds server + client IPv4)
 ]
 
 
@@ -688,7 +690,15 @@ async def execute_proxy(
     upstream_timestamp = None
 
     try:
-        fwd_headers = {"X-Internal-Secret": INTERNAL_SECRET} if INTERNAL_SECRET else {}
+        # Only forward the internal secret to explicitly trusted hostnames.
+        # validate_target_url() only blocks private IPs, not attacker-controlled
+        # public HTTPS targets, so an unconditional forward would leak this secret
+        # to any target a caller chooses (found 2026-09-11).
+        fwd_headers = (
+            {"X-Internal-Secret": INTERNAL_SECRET}
+            if INTERNAL_SECRET and target_domain.lower() in TRUSTED_INTERNAL_HOSTS
+            else {}
+        )
         # Merge extra_headers with hardening: blocklist, type/size validation
         if extra_headers and isinstance(extra_headers, dict):
             if len(extra_headers) > 10:
@@ -718,7 +728,8 @@ async def execute_proxy(
     except httpx.TimeoutException:
         service_error = "proxy_timeout"
     except (httpx.RequestError, OSError) as e:
-        service_error = f"service_error: {str(e)}"
+        logger.warning("Proxy upstream error for %s: %s", target_domain, e)
+        service_error = "service_error"
 
     response_time_ms = (time.monotonic() - t0) * 1000
     service_succeeded = service_status_code is not None and 200 <= service_status_code < 400
@@ -815,7 +826,7 @@ async def execute_proxy(
     if service_error == "proxy_timeout":
         result = ProxyError("proxy_timeout", "Target service timed out", 504, proof=proof_record).to_dict()
     elif service_error:
-        result = ProxyError("service_error", service_error, 502, proof=proof_record).to_dict()
+        result = ProxyError("service_error", "Target service is unreachable", 502, proof=proof_record).to_dict()
     else:
         # Upstream responded (2xx or 4xx/5xx) — proof was created, return 200.
         # The upstream status is recorded in service_response and proof_record.transaction_success.
