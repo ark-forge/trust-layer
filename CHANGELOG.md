@@ -6,6 +6,16 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.7.2] — 2026-09-11
+
+### Fixed
+- Phase 3b (MCP PyPI sync) uses a dedicated venv, not bare python3
+
+### Internal
+- bump cryptography 49.0.0->50.0.0, setuptools 82.0.1->83.0.0
+
+---
+
 ## [1.7.1] — 2026-09-11
 
 ### Added
