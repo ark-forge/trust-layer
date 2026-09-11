@@ -147,7 +147,7 @@ log "Gate 3/4: agent-client tests OK"
 
 # Gate 4 — Trust Layer tests
 log "Gate 4/4: trust-layer pytest..."
-if ! python3 -m pytest tests/ -q --tb=short >> "$LOG_FILE" 2>&1; then
+if ! "$REPO_DIR/venv/bin/python3" -m pytest tests/ -q --tb=short >> "$LOG_FILE" 2>&1; then
     fail "trust-layer tests FAILED"
 fi
 log "Gate 4/4: trust-layer tests OK"
