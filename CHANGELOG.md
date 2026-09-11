@@ -6,6 +6,24 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.7.1] — 2026-09-11
+
+### Added
+- _writes_blocked() dissocie le blocage d ecriture du role de noeud
+
+### Fixed
+- smoke test invocation — drop stale --ovh-host flag, pass internal secret
+- run Gate 4 tests with the project venv, not bare python3
+- stop leaking X-Internal-Secret to arbitrary proxy targets
+- 5 mails identiques a la meme adresse le meme jour
+- /health derive de writes/role, plus de _is_failover_mode trompeur
+- chemin du drapeau failover surchargeable par FAILOVER_STATE_FILE
+
+### Internal
+- ajoute redis, absent du fichier alors que le code le charge
+
+---
+
 ## [1.3.71] — 2026-05-27
 
 ### Fixed
