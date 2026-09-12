@@ -24,11 +24,16 @@ import urllib.request
 parser = argparse.ArgumentParser()
 parser.add_argument("--base-url", default="https://trust.arkforge.tech")
 parser.add_argument("--internal-secret", default="", help="TRUST_LAYER_INTERNAL_SECRET (overrides env var)")
+parser.add_argument("--webhook-secret", default="", help="Stripe webhook signing secret (overrides env var)")
 parser.add_argument("--expected-version", default="", help="Expected version string (e.g. 0.5.4)")
 args = parser.parse_args()
 
 BASE = args.base_url.rstrip("/")
 INTERNAL_SECRET = args.internal_secret or os.environ.get("TRUST_LAYER_INTERNAL_SECRET", "")
+# The Stripe webhook signing secret comes from this script's own environment.
+# /v1/admin/smoke/setup used to return it, which let anyone holding the internal
+# secret forge signed Stripe events (removed 2026-09-12).
+WEBHOOK_SECRET = args.webhook_secret or os.environ.get("TRUST_LAYER_SMOKE_WEBHOOK_SECRET", "")
 
 PASS = "\033[92m✓\033[0m"
 FAIL = "\033[91m✗\033[0m"
@@ -37,7 +42,6 @@ WARN = "\033[93m⚠\033[0m"
 results: list[tuple[str, bool]] = []
 FREE_KEY = ""
 PRO_KEY = ""
-WEBHOOK_SECRET = ""
 INACTIVE_KEY = ""
 
 
@@ -105,12 +109,17 @@ try:
     PRO_KEY        = setup.get("pro_key", "")
     INACTIVE_KEY   = setup.get("inactive_key", "")
     WEBHOOK_KEY    = setup.get("webhook_key", "")
-    WEBHOOK_SECRET = setup.get("webhook_secret", "")
+    if "webhook_secret" in setup:
+        print(f"  {FAIL} /v1/admin/smoke/setup renvoie webhook_secret — régression, le serveur ne doit jamais l'exposer")
+        sys.exit(2)
     if not FREE_KEY.startswith("mcp_free_") or not PRO_KEY.startswith("mcp_pro_"):
         print(f"  {FAIL} Key creation failed: {setup}")
         sys.exit(2)
     print(f"  Keys: FREE={FREE_KEY[:22]}... PRO={PRO_KEY[:22]}...")
-    print(f"  Webhook secret: {'OK' if WEBHOOK_SECRET else 'ABSENT'}")
+    if not WEBHOOK_SECRET:
+        print(f"  {FAIL} Webhook secret absent — set TRUST_LAYER_SMOKE_WEBHOOK_SECRET or pass --webhook-secret")
+        sys.exit(2)
+    print("  Webhook secret: OK (env)")
 except Exception as e:
     print(f"  {FAIL} Setup API failed: {e}")
     sys.exit(2)
