@@ -29,6 +29,9 @@ jobs:
 
       - name: Audit dependencies
         run: |
-          pip install --upgrade pip
+          # setuptools comes from the runner image, not from our pins: pip-audit
+          # audits the environment, so a stale runner setuptools fails the job even
+          # when requirements.txt already pins a fixed version.
+          pip install --upgrade pip setuptools
           pip install pip-audit
           pip-audit --skip-editable
