@@ -29,6 +29,7 @@ LOG_FILE="/opt/claude-ceo/logs/deploy_trust_layer.log"
 OVH_HOST="ubuntu@51.91.99.178"
 OVH_REPO="/opt/claude-ceo/workspace/arkforge-trust-layer"
 SMOKE_TEST_SCRIPT="$REPO_DIR/scripts/smoke_test_prod.py"
+SECURITY_TEST_SCRIPT="$REPO_DIR/scripts/security_smoke_test.py"
 
 # --- Args ---
 VERSION_BUMP="patch"
@@ -355,13 +356,32 @@ if [ "$SKIP_SMOKE" = true ]; then
     log "--- Phase 2.5: Smoke test SKIPPED (--skip-smoke) ---"
 else
     log "--- Phase 2.5: Smoke test ---"
-    if [ ! -f "$SMOKE_TEST_SCRIPT" ]; then
-        log "WARN: Smoke test script not found at $SMOKE_TEST_SCRIPT — skipping"
+    if [ ! -f "$SMOKE_TEST_SCRIPT" ] || [ ! -f "$SECURITY_TEST_SCRIPT" ]; then
+        log "WARN: smoke or security test script missing — skipping"
     else
         SMOKE_LOG="$LOG_FILE.smoke"
         SMOKE_BASE_URL="${HEALTH_URL%/v1/health}"  # strip /v1/health → https://arkforge.fr/trust
         SMOKE_INTERNAL_SECRET=$(grep "^TRUST_LAYER_INTERNAL_SECRET=" "$SETTINGS_ENV" | cut -d= -f2-)
-        if TRUST_LAYER_INTERNAL_SECRET="$SMOKE_INTERNAL_SECRET" python3 "$SMOKE_TEST_SCRIPT" \
+        # Stripe webhook secret: same resolution order as the server (vault, then
+        # settings.env). /v1/admin/smoke/setup no longer hands it out (2026-09-12).
+        SMOKE_WEBHOOK_SECRET=$(python3 -c "
+import sys
+sys.path.insert(0, '/opt/claude-ceo')
+try:
+    from automation.vault import vault
+    s = vault.get_section('stripe') or {}
+    print(s.get('tl_webhook_secret') or s.get('tl_webhook_secret_test') or '')
+except Exception:
+    print('')
+" 2>/dev/null)
+        if [ -z "$SMOKE_WEBHOOK_SECRET" ]; then
+            SMOKE_WEBHOOK_SECRET=$(grep "^STRIPE_TL_WEBHOOK_SECRET=" "$SETTINGS_ENV" | cut -d= -f2-)
+        fi
+        # Both gates must pass. The security test runs first: its ephemeral key uses
+        # a smoke.invalid email, swept by the teardown at the end of the smoke test.
+        if python3 "$SECURITY_TEST_SCRIPT" --url "$SMOKE_BASE_URL" 2>&1 | tee -a "$SMOKE_LOG" | tail -8 \
+           && TRUST_LAYER_INTERNAL_SECRET="$SMOKE_INTERNAL_SECRET" \
+              TRUST_LAYER_SMOKE_WEBHOOK_SECRET="$SMOKE_WEBHOOK_SECRET" python3 "$SMOKE_TEST_SCRIPT" \
                --base-url "$SMOKE_BASE_URL" \
                2>&1 | tee -a "$SMOKE_LOG" | tail -6; then
             log "Phase 2.5: Smoke test PASSED"

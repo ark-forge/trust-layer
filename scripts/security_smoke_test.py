@@ -104,7 +104,7 @@ def run(base: str, existing_key: str = ""):
     else:
         test_run_id = secrets.token_hex(4)
         s, r = _request("POST", f"{base}/v1/keys/free-signup",
-                        body={"email": f"sec-test-{test_run_id}@internal.arkforge.fr"})
+                        body={"email": f"sec-test-{test_run_id}@smoke.invalid"})
         free_key = r.get("api_key", "")
         if not free_key:
             print(f"{RED}FATAL: could not create test key (HTTP {s}). "
