@@ -751,3 +751,16 @@ def test_scrub_removes_challenge_secret_echoed_by_upstream():
     cleaned = _scrub_service_secrets(body)
     assert "challenge-s3cret" not in str(cleaned)
     assert cleaned["headers"]["Accept"] == "*/*"
+
+
+def test_service_secret_names_all_resolve():
+    """_SERVICE_SECRETS references config names as strings, resolved through
+    globals() so that tests can patch trust_layer.proxy.<NAME>. A typo in one of
+    those names would silently yield no secret, no error, and every other test in
+    this file would stay green — the corpus would simply never be reachable.
+    """
+    import trust_layer.proxy as proxy_mod
+
+    for header, secret_name, hosts_name in proxy_mod._SERVICE_SECRETS:
+        assert secret_name in vars(proxy_mod), f"{header}: {secret_name} not imported"
+        assert hosts_name in vars(proxy_mod), f"{header}: {hosts_name} not imported"
