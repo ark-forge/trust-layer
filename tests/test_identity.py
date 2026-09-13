@@ -258,3 +258,43 @@ def test_proof_endpoint_shows_identity(client, api_key):
     # identity_consistent is still publicly visible
     assert proof_data["identity_consistent"] is True
     assert proof_data["integrity_verified"] is True
+
+
+# --- 10. X-Agent-Identity est borné depuis la spec 3.1 ---
+#
+# Avant 3.1 la valeur était servie en clair mais restait modifiable côté serveur.
+# Depuis 3.1 elle est engagée et publiée dans `disclosed` : elle est gravée. Ce qui
+# était un champ sale devient un stockage arbitraire permanent, et c'est ce lot qui
+# change sa nature. Mesuré sur la prod avant de choisir la borne : 2 identités
+# distinctes, 27 caractères au plus, aucun caractère de contrôle.
+
+@pytest.mark.parametrize("mauvais", [
+    "x" * 257,
+    "did:web:a\x00b",
+    "did:web:a\nInjected: header",
+    "\x1b[31mrouge",
+])
+def test_une_identite_hors_bornes_est_refusee(client, api_key, mauvais):
+    r = client.post(
+        "/v1/proxy",
+        json={"target": "https://example.com/api", "payload": {}},
+        headers={"Authorization": f"Bearer {api_key}", "X-Agent-Identity": mauvais},
+    )
+    assert r.status_code == 400, r.text
+    assert "agent_identity" in r.text
+
+
+@pytest.mark.parametrize("bon", ["did:web:trust.arkforge.tech", "arkforge-agent-client",
+                                 "x" * 256, "did:key:z6Mk" + "A" * 40])
+def test_les_identites_reelles_passent(client, api_key, bon):
+    """La borne ne doit refuser aucune valeur que la production porte aujourd'hui."""
+    mock_http = _mock_http_client()
+    with patch("httpx.AsyncClient", return_value=mock_http), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+        r = client.post(
+            "/v1/proxy",
+            json={"target": "https://example.com/api", "payload": {}},
+            headers={"Authorization": f"Bearer {api_key}", "X-Agent-Identity": bon},
+        )
+    assert r.status_code == 200, r.text
+    assert r.json()["proof"]["parties"]["agent_identity"] == bon

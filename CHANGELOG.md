@@ -30,6 +30,16 @@ Versions follow [Semantic Versioning](https://semver.org/).
 ### Changed
 - `agent_identity_verified` vaut `True` ou `None`, jamais `False`, normalisé une seule
   fois à la source pour que la valeur engagée et la valeur servie ne puissent pas diverger
+- `X-Agent-Identity` borné à 256 caractères, caractères de contrôle refusés (400). Depuis
+  3.1 la valeur est engagée et publiée : elle est gravée, alors qu'elle était jusque-là
+  nettoyable côté serveur. Borne choisie après mesure de la prod (2 identités, 27 car. max)
+
+### Fixed (relecture §4.2)
+- `verify_proof.py` rendait une trace d'exception au lieu d'un verdict sur un `disclosed`
+  ou un engagement malformé. C'est à la fois la procédure qu'un tiers exécute et un gate
+  bloquant du déploiement : dans les deux rôles une trace est pire qu'un échec. `strip_sha256`
+  devient totale, `disclosed` est lu défensivement, et **tout témoin qui lève devient un
+  échec** — la classe, pas les deux cas trouvés
 
 ---
 

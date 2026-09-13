@@ -537,3 +537,43 @@ def test_a_pre_3_1_identity_claim_is_flagged_as_unanchored():
 def test_a_pre_3_1_proof_without_identity_says_nothing():
     proof = dict(_load("proof_rekor.json"), agent_identity=None, agent_identity_verified=None)
     assert _identity_row(proof) is None
+
+
+# --- la procédure publiée rend un verdict, jamais une trace d'exception ---
+#
+# Trouvé par la relecture §4.2. Ce script est deux choses à la fois : la procédure
+# qu'un tiers exécute, et un gate bloquant du déploiement. Dans les deux rôles, une
+# trace d'exception est pire qu'un échec : le tiers n'obtient aucun verdict, et le
+# pipeline casse au lieu de refuser proprement.
+
+@pytest.mark.parametrize("garbage", ["une chaine", ["a", "b"], 42, 3.5, True])
+def test_a_malformed_disclosed_block_yields_a_verdict_not_a_traceback(garbage):
+    proof = dict(_proof_3_1(), disclosed=garbage)
+    rep = vp.Report()
+    vp.check_chain_hash(proof, rep)          # ne doit pas lever
+    assert rep.rows, "aucun témoin rendu"
+
+
+@pytest.mark.parametrize("garbage", [42, None, ["a"], {"x": 1}, 3.5])
+def test_a_malformed_identity_commitment_yields_a_verdict_not_a_traceback(garbage):
+    """Le test générique existant mute `seller`, qui ne traverse jamais check_identity."""
+    proof = _proof_3_1()
+    proof["commitments"]["agent_identity"] = garbage
+    rep = vp.Report()
+    vp.check_chain_hash(proof, rep)
+    row = [r for r in rep.rows if r[0] == "agent identity"]
+    assert row and row[0][1] == vp.FAIL
+
+
+def test_no_check_can_kill_the_run_with_an_exception(monkeypatch):
+    """La classe, pas les deux cas trouvés : un témoin qui lève doit devenir un échec.
+
+    Sinon chaque nouveau témoin réintroduit la même panne, et elle ne se voit qu'au
+    premier artefact malformé rencontré en vrai.
+    """
+    def boom(*a, **kw):
+        raise RuntimeError("témoin cassé")
+    monkeypatch.setattr(vp, "check_identity", boom)
+    rep = vp.Report()
+    vp.check_chain_hash(_proof_3_1(), rep)
+    assert rep.failed, "une exception d'un témoin doit se lire comme un échec"

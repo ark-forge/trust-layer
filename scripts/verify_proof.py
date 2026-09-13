@@ -123,7 +123,11 @@ def openssl(args, stdin=None):
 
 
 def strip_sha256(value):
-    return (value or "").replace("sha256:", "")
+    """Total on purpose: a proof is untrusted input, and every caller compares the
+    result. A non-string here used to raise AttributeError from inside a witness."""
+    if not isinstance(value, str):
+        return ""
+    return value.replace("sha256:", "")
 
 
 # --- 1. chain hash -----------------------------------------------------------
@@ -207,8 +211,7 @@ def check_commitments(proof, rep, disclosure):
 
     # Spec 3.1 publishes the identity triple's nonces in the proof itself, so this
     # opening needs no out-of-band material. An owner-supplied bundle adds to it.
-    disclosed = dict(proof.get("disclosed") or {})
-    disclosed.update((disclosure or {}).get("disclosed") or {})
+    disclosed = _disclosed_map(proof, disclosure)
     if not disclosed:
         return expected
     bad = []
@@ -231,6 +234,34 @@ def check_commitments(proof, rep, disclosure):
                 f"{len(disclosed)} disclosed field(s) match their anchored commitment: "
                 + ", ".join(sorted(disclosed)))
     return expected
+
+
+def _disclosed_map(proof, disclosure):
+    """The union of what the proof publishes and what the owner handed over.
+
+    Both come from outside; anything that is not a dict of dicts is dropped rather
+    than allowed to raise from the middle of a witness.
+    """
+    out = {}
+    for source in (proof.get("disclosed"), (disclosure or {}).get("disclosed")):
+        if isinstance(source, dict):
+            out.update({k: v for k, v in source.items() if isinstance(v, dict)})
+    return out
+
+
+def _witness(rep, label, fn, *args, **kwargs):
+    """Run one witness; an exception becomes a FAIL, never a traceback.
+
+    This script is both the procedure a third party executes and a blocking gate of
+    the deployment. In either role a traceback is worse than a failure: the third
+    party gets no verdict at all, and the pipeline breaks instead of refusing.
+    """
+    try:
+        return fn(*args, **kwargs)
+    except Exception as e:                      # noqa: BLE001 — deliberate catch-all
+        rep.add(label, FAIL, f"witness crashed on malformed input: "
+                             f"{type(e).__name__}: {e}"[:300])
+        return None
 
 
 def check_identity(proof, rep, disclosed, commitments):
@@ -298,9 +329,10 @@ def check_chain_hash(proof, rep, disclosure=None):
     only a corrupted one. It does establish one thing the anchors do not — that the
     anchored chain hash really covers the request and response hashes shown.
     """
-    disclosed = dict(proof.get("disclosed") or {})
-    disclosed.update((disclosure or {}).get("disclosed") or {})
-    check_identity(proof, rep, disclosed, proof.get("commitments") or {})
+    disclosed = _disclosed_map(proof, disclosure)
+    commitments = proof.get("commitments")
+    _witness(rep, "agent identity", check_identity, proof, rep, disclosed,
+             commitments if isinstance(commitments, dict) else {})
     if proof.get("spec_version") in COMMITMENT_SPEC_VERSIONS:
         return check_commitments(proof, rep, disclosure)
 
