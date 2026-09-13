@@ -97,6 +97,22 @@ def provisionner(lire=lire_au_coffre, ecrire=ecrire_au_coffre,
     return {"created": True, "present": True, "rotated": bool(existant)}
 
 
+def _rapporter_hotes(args) -> None:
+    """Applique et rapporte l'allowlist. Appelé sur les deux chemins, dry-run compris."""
+    if not args.host:
+        if not lire_hotes():
+            print(f"ATTENTION : {HOSTS_PATH} est vide, le secret restera inerte. "
+                  f"Relancer avec --host <domaine>.")
+        return
+    h = declarer_hotes(",".join(args.host), dry_run=args.dry_run)
+    if h.get("would_write"):
+        print(f"écrirait {HOSTS_PATH} = {h['would_write']} (actuel : {h['value'] or 'vide'})")
+    elif h["changed"]:
+        print(f"{HOSTS_PATH} = {h['value']} (avant : {h.get('previous') or 'vide'})")
+    else:
+        print(f"{HOSTS_PATH} déjà à {h['value']}, rien à faire")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true",
@@ -125,6 +141,9 @@ def main() -> int:
             print(f"{quoi} le secret dans {VAULT_PATH}")
         else:
             print(f"secret déjà présent dans {VAULT_PATH} : rien à faire")
+        # surtout pas de return ici : un dry-run qui tait la moitié de ce qu'il
+        # ferait est pire qu'absent, il fait valider une action non annoncée.
+        _rapporter_hotes(args)
         return 0
 
     if r["created"]:
@@ -135,17 +154,7 @@ def main() -> int:
     else:
         print(f"secret déjà présent dans {VAULT_PATH}, rien à faire")
 
-    if args.host:
-        h = declarer_hotes(",".join(args.host), dry_run=args.dry_run)
-        if h.get("would_write"):
-            print(f"écrirait {HOSTS_PATH} = {h['would_write']} (actuel : {h['value'] or 'vide'})")
-        elif h["changed"]:
-            print(f"{HOSTS_PATH} = {h['value']} (avant : {h.get('previous') or 'vide'})")
-        else:
-            print(f"{HOSTS_PATH} déjà à {h['value']}, rien à faire")
-    elif not lire_hotes():
-        print(f"ATTENTION : {HOSTS_PATH} est vide, le secret restera inerte. "
-              f"Relancer avec --host <domaine>.")
+    _rapporter_hotes(args)
     return 0
 
 
