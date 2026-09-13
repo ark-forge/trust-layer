@@ -212,6 +212,17 @@ def verify_proof_integrity(proof: dict) -> bool:
     return computed_chain == expected_chain
 
 
+def strip_private(proof_record: dict) -> dict:
+    """Drop the underscore-prefixed working fields before a record leaves the process.
+
+    The owner already holds their proof, so this is not a disclosure boundary — but
+    the commitment nonces are what keep every undisclosed field hidden, and they
+    have exactly one deliberate way out: GET /v1/proof/{id}/full. Shipping them in
+    every proxy response would scatter them through client logs instead.
+    """
+    return {k: v for k, v in proof_record.items() if not k.startswith("_")}
+
+
 def get_public_proof(proof: dict) -> dict:
     """Return proof data safe for public access.
 

@@ -439,3 +439,27 @@ def test_a_failed_inclusion_is_not_reported_as_a_pending_anchor(client, monkeypa
     assert _status(rep, "batch anchor") == vp.FAIL
     detail = next(d for w, _, d, _ in rep.rows if w == "RFC 3161 timestamp")
     assert "did not verify" in detail and "not anchored yet" not in detail
+
+
+# --- a malformed proof gets a verdict, not a traceback -----------------------
+
+@pytest.mark.parametrize("break_it", [
+    lambda a: a.__setitem__("audit_path", a["audit_path"][:-1]),      # truncated
+    lambda a: a.__setitem__("audit_path", []),                        # empty
+    lambda a: a.__setitem__("audit_path", [None]),                    # wrong type
+    lambda a: a.__setitem__("audit_path", ["zz" * 32]),               # not hex
+    lambda a: a.__setitem__("tree_size", 4096),                       # shape lies
+])
+def test_a_malformed_audit_path_fails_without_crashing(client, monkeypatch, break_it):
+    public, _, _ = _anchored_public_proof(client, monkeypatch, n_siblings=8)
+    break_it(public["batch_anchor"])
+    rep = _run(public, offline=True)      # must not raise
+    assert _status(rep, "batch anchor") == vp.FAIL
+
+
+@pytest.mark.parametrize("value", ["zz" * 32, None, 42, {}])
+def test_a_malformed_commitment_fails_without_crashing(client, monkeypatch, value):
+    public, _, _ = _anchored_public_proof(client, monkeypatch)
+    public["commitments"]["seller"] = value
+    rep = _run(public, offline=True)      # must not raise
+    assert _status(rep, "chain hash") == vp.FAIL

@@ -572,6 +572,14 @@ async def lifespan(app):
     # Startup — trial key maintenance (daily at 08:00 UTC)
     trial_task = asyncio.create_task(_trial_maintenance_loop())
     _track_task(trial_task)
+    # Startup — finish any batch a crash left mid-close, BEFORE the tick opens new ones
+    try:
+        from .batch_anchor import recover_closing_batches
+        n = await asyncio.get_running_loop().run_in_executor(None, recover_closing_batches)
+        if n:
+            logger.info("Recovered %d batch(es) left mid-close", n)
+    except Exception as e:
+        logger.error("Batch close recovery failed: %s", e)
     # Startup — batch anchor tick (closes the pending batch on age)
     batch_task = asyncio.create_task(_batch_anchor_loop())
     _track_task(batch_task)

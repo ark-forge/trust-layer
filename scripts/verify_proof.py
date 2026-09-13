@@ -187,8 +187,8 @@ def check_commitments(proof, rep, disclosure):
     try:
         leaves = [_leaf_hash(bytes.fromhex(strip_sha256(commitments[f]))) for f in sorted(commitments)]
         computed = _mth(leaves).hex()
-    except ValueError as e:
-        rep.add("chain hash", FAIL, f"malformed commitment: {e}")
+    except (ValueError, TypeError, AttributeError) as e:
+        rep.add("chain hash", FAIL, f"malformed commitment: {type(e).__name__}: {e}")
         return expected
 
     if computed != expected:
@@ -380,11 +380,19 @@ def check_batch_anchor(proof, chain_hex, rep):
     if not 0 <= index < size:
         rep.add("batch anchor", FAIL, f"leaf_index {index} out of range for tree size {size}")
         return None
+    expected_len = _expected_path_len(index, size)
+    if len(path) != expected_len:
+        rep.add("batch anchor", FAIL,
+                f"audit path carries {len(path)} nodes, a tree of size {size} needs "
+                f"exactly {expected_len} for leaf {index}")
+        return None
     try:
         leaf = _leaf_hash(bytes.fromhex(chain_hex))
         computed, consumed = _merkle_root(leaf, index, size, path)
-    except ValueError as e:
-        rep.add("batch anchor", FAIL, f"malformed audit path: {e}")
+    except (ValueError, IndexError, TypeError, AttributeError) as e:
+        # A third party running the published procedure on a malformed file must get
+        # a verdict, not a traceback. A traceback is not a refusal.
+        rep.add("batch anchor", FAIL, f"malformed audit path: {type(e).__name__}: {e}")
         return None
     if computed.hex() != root:
         rep.add("batch anchor", FAIL,
@@ -482,6 +490,24 @@ def check_rfc3161(proof, chain_hex, rep, offline):
 
 # --- 5. Rekor ----------------------------------------------------------------
 
+def _expected_path_len(index, size):
+    """How many siblings an inclusion proof for (index, size) must carry.
+
+    Deterministic in RFC 6962, so a proof whose path is shorter or longer than
+    this does not describe the tree it claims. Checking the length is what
+    catches an overstated ``tree_size``: the walk alone would consume the real
+    siblings, reach the real root and stop early, reporting a valid inclusion
+    for a tree shape that never existed.
+    """
+    n, idx, sz = 0, index, size
+    while sz > 1:
+        if idx % 2 == 1 or idx + 1 < sz:
+            n += 1
+        idx //= 2
+        sz = (sz + 1) // 2
+    return n
+
+
 def _merkle_root(leaf, index, size, path_hashes):
     """RFC 6962 inclusion-proof walk. Returns (root, siblings_consumed).
 
@@ -493,6 +519,8 @@ def _merkle_root(leaf, index, size, path_hashes):
     h = leaf
     idx, sz, i = index, size, 0
     while sz > 1:
+        if i >= len(path_hashes):
+            return h, i   # short path: the caller sees an unreachable root
         if idx % 2 == 1:
             h = hashlib.sha256(b"\x01" + bytes.fromhex(path_hashes[i]) + h).digest()
             i += 1

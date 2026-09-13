@@ -118,3 +118,32 @@ def test_demo_no_auth_required(client):
 def test_demo_invalid_json_returns_400(client):
     r = client.post("/v1/demo", content=b"not-json", headers={"Content-Type": "application/json"})
     assert r.status_code == 400
+
+
+def test_proof_page_says_anchoring_is_in_progress_not_broken(client):
+    """A proof waiting for its batch is not a failed proof, and the page must not
+    look like one — the demo page is where a prospect first sees the product."""
+    from trust_layer.templates import render_proof_page
+    proof = {"proof_id": "prf_20260913_120000_aaaaaa", "spec_version": "3.0",
+             "hashes": {"chain": "sha256:" + "ab" * 32},
+             "parties": {"seller": "demo"}, "certification_fee": {"method": "none"},
+             "timestamp": "2026-09-13T12:00:00+00:00",
+             "timestamp_authority": {"status": "pending_batch"},
+             "batch_anchor": {"status": "pending", "batch_id": "batch_x"}}
+    html = render_proof_page(proof, integrity_verified=True)
+    assert "ANCHORING IN PROGRESS" in html
+    assert "within 10 minutes" in html
+    assert "INTEGRITY CHECK FAILED" not in html
+
+
+def test_proof_page_still_says_failed_when_integrity_is_broken(client):
+    """The waiting state must not swallow a real failure."""
+    from trust_layer.templates import render_proof_page
+    proof = {"proof_id": "prf_20260913_120000_aaaaaa", "spec_version": "3.0",
+             "hashes": {"chain": "sha256:" + "ab" * 32},
+             "parties": {"seller": "demo"}, "certification_fee": {"method": "none"},
+             "timestamp": "2026-09-13T12:00:00+00:00",
+             "timestamp_authority": {"status": "pending_batch"},
+             "batch_anchor": {"status": "pending"}}
+    html = render_proof_page(proof, integrity_verified=False)
+    assert "INTEGRITY CHECK FAILED" in html

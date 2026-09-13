@@ -165,3 +165,62 @@ def test_one_platform_proof_routes_the_whole_batch(fake_anchors, monkeypatch):
     ba.close_batch()
     assert seen["plan"] == "platform"
     assert load_proof("prf_free")["batch_anchor"]["status"] == "anchored"
+
+
+# --- a crash during close must not evaporate the batch ----------------------
+
+def test_a_crash_while_anchoring_leaves_the_batch_recoverable(fake_anchors, monkeypatch):
+    """The window that matters: pending already cleared, proofs not yet stamped."""
+    ids = _queue(3)
+
+    def explode(root, plan=""):
+        raise RuntimeError("TSA host went down mid-request")
+
+    monkeypatch.setattr(ba, "_anchor_tsa", explode)
+    with pytest.raises(RuntimeError):
+        ba.close_batch()
+
+    assert ba._load_pending() == {}                       # pending is gone...
+    left = list(ba.CLOSING_DIR.glob("batch_*.json"))
+    assert len(left) == 1                                 # ...but the batch is on disk
+    for pid, _ in ids:
+        assert load_proof(pid)["batch_anchor"]["status"] == "pending"
+
+
+def test_startup_recovery_finishes_a_batch_left_mid_close(fake_anchors, monkeypatch):
+    ids = _queue(3)
+
+    def explode(root, plan=""):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(ba, "_anchor_tsa", explode)
+    with pytest.raises(RuntimeError):
+        ba.close_batch()
+
+    # restart: anchors work again
+    monkeypatch.setattr(ba, "_anchor_tsa", fake_anchors and (lambda root, plan="": {
+        "status": "verified", "provider": "freetsa.org",
+        "tsr_base64": base64.b64encode(b"recovered").decode()}))
+    assert ba.recover_closing_batches() == 1
+
+    for pid, chain in ids:
+        anchor = load_proof(pid)["batch_anchor"]
+        assert anchor["status"] == "anchored"
+        computed, _ = inclusion_root(leaf_hash(bytes.fromhex(chain)), anchor["leaf_index"],
+                                     anchor["tree_size"],
+                                     [bytes.fromhex(h) for h in anchor["audit_path"]])
+        assert computed.hex() == anchor["root"].replace("sha256:", "")
+    assert list(ba.CLOSING_DIR.glob("batch_*.json")) == []
+
+
+def test_recovery_is_a_no_op_when_nothing_was_interrupted(fake_anchors):
+    _queue(2)
+    ba.close_batch()
+    assert ba.recover_closing_batches() == 0
+
+
+def test_recovery_discards_an_empty_closing_file(fake_anchors):
+    ba.CLOSING_DIR.mkdir(parents=True, exist_ok=True)
+    (ba.CLOSING_DIR / "batch_empty.json").write_text('{"batch_id": "batch_empty", "entries": []}')
+    assert ba.recover_closing_batches() == 0
+    assert list(ba.CLOSING_DIR.glob("batch_*.json")) == []

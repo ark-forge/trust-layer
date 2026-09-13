@@ -128,4 +128,6 @@ def build_demo_proof(target: str, payload: dict) -> dict:
         proof_record["arkforge_pubkey"] = ARKFORGE_PUBLIC_KEY
 
     store_proof(proof_id, proof_record)
+    # Full record on purpose: the caller needs _raw_chain_hash to queue the anchor.
+    # The demo endpoint answers with a hand-picked subset, never with this dict.
     return proof_record

@@ -343,6 +343,18 @@ if WEBHOOK_SECRET and WEBHOOK_KEY:
             _wh_s == 200, f"HTTP {_wh_s}")
     except Exception as e:
         chk("invoice.paid: clé réactivée sur serveur", False, str(e)[:40])
+    # Anchoring is per batch: a fresh proof waits up to 10 minutes for its batch to
+    # close. Rather than wait it out (a 10-minute deployment gate) or accept
+    # "pending" (a gate that stops measuring the anchor is a decoy), close the batch
+    # explicitly, then poll for the real anchor as before.
+    try:
+        closed = admin_api("/v1/admin/batch/close")
+        chk("POST /v1/admin/batch/close → lot ancré",
+            closed.get("anchored") is True and closed.get("timestamp_authority") == "verified",
+            f"anchored={closed.get('anchored')} tsa={closed.get('timestamp_authority')}")
+    except Exception as e:
+        chk("POST /v1/admin/batch/close → lot ancré", False, str(e)[:60])
+
     # Poll proof JSON until timestamp_authority.status == "verified" before fetching TSR.
     # freetsa.org times out on OVH (~15s), then digicert fallback runs in a thread pool
     # that may be busy (Redis reconciliation). Budget 90s before giving up.
@@ -361,6 +373,17 @@ if WEBHOOK_SECRET and WEBHOOK_KEY:
                 break
         except Exception:
             pass
+
+    # The anchor must reach this individual proof, not just the batch: without a
+    # valid inclusion path the batch root attests nothing about it.
+    try:
+        _anchor = _pdata.get("batch_anchor", {}) if tsr_ready else {}
+        chk("preuve rattachée au lot ancré (chemin d'inclusion présent)",
+            _anchor.get("status") == "anchored" and isinstance(_anchor.get("audit_path"), list)
+            and isinstance(_anchor.get("leaf_index"), int),
+            f"batch_anchor={_anchor.get('status')}")
+    except Exception as e:
+        chk("preuve rattachée au lot ancré (chemin d'inclusion présent)", False, str(e)[:60])
 
     tsr_s, tsr_ct, tsr_len = 0, "", 0
     if tsr_ready:

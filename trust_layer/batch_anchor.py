@@ -48,6 +48,9 @@ BATCH_TICK_SECONDS = 30
 
 BATCHES_DIR = DATA_DIR / "batches"
 PENDING_FILE = BATCHES_DIR / "pending.json"
+# A batch being closed lives here until every proof is stamped. Anchoring takes
+# seconds of network: a crash in that window must not evaporate the batch.
+CLOSING_DIR = BATCHES_DIR / "closing"
 
 # One process owns the pending batch; the lock keeps a request thread and the
 # background tick from closing it twice.
@@ -140,8 +143,23 @@ def close_batch(reason: str = "manual") -> Optional[dict]:
         entries = state.get("entries") or []
         if not entries:
             return None
+        # Move, never drop: the batch is durable from here until it is stamped.
+        state["reason"] = reason
+        save_json(CLOSING_DIR / f"{state['batch_id']}.json", state)
         _clear_pending()
 
+    return _anchor_closing_batch(state)
+
+
+def _anchor_closing_batch(state: dict) -> dict:
+    """Anchor a batch already moved to CLOSING_DIR, then stamp its proofs.
+
+    Idempotent: re-running it re-anchors and re-stamps, which costs one extra TSA
+    request and one extra Rekor entry but never loses a proof. Only the final
+    unlink of the closing file ends the batch.
+    """
+    reason = state.get("reason", "manual")
+    entries = state["entries"]
     batch_id = state["batch_id"]
     leaves = [leaf_hash(bytes.fromhex(e["chain_hash"])) for e in entries]
     root = merkle_root(leaves).hex()
@@ -167,7 +185,35 @@ def close_batch(reason: str = "manual") -> Optional[dict]:
     for index, entry in enumerate(entries):
         _stamp_proof(entry["proof_id"], batch_id, index, len(entries),
                      [h.hex() for h in audit_path(index, leaves)], root, tsa, rekor)
+    try:
+        (CLOSING_DIR / f"{batch_id}.json").unlink()
+    except FileNotFoundError:
+        pass
     return record
+
+
+def recover_closing_batches() -> int:
+    """Re-drive every batch left mid-close by a crash. Returns how many were finished.
+
+    Called at startup. Without it a batch interrupted between "pending cleared"
+    and "proofs stamped" would leave its proofs pending forever: spec 3.0 never
+    sets timestamp_authority.status to "submitted", so the older TSA recovery
+    never sees them.
+    """
+    recovered = 0
+    for path in sorted(CLOSING_DIR.glob("batch_*.json")) if CLOSING_DIR.exists() else []:
+        state = load_json(path, {})
+        if not state.get("entries"):
+            path.unlink(missing_ok=True)
+            continue
+        logger.warning("Recovering batch %s left mid-close (%d proofs)",
+                       state.get("batch_id"), len(state["entries"]))
+        try:
+            _anchor_closing_batch(state)
+            recovered += 1
+        except (OSError, ValueError, RuntimeError) as e:
+            logger.error("Batch %s recovery failed: %s", state.get("batch_id"), e)
+    return recovered
 
 
 def _anchor_tsa(root: str, plan: str = "") -> dict:

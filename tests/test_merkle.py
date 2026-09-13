@@ -12,7 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from trust_layer.merkle import audit_path, inclusion_root, leaf_hash, merkle_root, node_hash
+from trust_layer.merkle import (audit_path, expected_path_len, inclusion_root,
+                                leaf_hash, merkle_root, node_hash)
 
 FIXTURES = Path(__file__).parent / "fixtures" / "verify_proof"
 
@@ -93,3 +94,21 @@ def test_matches_a_real_sigstore_inclusion_proof():
                                     [bytes.fromhex(h) for h in ip["hashes"]])
     assert root.hex() == ip["rootHash"]
     assert consumed == len(ip["hashes"])
+
+
+@pytest.mark.parametrize("n", [1, 2, 3, 4, 5, 7, 8, 9, 100])
+def test_expected_path_len_matches_the_paths_actually_built(n):
+    leaves = _leaves(n)
+    for i in range(n):
+        assert expected_path_len(i, n) == len(audit_path(i, leaves))
+
+
+def test_an_overstated_tree_size_needs_a_longer_path_than_the_real_one():
+    """The case a walk alone accepts: with a bigger declared size, the same path
+    reaches the real root and stops early. The length check is what refuses it."""
+    leaves = _leaves(8)
+    path = audit_path(0, leaves)
+    computed, consumed = inclusion_root(leaves[0], 0, 4096, path)
+    assert computed == merkle_root(leaves)        # the walk is fooled
+    assert consumed == len(path)                  # and so is the consumed check
+    assert expected_path_len(0, 4096) != len(path)  # the length is not

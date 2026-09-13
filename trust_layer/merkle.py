@@ -70,6 +70,24 @@ def audit_path(index: int, leaves: Sequence[bytes]) -> List[bytes]:
     return audit_path(index - k, leaves[k:]) + [merkle_root(leaves[:k])]
 
 
+def expected_path_len(index: int, size: int) -> int:
+    """How many siblings an inclusion proof for (index, size) must carry.
+
+    Deterministic in RFC 6962, so a proof whose path is shorter or longer than
+    this does not describe the tree it claims. Checking the length is what
+    catches an overstated ``tree_size``: the walk alone would consume the real
+    siblings, reach the real root and stop early, reporting a valid inclusion
+    for a tree shape that never existed.
+    """
+    n, idx, sz = 0, index, size
+    while sz > 1:
+        if idx % 2 == 1 or idx + 1 < sz:
+            n += 1
+        idx //= 2
+        sz = (sz + 1) // 2
+    return n
+
+
 def inclusion_root(leaf: bytes, index: int, size: int, path: Sequence[bytes]) -> Tuple[bytes, int]:
     """Walk an inclusion proof. Returns (root, siblings_consumed).
 

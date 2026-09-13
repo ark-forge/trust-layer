@@ -35,7 +35,7 @@ from .keys import validate_api_key, get_key_plan, _KEYS_LOCK
 from .payments.base import ChargeResult
 from .credits import debit_credits, InsufficientCredits
 from .rate_limit import rollback_overage
-from .proofs import sha256_hex, generate_proof_id, generate_proof, store_proof
+from .proofs import sha256_hex, generate_proof_id, generate_proof, store_proof, strip_private
 from .receipt import fetch_receipt
 from .persistence import load_json, save_json
 from .rate_limit import check_rate_limit
@@ -801,14 +801,14 @@ async def execute_proxy(
 
     # 14. Build response
     if service_error == "proxy_timeout":
-        result = ProxyError("proxy_timeout", "Target service timed out", 504, proof=proof_record).to_dict()
+        result = ProxyError("proxy_timeout", "Target service timed out", 504, proof=strip_private(proof_record)).to_dict()
     elif service_error:
-        result = ProxyError("service_error", "Target service is unreachable", 502, proof=proof_record).to_dict()
+        result = ProxyError("service_error", "Target service is unreachable", 502, proof=strip_private(proof_record)).to_dict()
     else:
         # Upstream responded (2xx or 4xx/5xx) — proof was created, return 200.
         # The upstream status is recorded in service_response and proof_record.transaction_success.
         result = {
-            "proof": proof_record,
+            "proof": strip_private(proof_record),
             "service_response": {
                 "status_code": service_status_code,
                 "body": service_response,
