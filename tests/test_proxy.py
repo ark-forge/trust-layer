@@ -9,7 +9,7 @@ from trust_layer.proxy import (
     validate_amount,
     execute_proxy,
     ProxyError,
-    _scrub_internal_secret,
+    _scrub_service_secrets,
 )
 from trust_layer.config import PROOF_PRICE
 from trust_layer.credits import add_credits
@@ -350,24 +350,24 @@ async def test_execute_proxy_idempotency(test_api_key):
 # Security: X-Internal-Secret scrubbing (A5)
 # ---------------------------------------------------------------------------
 
-def test_scrub_internal_secret_flat_dict():
+def test_scrub_service_secrets_flat_dict():
     """X-Internal-Secret key is removed from a flat dict."""
     body = {"result": "ok", "X-Internal-Secret": "supersecret", "score": 42}
-    cleaned = _scrub_internal_secret(body)
+    cleaned = _scrub_service_secrets(body)
     assert "X-Internal-Secret" not in cleaned
     assert cleaned["result"] == "ok"
     assert cleaned["score"] == 42
 
 
-def test_scrub_internal_secret_case_insensitive():
+def test_scrub_service_secrets_case_insensitive():
     """Key matching is case-insensitive."""
     body = {"x-internal-secret": "s3cr3t", "data": "safe"}
-    cleaned = _scrub_internal_secret(body)
+    cleaned = _scrub_service_secrets(body)
     assert "x-internal-secret" not in cleaned
     assert cleaned["data"] == "safe"
 
 
-def test_scrub_internal_secret_nested():
+def test_scrub_service_secrets_nested():
     """X-Internal-Secret is removed from nested structures (echo-header pattern)."""
     body = {
         "url": "https://example.com",
@@ -377,20 +377,20 @@ def test_scrub_internal_secret_nested():
             "X-Api-Key": "user_key",
         },
     }
-    cleaned = _scrub_internal_secret(body)
+    cleaned = _scrub_service_secrets(body)
     assert "X-Internal-Secret" not in cleaned["headers"]
     assert cleaned["headers"]["Content-Type"] == "application/json"
     assert cleaned["headers"]["X-Api-Key"] == "user_key"
 
 
-def test_scrub_internal_secret_list():
-    """_scrub_internal_secret handles lists recursively."""
+def test_scrub_service_secrets_list():
+    """_scrub_service_secrets handles lists recursively."""
     body = [
         {"X-Internal-Secret": "leak", "ok": True},
         "plain string",
         42,
     ]
-    cleaned = _scrub_internal_secret(body)
+    cleaned = _scrub_service_secrets(body)
     assert isinstance(cleaned, list)
     assert "X-Internal-Secret" not in cleaned[0]
     assert cleaned[0]["ok"] is True
@@ -400,7 +400,7 @@ def test_scrub_internal_secret_list():
 def test_scrub_does_not_affect_other_keys():
     """Non-secret keys and values are untouched."""
     body = {"a": 1, "b": {"c": "hello"}}
-    cleaned = _scrub_internal_secret(body)
+    cleaned = _scrub_service_secrets(body)
     assert cleaned == body
 
 
@@ -631,3 +631,123 @@ async def test_proxy_response_carries_no_commitment_nonces(test_api_key):
     assert "_chain_data" not in blob
     assert result["proof"]["commitments"]              # the public half is still there
     assert not [k for k in result["proof"] if k.startswith("_")]
+
+
+# ---------------------------------------------------------------------------
+# Challenge secret (PROVE IT corpus) — separate secret, separate allowlist.
+# The corpus is exposed to challenge participants; INTERNAL_SECRET opens the
+# deployment smoke test. Sharing one secret would extend to a participant-facing
+# service the secret whose leak was the v1.7.0 flaw.
+# ---------------------------------------------------------------------------
+
+def _mock_json_client(captured_headers):
+    async def mock_post(url, json=None, headers=None, **kwargs):
+        captured_headers.update(headers or {})
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"ok": True}
+        mock_resp.headers = {}
+        return mock_resp
+
+    mock_client = AsyncMock()
+    mock_client.post = mock_post
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    return mock_client
+
+
+@pytest.mark.asyncio
+async def test_challenge_secret_forwarded_to_challenge_host(test_api_key):
+    """X-Challenge-Secret IS forwarded to a host listed in CHALLENGE_HOSTS."""
+    add_credits(test_api_key, 10.00, "pi_test_challenge_ok")
+    captured = {}
+
+    with patch("httpx.AsyncClient", return_value=_mock_json_client(captured)), \
+         patch("trust_layer.proxy.CHALLENGE_SECRET", "challenge-s3cret"), \
+         patch("trust_layer.proxy.CHALLENGE_HOSTS", {"corpus.arkforge.tech"}), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+        await execute_proxy(
+            target="https://corpus.arkforge.tech/registres/entites/ENT-4417",
+            method="POST", payload={}, amount=PROOF_PRICE, currency="eur",
+            api_key=test_api_key,
+        )
+
+    assert captured.get("X-Challenge-Secret") == "challenge-s3cret"
+
+
+@pytest.mark.asyncio
+async def test_challenge_secret_not_forwarded_elsewhere(test_api_key):
+    """X-Challenge-Secret must NOT reach a target outside CHALLENGE_HOSTS."""
+    add_credits(test_api_key, 10.00, "pi_test_challenge_leak")
+    captured = {}
+
+    with patch("httpx.AsyncClient", return_value=_mock_json_client(captured)), \
+         patch("trust_layer.proxy.CHALLENGE_SECRET", "challenge-s3cret"), \
+         patch("trust_layer.proxy.CHALLENGE_HOSTS", {"corpus.arkforge.tech"}), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+        await execute_proxy(
+            target="https://attacker-controlled.example.com/collect",
+            method="POST", payload={}, amount=PROOF_PRICE, currency="eur",
+            api_key=test_api_key,
+        )
+
+    assert "X-Challenge-Secret" not in captured
+    assert "challenge-s3cret" not in str(captured)
+
+
+@pytest.mark.asyncio
+async def test_challenge_and_internal_allowlists_are_independent(test_api_key):
+    """A host trusted for the challenge corpus never receives INTERNAL_SECRET,
+    and vice versa. This separation is the whole point of the second secret."""
+    add_credits(test_api_key, 10.00, "pi_test_two_secrets")
+    captured = {}
+
+    with patch("httpx.AsyncClient", return_value=_mock_json_client(captured)), \
+         patch("trust_layer.proxy.INTERNAL_SECRET", "internal-s3cret"), \
+         patch("trust_layer.proxy.TRUSTED_INTERNAL_HOSTS", {"smoke.arkforge.tech"}), \
+         patch("trust_layer.proxy.CHALLENGE_SECRET", "challenge-s3cret"), \
+         patch("trust_layer.proxy.CHALLENGE_HOSTS", {"corpus.arkforge.tech"}), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+        await execute_proxy(
+            target="https://corpus.arkforge.tech/catalogue",
+            method="POST", payload={}, amount=PROOF_PRICE, currency="eur",
+            api_key=test_api_key,
+        )
+
+    assert captured.get("X-Challenge-Secret") == "challenge-s3cret"
+    assert "X-Internal-Secret" not in captured
+    assert "internal-s3cret" not in str(captured)
+
+
+@pytest.mark.asyncio
+async def test_extra_headers_cannot_forge_challenge_secret(test_api_key):
+    """A participant must not be able to reach the corpus without the proxy.
+    Without this blocklist entry the whole corpus authentication is bypassable
+    in one request."""
+    add_credits(test_api_key, 10.00, "pi_test_forge_challenge")
+    captured = {}
+
+    with patch("httpx.AsyncClient", return_value=_mock_json_client(captured)), \
+         patch("trust_layer.proxy.CHALLENGE_SECRET", ""), \
+         patch("trust_layer.proxy.CHALLENGE_HOSTS", set()), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+        await execute_proxy(
+            target="https://corpus.arkforge.tech/registres",
+            method="POST", payload={}, amount=PROOF_PRICE, currency="eur",
+            api_key=test_api_key,
+            extra_headers={"X-Challenge-Secret": "FORGED"},
+        )
+
+    assert captured.get("X-Challenge-Secret") != "FORGED"
+
+
+def test_scrub_removes_challenge_secret_echoed_by_upstream():
+    """An upstream that echoes request headers must not leak the challenge secret
+    back to the caller."""
+    body = {
+        "headers": {"X-Challenge-Secret": "challenge-s3cret", "Accept": "*/*"},
+        "nested": [{"x-challenge-secret": "challenge-s3cret"}],
+    }
+    cleaned = _scrub_service_secrets(body)
+    assert "challenge-s3cret" not in str(cleaned)
+    assert cleaned["headers"]["Accept"] == "*/*"

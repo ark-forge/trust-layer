@@ -29,6 +29,8 @@ from .config import (
     ARKFORGE_PUBLIC_KEY,
     INTERNAL_SECRET,
     TRUSTED_INTERNAL_HOSTS,
+    CHALLENGE_SECRET,
+    CHALLENGE_HOSTS,
     get_signing_key,
 )
 from .keys import validate_api_key, get_key_plan, _KEYS_LOCK
@@ -49,10 +51,19 @@ logger = logging.getLogger("trust_layer.proxy")
 _active_tasks: set[asyncio.Task] = set()
 
 # Headers that must never be forwarded from extra_headers to the target service
+# Service-to-service secrets the proxy may inject, each with its own allowlist.
+# A caller must never be able to forge one, so every name here is blocked in
+# extra_headers and scrubbed from the response body.
+_SERVICE_SECRETS = (
+    ("X-Internal-Secret", "INTERNAL_SECRET", "TRUSTED_INTERNAL_HOSTS"),
+    ("X-Challenge-Secret", "CHALLENGE_SECRET", "CHALLENGE_HOSTS"),
+)
+_SECRET_HEADER_NAMES = {name.lower() for name, _, _ in _SERVICE_SECRETS}
+
 _BLOCKED_EXTRA_HEADERS = {
     "host", "transfer-encoding", "connection", "upgrade",
-    "content-length", "content-type", "x-internal-secret",
-}
+    "content-length", "content-type",
+} | _SECRET_HEADER_NAMES
 
 
 def _track_task(task: asyncio.Task) -> None:
@@ -120,23 +131,45 @@ async def _post_proof_background(proof_id: str, proof_record: dict, chain_hash: 
             _log_background_task(proof_id, "email", "failure", str(e))
 
 
-def _scrub_internal_secret(body: object) -> object:
-    """Remove X-Internal-Secret from service response body (recursive).
+def _service_secret_headers(target_domain: str) -> dict:
+    """Secrets to forward to this target, one allowlist per secret.
 
-    The secret is injected in forward headers only. If the upstream service
-    echoes request headers back (e.g. httpbin /anything), the secret would
-    appear in the response body. This scrubber removes it before we return
-    the body to the client. The chain hash is computed BEFORE this call so
-    integrity is not affected.
+    validate_target_url() only blocks private IPs, not attacker-controlled public
+    HTTPS targets, so an unconditional forward would leak a secret to any target a
+    caller chooses (found 2026-09-11). Each secret is therefore forwarded only to
+    hostnames explicitly listed for it, and the allowlists are independent: a host
+    trusted for the challenge corpus never receives INTERNAL_SECRET.
+
+    Read from the module globals so that tests patching trust_layer.proxy.<NAME>
+    are honoured.
+    """
+    host = target_domain.lower()
+    headers = {}
+    for header, secret_name, hosts_name in _SERVICE_SECRETS:
+        secret = globals().get(secret_name) or ""
+        hosts = globals().get(hosts_name) or set()
+        if secret and host in hosts:
+            headers[header] = secret
+    return headers
+
+
+def _scrub_service_secrets(body: object) -> object:
+    """Remove service-to-service secret headers from a response body (recursive).
+
+    Secrets are injected in forward headers only. If the upstream service echoes
+    request headers back (e.g. httpbin /anything), they would appear in the
+    response body. This scrubber removes them before the body is returned to the
+    client. The chain hash is computed BEFORE this call, so integrity is not
+    affected and a scorer recomputing the hash works from the unscrubbed body.
     """
     if isinstance(body, dict):
         return {
-            k: _scrub_internal_secret(v)
+            k: _scrub_service_secrets(v)
             for k, v in body.items()
-            if k.lower() != "x-internal-secret"
+            if k.lower() not in _SECRET_HEADER_NAMES
         }
     if isinstance(body, list):
-        return [_scrub_internal_secret(item) for item in body]
+        return [_scrub_service_secrets(item) for item in body]
     return body
 
 
@@ -663,15 +696,7 @@ async def execute_proxy(
     upstream_timestamp = None
 
     try:
-        # Only forward the internal secret to explicitly trusted hostnames.
-        # validate_target_url() only blocks private IPs, not attacker-controlled
-        # public HTTPS targets, so an unconditional forward would leak this secret
-        # to any target a caller chooses (found 2026-09-11).
-        fwd_headers = (
-            {"X-Internal-Secret": INTERNAL_SECRET}
-            if INTERNAL_SECRET and target_domain.lower() in TRUSTED_INTERNAL_HOSTS
-            else {}
-        )
+        fwd_headers = _service_secret_headers(target_domain)
         # Merge extra_headers with hardening: blocklist, type/size validation
         if extra_headers and isinstance(extra_headers, dict):
             if len(extra_headers) > 10:
@@ -797,7 +822,7 @@ async def execute_proxy(
     # Scrub X-Internal-Secret from service response BEFORE returning to client.
     # Hash was already computed above (line generate_proof), so chain integrity is preserved.
     if service_response is not None:
-        service_response = _scrub_internal_secret(service_response)
+        service_response = _scrub_service_secrets(service_response)
 
     # 14. Build response
     if service_error == "proxy_timeout":

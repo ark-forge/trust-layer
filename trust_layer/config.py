@@ -185,6 +185,20 @@ TRUSTED_INTERNAL_HOSTS = {
     if h.strip()
 }
 
+# --- Challenge Secret (PROVE IT corpus) ---
+# Deliberately NOT the same secret as INTERNAL_SECRET: the corpus is exposed to
+# challenge participants, while INTERNAL_SECRET opens the deployment smoke test.
+# Sharing one secret would make its rotation an event for both, and would extend
+# to a participant-facing service the secret whose leak was the v1.7.0 flaw.
+CHALLENGE_SECRET = os.environ.get("TRUST_LAYER_CHALLENGE_SECRET", "")
+
+# Hostnames allowed to receive CHALLENGE_SECRET when proxied through /v1/proxy.
+CHALLENGE_HOSTS = {
+    h.strip().lower()
+    for h in os.environ.get("TRUST_LAYER_CHALLENGE_HOSTS", "").split(",")
+    if h.strip()
+}
+
 # --- Webhook idempotency (prevents replay attacks on Stripe webhooks) ---
 WEBHOOK_IDEMPOTENCY_FILE = DATA_DIR / "webhook_idempotency.jsonl"
 
