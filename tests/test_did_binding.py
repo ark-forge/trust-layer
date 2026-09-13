@@ -672,3 +672,122 @@ def test_did_resolution_status_absent_without_agent_identity():
         seller="example.com",
     )
     assert proof["parties"].get("did_resolution_status") is None
+
+
+# ===========================================================================
+# Redis-backed challenge store (fakeredis) — reproduces + fixes prod defect
+# ===========================================================================
+
+@pytest.fixture
+def fake_redis_client(monkeypatch):
+    """Patch get_redis() as resolved inside did_resolver to return a fakeredis client."""
+    import fakeredis
+    import trust_layer.did_resolver as did_resolver_mod
+
+    client = fakeredis.FakeRedis(decode_responses=True)
+    monkeypatch.setattr(did_resolver_mod, "get_redis", lambda: client)
+    return client
+
+
+def test_create_then_consume_challenge_with_redis_active(fake_redis_client):
+    """REPRODUCTION: with Redis active, a challenge created via create_challenge()
+    must be consumable via consume_challenge() and return the original payload.
+    """
+    _, pub_bytes = _gen_ed25519_keypair()
+    api_key = "sk_test_abcdef0123456789"
+    did = "did:web:example.com"
+
+    challenge = create_challenge(api_key, did, pub_bytes)
+    payload = consume_challenge(challenge)
+
+    assert payload is not None, "challenge could not be consumed — binding is broken under Redis"
+    assert payload["api_key"] == api_key
+    assert payload["did"] == did
+    assert payload["pub_bytes_hex"] == pub_bytes.hex()
+
+
+def test_consume_challenge_is_single_use_with_redis(fake_redis_client):
+    """A challenge consumed once must not be consumable again (Redis path)."""
+    _, pub_bytes = _gen_ed25519_keypair()
+    challenge = create_challenge("sk_test_singleuse", "did:web:example.com", pub_bytes)
+
+    first = consume_challenge(challenge)
+    second = consume_challenge(challenge)
+
+    assert first is not None
+    assert second is None
+
+
+def test_consume_challenge_memory_fallback_unchanged(monkeypatch):
+    """Without Redis (get_redis() -> None), behaviour stays purely in-memory."""
+    import trust_layer.did_resolver as did_resolver_mod
+
+    monkeypatch.setattr(did_resolver_mod, "get_redis", lambda: None)
+    _PENDING_CHALLENGES.clear()
+
+    _, pub_bytes = _gen_ed25519_keypair()
+    challenge = create_challenge("sk_test_memfallback", "did:web:example.com", pub_bytes)
+
+    payload = consume_challenge(challenge)
+    assert payload is not None
+    assert payload["did"] == "did:web:example.com"
+
+    # single-use in memory too
+    assert consume_challenge(challenge) is None
+
+
+def test_bind_did_history_recorded_on_rebind_to_different_did(test_api_key):
+    """Re-binding a key to a NEW did must push the old (did, bound_at) into
+    verified_did_history with an unbound_at timestamp, before writing the new did.
+    """
+    from trust_layer.keys import load_api_keys
+
+    bound_at_1 = bind_did_to_key(test_api_key, "did:web:first.example.com")
+    bound_at_2 = bind_did_to_key(test_api_key, "did:web:second.example.com")
+
+    keys = load_api_keys()
+    profile = keys[test_api_key]
+    assert profile["verified_did"] == "did:web:second.example.com"
+    assert profile["verified_did_bound_at"] == bound_at_2
+
+    history = profile.get("verified_did_history")
+    assert history is not None and len(history) == 1
+    entry = history[0]
+    assert entry["did"] == "did:web:first.example.com"
+    assert entry["bound_at"] == bound_at_1
+    assert "unbound_at" in entry
+
+
+def test_bind_did_no_history_entry_on_rebind_to_same_did(test_api_key):
+    """Re-binding to the SAME did must not create a history entry."""
+    from trust_layer.keys import load_api_keys
+
+    bind_did_to_key(test_api_key, "did:web:same.example.com")
+    bind_did_to_key(test_api_key, "did:web:same.example.com")
+
+    keys = load_api_keys()
+    profile = keys[test_api_key]
+    assert profile.get("verified_did_history", []) == []
+
+
+def test_consume_falls_back_to_memory_when_redis_returns_after_outage(monkeypatch):
+    """Challenge créé pendant une panne Redis (donc en mémoire), consommé après son retour.
+
+    Redis absent au create → repli mémoire ; Redis présent au consume → la clé n'y est
+    pas. Le consume ne doit pas conclure « introuvable » sur ce seul constat : c'est
+    exactement l'asymétrie écriture/lecture qui avait cassé le binding en production.
+    """
+    import fakeredis
+    from trust_layer import did_resolver as did_resolver_mod
+
+    monkeypatch.setattr(did_resolver_mod, "get_redis", lambda: None)
+    challenge = did_resolver_mod.create_challenge("ak_outage", "did:key:zOutage", b"\x01" * 32)
+
+    client = fakeredis.FakeRedis(decode_responses=True)
+    monkeypatch.setattr(did_resolver_mod, "get_redis", lambda: client)
+
+    payload = did_resolver_mod.consume_challenge(challenge)
+    assert payload is not None, "challenge créé en mémoire devenu introuvable après retour de Redis"
+    assert payload["api_key"] == "ak_outage"
+    assert payload["did"] == "did:key:zOutage"
+    assert did_resolver_mod.consume_challenge(challenge) is None

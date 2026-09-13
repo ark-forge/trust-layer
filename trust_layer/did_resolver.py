@@ -281,8 +281,8 @@ def create_challenge(api_key: str, did: str, pub_bytes: bytes) -> str:
     r = get_redis()
     if r:
         try:
-            key = f"did_challenge:{api_key[:16]}"
-            r.setex(key, _CHALLENGE_TTL, json.dumps({"challenge": challenge, **payload}))
+            key = f"did_challenge:{challenge}"
+            r.setex(key, _CHALLENGE_TTL, json.dumps(payload))
             return challenge
         except Exception:
             logger.warning("Redis setex failed — falling back to in-memory")
@@ -298,12 +298,25 @@ def consume_challenge(challenge: str) -> Optional[dict]:
     r = get_redis()
     if r:
         try:
-            # Scan all keys matching pattern to find the challenge
-            # We store by api_key prefix, but we need to find by challenge value
-            # Fall through to in-memory for simplicity when Redis is active
-            pass
+            key = f"did_challenge:{challenge}"
+            try:
+                raw = r.getdel(key)
+            except AttributeError:
+                pipe = r.pipeline()
+                pipe.get(key)
+                pipe.delete(key)
+                raw, _ = pipe.execute()
+            # raw is None : rien dans Redis. Ne PAS conclure ici — le challenge
+            # a pu être créé pendant une panne Redis, donc en mémoire. On laisse
+            # le chemin mémoire ci-dessous répondre. C'est l'asymétrie
+            # écriture/lecture qui avait cassé le binding en production.
+            if raw is not None:
+                payload = json.loads(raw)
+                if time.time() > payload["expires_at"]:
+                    return None
+                return payload
         except Exception:
-            pass
+            logger.warning("Redis getdel failed — falling back to in-memory")
 
     with _CHALLENGES_LOCK:
         payload = _PENDING_CHALLENGES.pop(challenge, None)
@@ -444,8 +457,17 @@ def bind_did_to_key(api_key: str, did: str) -> str:
         keys = load_api_keys()
         if api_key not in keys:
             raise DIDResolutionError("API key not found", 404)
-        keys[api_key]["verified_did"] = did
-        keys[api_key]["verified_did_bound_at"] = bound_at
+        profile = keys[api_key]
+        previous_did = profile.get("verified_did")
+        if previous_did and previous_did != did:
+            history = profile.setdefault("verified_did_history", [])
+            history.append({
+                "did": previous_did,
+                "bound_at": profile.get("verified_did_bound_at"),
+                "unbound_at": bound_at,
+            })
+        profile["verified_did"] = did
+        profile["verified_did_bound_at"] = bound_at
         save_api_keys(keys)
 
     return bound_at
