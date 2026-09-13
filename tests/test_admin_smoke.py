@@ -62,3 +62,20 @@ def test_batch_close_on_an_empty_batch_is_not_an_error(client):
         resp = client.post("/v1/admin/batch/close", headers={"X-Internal-Secret": "s3cr3t"})
     assert resp.status_code == 200
     assert resp.json()["anchored"] is False
+
+
+# --- the deployment gates must be able to reach the service ------------------
+
+def test_smoke_test_scripts_send_an_explicit_user_agent():
+    """The edge answers a bare 403 to "Python-urllib/x.y".
+
+    security_smoke_test.py had no User-Agent, so the gate died on its first call
+    with "could not create test key" — and it had never run against production
+    since becoming blocking, so nobody saw it. A gate that cannot reach the
+    service measures nothing.
+    """
+    from pathlib import Path
+    scripts = Path(__file__).parent.parent / "scripts"
+    for name in ("security_smoke_test.py", "smoke_test_prod.py", "verify_proof.py"):
+        source = (scripts / name).read_text()
+        assert "User-Agent" in source, f"{name} would go out as Python-urllib and get a bare 403"
