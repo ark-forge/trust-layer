@@ -6,6 +6,43 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.8.0] — 2026-09-13
+
+### Added
+- spec 3.0 : `hashes.chain` devient la racine Merkle d'un engagement par champ,
+  `sha256(champ || 0x00 || nonce || canonical_json(valeur))`, nonce de 32 octets
+  frais par champ et par preuve. La preuve publique publie les engagements et
+  aucune valeur : le tiers recalcule le hash ancré sans que `transaction_id` ni
+  `buyer_fingerprint` soient exposés
+- divulgation sélective : `GET /v1/proof/{id}/full` rend `commitment_nonces` et
+  `chain_data` au propriétaire, `verify_proof.py --disclose` vérifie les triplets
+  (champ, nonce, valeur) contre les engagements publiés. Aucune route nouvelle
+- ancrage par lot : une requête RFC 3161 et une entrée Sigstore Rekor par lot
+  (100 preuves ou 10 min) sur la racine Merkle, au lieu d'une par preuve. Chaque
+  preuve embarque son chemin d'inclusion et les artefacts d'ancre
+- `trust_layer/merkle.py` : RFC 6962 pour les deux niveaux, croisé contre une
+  preuve d'inclusion Sigstore réelle
+- `batch_anchor` exposé sur `GET /v1/proof/{id}/verify`
+
+### Changed
+- le lot est horodaté au plan le plus exigeant qu'il contient : une preuve
+  `platform` route tout le lot vers DigiCert. Le routage TSA par plan a quitté le
+  chemin par preuve avec l'ancrage par lot
+- `TRUST_LAYER_BASE` surchargeable dans `verify_proof.py`, pour jouer la
+  procédure telle quelle contre une autre instance
+- README, guide et quick-reference réécrits : le one-liner de vérification
+  publié recalculait la formule des valeurs et répondait `TAMPERED` sur une
+  preuve publique honnête
+
+### Internal
+- une preuve dont le lot n'est pas fermé est `pending` et le dit, jamais
+  `TAMPERED` ; un chemin d'inclusion invalide ne se confond plus avec une attente
+- le lot en attente vit sur disque en écriture atomique et se ferme sur un tic de
+  fond indépendant du trafic
+- 695 tests (+61)
+
+---
+
 ## [1.7.2] — 2026-09-11
 
 ### Fixed

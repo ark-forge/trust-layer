@@ -428,3 +428,14 @@ def test_a_disclosure_for_an_unknown_field_is_refused(client, monkeypatch):
 def test_spec_3_proof_without_commitments_fails():
     rep = _run({"spec_version": "3.0", "hashes": {"chain": "sha256:" + "ab" * 32}}, offline=True)
     assert _status(rep, "chain hash") == vp.FAIL
+
+
+def test_a_failed_inclusion_is_not_reported_as_a_pending_anchor(client, monkeypatch):
+    """Found by playing the third party: a broken audit path used to print the
+    wait message, hiding a failure behind 'not anchored yet'."""
+    public, _, _ = _anchored_public_proof(client, monkeypatch)
+    public["batch_anchor"]["audit_path"][0] = "00" * 32
+    rep = _run(public, offline=True)
+    assert _status(rep, "batch anchor") == vp.FAIL
+    detail = next(d for w, _, d, _ in rep.rows if w == "RFC 3161 timestamp")
+    assert "did not verify" in detail and "not anchored yet" not in detail

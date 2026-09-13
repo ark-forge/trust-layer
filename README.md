@@ -40,10 +40,11 @@ ArkForge is a **neutral proxy**: it sits between your agent and any upstream API
 ```
 Agent  →  POST /v1/proxy  →  ArkForge  →  Upstream API
                                 ↓
-                     SHA-256 chain hash
+                  Per-field commitments
+                  → Merkle chain hash
                      Ed25519 signature
-                     RFC 3161 timestamp
-                     Sigstore Rekor anchor
+                     RFC 3161 timestamp    ⎫ once per batch,
+                     Sigstore Rekor anchor ⎭ on the batch root
                                 ↓
                      Immutable proof JSON + public HTML page
 ```
@@ -53,13 +54,17 @@ Agent  →  POST /v1/proxy  →  ArkForge  →  Upstream API
 | Witness | What it proves | Independent of ArkForge? |
 |---------|---------------|--------------------------|
 | Ed25519 Signature | The proof was issued by ArkForge | **No** — ArkForge is the signer |
-| RFC 3161 Timestamp | The chain hash existed at the claimed time | **Yes** — a third-party TSA signs it |
-| Sigstore Rekor | The chain hash is in a public append-only log | **Yes** — OpenSSF operates the log |
+| RFC 3161 Timestamp | The anchored hash existed at the claimed time | **Yes** — a third-party TSA signs it |
+| Sigstore Rekor | The anchored hash is in a public append-only log | **Yes** — OpenSSF operates the log |
 
 Only the last two are evidence against the issuer. Verify all three with
 [`scripts/verify_proof.py`](scripts/verify_proof.py) (Python 3 + openssl, no other
-dependency); see [Verify a proof](docs/user-guide.md#verify-a-proof) for the manual steps
-and for what the proof does **not** let a third party check.
+dependency); see [Verify a proof](docs/user-guide.md#verify-a-proof) for the manual steps.
+
+Proofs are anchored **per batch**: chain hashes accumulate for up to 100 proofs or 10 minutes,
+and one timestamp plus one Rekor entry cover the batch's Merkle root. Each proof carries its
+own inclusion proof down from that root, so it verifies on its own. Until its batch closes a
+proof has no external anchor and says so — `batch_anchor.status: "pending"`.
 
 See a live proof: [example transaction](https://trust.arkforge.tech/v1/proof/prf_20260303_161853_4d0904)
 
@@ -308,41 +313,60 @@ For custom requirements (eIDAS-qualified timestamps, on-premise deployment): [co
 
 ---
 
-## Chain hash algorithm
+## Chain hash algorithm (spec 3.0)
 
-The chain hash formula is public and deterministic. Anyone can recompute it:
+The chain hash is the Merkle root of one commitment per chain field:
 
 ```
-chain_hash = SHA256(
-  request_hash + response_hash + transaction_id + timestamp +
-  buyer_fingerprint + seller
-  [+ upstream_timestamp]         // if present in proof
-  [+ receipt_content_hash]       // if provider_payment present
-)
+commitment(field) = SHA256(field_name || 0x00 || nonce || canonical_json(value))
+
+fields: request_hash, response_hash, transaction_id, timestamp,
+        buyer_fingerprint, seller
+        [+ upstream_timestamp]      // if present in proof
+        [+ receipt_content_hash]    // if provider_payment present
+
+chain_hash = RFC 6962 Merkle root of those commitments, fields in sorted order
+             leaf: SHA256(0x00 || commitment)
+             node: SHA256(0x01 || left || right)
 ```
 
-All values concatenated as raw UTF-8 strings, no separator. Canonical JSON: `json.dumps(data, sort_keys=True, separators=(",", ":"))`.
+Each field gets its own fresh 32-byte nonce, drawn per proof. Canonical JSON is
+`json.dumps(value, sort_keys=True, separators=(",", ":"))`.
+
+This is what makes the chain hash verifiable by a third party: the public proof publishes
+every commitment and no value, so the anchored hash is recomputable without the transaction
+id or the buyer fingerprint ever being exposed. The proof owner can open any single field to
+a counterparty by handing over that field's `(nonce, value)` pair — see
+[selective disclosure](docs/user-guide.md#selective-disclosure).
+
+Proofs issued before spec 3.0 keep their own algorithm (concatenation up to 1.1, canonical
+JSON of the values for 1.2 and 2.1); `spec_version` says which applies.
 
 ### Verify any proof in one command
 
 ```bash
-PROOF=$(curl -s https://trust.arkforge.tech/v1/proof/prf_...)
+curl -s https://trust.arkforge.tech/v1/proof/prf_... > proof.json
 
-REQUEST_HASH=$(echo "$PROOF" | jq -r '.hashes.request' | sed 's/sha256://')
-RESPONSE_HASH=$(echo "$PROOF" | jq -r '.hashes.response' | sed 's/sha256://')
-PAYMENT_ID=$(echo "$PROOF" | jq -r '.certification_fee.transaction_id')
-TIMESTAMP=$(echo "$PROOF" | jq -r '.timestamp')
-BUYER=$(echo "$PROOF" | jq -r '.parties.buyer_fingerprint')
-SELLER=$(echo "$PROOF" | jq -r '.parties.seller')
-UPSTREAM=$(echo "$PROOF" | jq -r '.upstream_timestamp // empty')
-RECEIPT=$(echo "$PROOF" | jq -r '.provider_payment.receipt_content_hash // empty' | sed 's/sha256://')
-
-COMPUTED=$(printf '%s' "${REQUEST_HASH}${RESPONSE_HASH}${PAYMENT_ID}${TIMESTAMP}${BUYER}${SELLER}${UPSTREAM}${RECEIPT}" \
-  | sha256sum | cut -d' ' -f1)
-
-EXPECTED=$(echo "$PROOF" | jq -r '.hashes.chain' | sed 's/sha256://')
-[ "$COMPUTED" = "$EXPECTED" ] && echo "VERIFIED" || echo "TAMPERED"
+# the chain hash is the Merkle root of the published commitments — no field value needed
+python3 - <<'PY'
+import hashlib, json
+p = json.load(open("proof.json"))
+c = p["commitments"]
+leaves = [hashlib.sha256(b"\x00" + bytes.fromhex(c[f].replace("sha256:", ""))).digest()
+          for f in sorted(c)]
+def mth(ls):
+    if len(ls) == 1: return ls[0]
+    k = 1
+    while k * 2 < len(ls): k *= 2
+    return hashlib.sha256(b"\x01" + mth(ls[:k]) + mth(ls[k:])).digest()
+print("VERIFIED" if mth(leaves).hex() == p["hashes"]["chain"].replace("sha256:", "")
+      else "TAMPERED")
+PY
 ```
+
+That only proves self-consistency. For the two witnesses ArkForge cannot forge — the RFC 3161
+timestamp and the Sigstore Rekor entry on the batch root — run
+[`scripts/verify_proof.py`](scripts/verify_proof.py).
 
 **Current ArkForge public key:**
 ```

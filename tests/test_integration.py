@@ -834,6 +834,36 @@ def test_proof_full_returns_payment(client, api_key):
     assert data["parties"]["buyer_fingerprint"] != ""
 
 
+def test_proof_full_gives_the_owner_the_disclosure_material(client, api_key):
+    """The owner gets the nonces over HTTP — that is the whole disclosure mechanism.
+
+    No /disclose endpoint: with (field, nonce, value) in hand, the owner opens any
+    single field to a counterparty out of band, and the published commitment is
+    what the counterparty checks it against.
+    """
+    from trust_layer.commitments import verify_disclosure
+    mock_http = _mock_http_client()
+    with patch("httpx.AsyncClient", return_value=mock_http), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+        r = client.post(
+            "/v1/proxy",
+            json={"target": "https://example.com/api", "payload": {}},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+    proof_id = r.json()["proof"]["proof_id"]
+
+    full = client.get(f"/v1/proof/{proof_id}/full",
+                      headers={"Authorization": f"Bearer {api_key}"}).json()
+    public = client.get(f"/v1/proof/{proof_id}").json()
+
+    assert set(full["commitment_nonces"]) == set(public["commitments"])
+    for field, nonce in full["commitment_nonces"].items():
+        assert verify_disclosure(field, nonce, full["chain_data"][field],
+                                 public["commitments"][field])
+    # and the public proof still carries none of it
+    assert "commitment_nonces" not in public and "chain_data" not in public
+
+
 # ---------------------------------------------------------------------------
 # Platform plan — TSA routing E2E
 # ---------------------------------------------------------------------------

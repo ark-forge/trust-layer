@@ -52,13 +52,16 @@ import argparse
 import base64
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import urllib.request
 from pathlib import Path
 
-TRUST_LAYER_BASE = "https://trust.arkforge.tech"
+# Overridable so the procedure can be run verbatim against another instance —
+# a staging deployment, or a local one when measuring the verifier itself.
+TRUST_LAYER_BASE = os.environ.get("TRUST_LAYER_BASE", "https://trust.arkforge.tech")
 REKOR_BASE = "https://rekor.sigstore.dev"
 
 # provider -> how to obtain the CA material that verifies its timestamp tokens.
@@ -406,9 +409,21 @@ def _system_ca_file():
     return None
 
 
+def _no_anchored_hash(proof):
+    """Why there is nothing for the external witnesses to check.
+
+    A batch still open and a batch whose inclusion proof does not verify are two
+    very different situations; saying 'not yet anchored' for the second hides a
+    failure behind a wait.
+    """
+    if (proof.get("batch_anchor") or {}).get("status") == "anchored":
+        return "the batch anchor above did not verify — no anchored hash to check"
+    return "nothing anchored yet for this proof"
+
+
 def check_rfc3161(proof, chain_hex, rep, offline):
     if chain_hex is None:
-        rep.add("RFC 3161 timestamp", SKIP, "nothing anchored yet for this proof")
+        rep.add("RFC 3161 timestamp", SKIP, _no_anchored_hash(proof))
         return
     tsa = proof.get("timestamp_authority") or {}
     tsr_b64 = tsa.get("tsr_base64")
@@ -502,7 +517,7 @@ def _verify_ecdsa(pubkey_pem_bytes, signature, message, rep_name, rep):
 
 def check_rekor(proof, chain_hex, rep, offline):
     if chain_hex is None:
-        rep.add("Sigstore Rekor", SKIP, "nothing anchored yet for this proof")
+        rep.add("Sigstore Rekor", SKIP, _no_anchored_hash(proof))
         return
     return _check_rekor(proof, chain_hex, rep, offline)
 
@@ -616,7 +631,8 @@ def _check_rekor(proof, chain_hex, rep, offline):
         rep.add("Sigstore Rekor", FAIL, "checkpoint signature does not verify")
         return
 
-    detail = (f"chain hash in the public log at index {entry['logIndex']}, "
+    what = "batch root" if (proof.get("batch_anchor") or {}).get("status") == "anchored" else "chain hash"
+    detail = (f"{what} in the public log at index {entry['logIndex']}, "
               f"inclusion proof and checkpoint valid")
     if attributed is True:
         detail += "; submitted by ArkForge's published key"
@@ -676,8 +692,10 @@ def main():
         print("VERDICT: NOT INDEPENDENTLY VERIFIED — nothing here that ArkForge could not have")
         print("         produced on its own. Self-consistency is not a receipt.")
         return 1
+    anchored = (proof.get("batch_anchor") or {}).get("status") == "anchored"
+    covers = ("batch root covering this chain hash" if anchored else "chain hash")
     print(f"VERDICT: VERIFIED — {rep.independent_ok} independent witness(es) confirm this")
-    print("         chain hash existed and was attested outside ArkForge's control.")
+    print(f"         {covers} existed and was attested outside ArkForge's control.")
     return 0
 
 
