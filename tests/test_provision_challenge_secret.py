@@ -80,3 +80,25 @@ def test_secrets_successifs_differents():
     prov.provisionner(lire=a.lire, ecrire=a.ecrire)
     prov.provisionner(lire=b.lire, ecrire=b.ecrire)
     assert a.valeur != b.valeur
+
+
+class Hotes(Coffre):
+    pass
+
+
+def test_declarer_hotes_ecrit_quand_ca_change():
+    h = Hotes("")
+    r = prov.declarer_hotes("corpus.arkforge.tech", lire=h.lire, ecrire=h.ecrire)
+    assert r["changed"] is True and h.valeur == "corpus.arkforge.tech"
+
+
+def test_declarer_hotes_idempotent():
+    h = Hotes("corpus.arkforge.tech")
+    r = prov.declarer_hotes("corpus.arkforge.tech", lire=h.lire, ecrire=h.ecrire)
+    assert r["changed"] is False and h.ecritures == 0
+
+
+def test_declarer_hotes_dry_run_n_ecrit_pas():
+    h = Hotes("ancien.example")
+    r = prov.declarer_hotes("corpus.arkforge.tech", lire=h.lire, ecrire=h.ecrire, dry_run=True)
+    assert h.ecritures == 0 and r["would_write"] == "corpus.arkforge.tech"
