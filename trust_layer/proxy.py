@@ -39,8 +39,7 @@ from .proofs import sha256_hex, generate_proof_id, generate_proof, store_proof
 from .receipt import fetch_receipt
 from .persistence import load_json, save_json
 from .rate_limit import check_rate_limit
-from .timestamps import submit_hash
-from .rekor import submit_to_rekor
+from .batch_anchor import add_proof as add_proof_to_batch
 from .email_notify import send_proof_email, send_low_credits_email, send_credits_exhausted_email
 from .crypto import sign_proof
 
@@ -96,45 +95,19 @@ def _log_background_task(proof_id: str, task: str, status: str, detail: str = ""
 
 async def _post_proof_background(proof_id: str, proof_record: dict, chain_hash: str,
                                   verification_url: str, email: str, plan: str = ""):
-    """Background task: TSA + email — none of these block the client response."""
-    # RFC 3161 Timestamp (sync but run in thread to avoid blocking event loop)
-    try:
-        import base64 as _b64
-        loop = asyncio.get_running_loop()
-        from functools import partial
-        tsa_result = await loop.run_in_executor(None, partial(submit_hash, chain_hash, plan=plan))
-        if tsa_result:
-            tsr_bytes, tsa_provider = tsa_result
-            from .config import PROOFS_DIR
-            (PROOFS_DIR / f"{proof_id}.tsr").write_bytes(tsr_bytes)
-            proof_record["timestamp_authority"]["status"] = "verified"
-            proof_record["timestamp_authority"]["provider"] = tsa_provider
-            proof_record["timestamp_authority"]["tsr_base64"] = _b64.b64encode(tsr_bytes).decode("ascii")
-            store_proof(proof_id, proof_record)
-            logger.info("TSA timestamp verified for %s via %s", proof_id, tsa_provider)
-            _log_background_task(proof_id, "tsa", "success")
-        else:
-            _log_background_task(proof_id, "tsa", "failure", "all TSA servers failed")
-    except (OSError, ValueError, RuntimeError) as e:
-        logger.warning("TSA submit skipped: %s", e)
-        _log_background_task(proof_id, "tsa", "failure", str(e))
+    """Background task: queue for batch anchoring + email — neither blocks the client.
 
-    # Sigstore Rekor — transparency log (append-only public log)
+    Anchoring itself no longer happens here: the chain hash joins the pending
+    batch, and one TSA request plus one Rekor entry cover the whole batch when it
+    closes (see trust_layer.batch_anchor).
+    """
     try:
-        rekor_result = await asyncio.get_running_loop().run_in_executor(None, submit_to_rekor, chain_hash)
-        proof_record["transparency_log"] = rekor_result
-        store_proof(proof_id, proof_record)
-        status_label = rekor_result.get("status", "unknown")
-        logger.info("Rekor transparency log %s for %s", status_label, proof_id)
-        _log_background_task(proof_id, "rekor", status_label)
-    except Exception as e:
-        logger.warning("Rekor submit failed: %s", e)
-        proof_record["transparency_log"] = {"provider": "sigstore-rekor", "status": "failed", "error": "transparency log temporarily unavailable"}
-        try:
-            store_proof(proof_id, proof_record)
-        except Exception:
-            pass
-        _log_background_task(proof_id, "rekor", "failure", str(e))
+        loop = asyncio.get_running_loop()
+        descriptor = await loop.run_in_executor(None, add_proof_to_batch, proof_id, chain_hash, plan)
+        _log_background_task(proof_id, "batch_queue", "success", descriptor.get("batch_id"))
+    except (OSError, ValueError, RuntimeError) as e:
+        logger.warning("Batch queue failed for %s: %s", proof_id, e)
+        _log_background_task(proof_id, "batch_queue", "failure", str(e))
 
     # Email
     if email:
@@ -773,10 +746,14 @@ async def execute_proxy(
         "verification_url": verification_url,
         "verification_algorithm": "https://github.com/ark-forge/proof-spec/blob/main/SPEC.md#2-chain-hash-algorithm",
         "hashes": proof["hashes"],
+        "commitments": proof["commitments"],
+        "_commitment_nonces": proof["_commitment_nonces"],
+        "_chain_data": proof["_chain_data"],
         "parties": proof["parties"],
         "certification_fee": payment_data,
         "timestamp": timestamp,
-        "timestamp_authority": {"status": "submitted", "provider": "freetsa.org", "tsr_url": f"{TRUST_LAYER_BASE_URL}/v1/proof/{proof_id}/tsr"},
+        "timestamp_authority": {"status": "pending_batch", "tsr_url": f"{TRUST_LAYER_BASE_URL}/v1/proof/{proof_id}/tsr"},
+        "batch_anchor": {"status": "pending"},
         "identity_consistent": identity_consistent,
     }
     # Store upstream status for dispute resolution

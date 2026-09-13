@@ -327,19 +327,24 @@ class TestChainHashWithReceipt:
             seller="api.example.com",
         )
 
-    def test_chain_hash_with_receipt_is_v2(self):
-        """Proof with receipt_content_hash must be spec v2.1."""
+    def test_chain_hash_with_receipt_commits_to_it(self):
+        """Receipt evidence is one more committed field, not one more spec version.
+
+        Spec 2.1 existed to signal a different chain-hash preimage; under 3.0 the
+        preimage is per-field commitments, so the receipt is simply committed too.
+        """
         args = self._make_proof_args()
         proof = generate_proof(**args, receipt_content_hash="deadbeef" * 8)
-        assert proof["spec_version"] == SPEC_VERSION_RECEIPT
-        assert proof["spec_version"] == "2.1"
+        assert proof["spec_version"] == SPEC_VERSION == "3.0"
+        assert "receipt_content_hash" in proof["_chain_data"]
+        assert "receipt_content_hash" in proof["commitments"]
 
-    def test_chain_hash_without_receipt_is_v1(self):
-        """Proof without receipt_content_hash must be spec v1.2 (canonical JSON chain hash)."""
+    def test_chain_hash_without_receipt_is_the_same_spec(self):
+        """One spec version now: the committed field set is what differs."""
         args = self._make_proof_args()
         proof = generate_proof(**args)
-        assert proof["spec_version"] == SPEC_VERSION
-        assert proof["spec_version"] == "1.2"
+        assert proof["spec_version"] == SPEC_VERSION == "3.0"
+        assert "receipt_content_hash" not in proof["_chain_data"]
 
     def test_chain_hash_differs_with_receipt(self):
         """Adding receipt_content_hash must change the chain hash."""
@@ -348,16 +353,16 @@ class TestChainHashWithReceipt:
         proof_with = generate_proof(**args, receipt_content_hash="deadbeef" * 8)
         assert proof_without["hashes"]["chain"] != proof_with["hashes"]["chain"]
 
-    def test_chain_hash_without_receipt_unchanged(self):
-        """Chain hash without receipt must match the v1.2 canonical JSON formula exactly."""
+    def test_chain_hash_without_receipt_commits_to_exactly_these_fields(self):
+        """The committed field set is the spec 3.0 equivalent of the old formula."""
+        from trust_layer.commitments import commitments_root
         args = self._make_proof_args()
         proof = generate_proof(**args)
 
-        # Manually compute expected chain hash (v1.2 canonical JSON formula)
         from trust_layer.proofs import canonical_json
         req_hash = sha256_hex(canonical_json(args["request_data"]))
         resp_hash = sha256_hex(canonical_json(args["response_data"]))
-        chain_data = {
+        assert proof["_chain_data"] == {
             "request_hash": req_hash,
             "response_hash": resp_hash,
             "transaction_id": "pi_test",
@@ -365,9 +370,7 @@ class TestChainHashWithReceipt:
             "buyer_fingerprint": "abc123",
             "seller": "api.example.com",
         }
-        expected = sha256_hex(canonical_json(chain_data))
-
-        assert proof["_raw_chain_hash"] == expected
+        assert proof["_raw_chain_hash"] == commitments_root(proof["commitments"])
 
     def test_verify_integrity_with_receipt(self):
         """verify_proof_integrity must work with receipt-bearing proofs."""
@@ -385,6 +388,7 @@ class TestChainHashWithReceipt:
             "proof_id": "prf_test",
             "spec_version": proof["spec_version"],
             "hashes": proof["hashes"],
+            "commitments": proof["commitments"],
             "parties": proof["parties"],
             "certification_fee": proof["certification_fee"],
             "timestamp": proof["timestamp"],
@@ -535,7 +539,7 @@ class TestProxyIntegration:
         assert pe["receipt_content_hash"] is not None
         assert pe["receipt_content_hash"].startswith("sha256:")
         assert pe["verification_status"] == "fetched"
-        assert proof["spec_version"] == "2.1"
+        assert proof["spec_version"] == "3.0"
 
     def test_proxy_without_provider_payment_unchanged(self, client):
         api_key = self._setup_free_key(client)
@@ -565,7 +569,7 @@ class TestProxyIntegration:
         data = resp.json()
         proof = data.get("proof", {})
         assert proof.get("provider_payment") is None
-        assert proof["spec_version"] == "1.2"
+        assert proof["spec_version"] == "3.0"
 
     def test_public_proof_endpoint_includes_provider_payment(self, client):
         """Verify that GET /v1/proof/{proof_id} returns provider_payment."""

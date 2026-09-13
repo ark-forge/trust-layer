@@ -172,8 +172,13 @@ def test_no_header_preserves_identity(tmp_path):
 
 # --- 7. Chain hash unchanged with/without identity (backward compat) ---
 
-def test_chain_hash_unchanged_with_identity():
-    """Chain hash must be identical whether identity is provided or not."""
+def test_identity_is_not_part_of_the_chain_commitment():
+    """Identity stays out of the chain preimage, with or without it.
+
+    Since spec 3.0 two proofs over the same data never share a chain hash — each
+    field is committed under a fresh nonce — so the invariant is checked on the
+    committed field set, not on the hash.
+    """
     common = dict(
         request_data={"target": "https://example.com"},
         response_data={"result": "ok"},
@@ -185,7 +190,10 @@ def test_chain_hash_unchanged_with_identity():
     proof_without = generate_proof(**common)
     proof_with = generate_proof(**common, agent_identity="my-agent", agent_version="1.0")
 
-    assert proof_without["hashes"]["chain"] == proof_with["hashes"]["chain"]
+    assert set(proof_without["_chain_data"]) == set(proof_with["_chain_data"])
+    assert proof_without["_chain_data"] == proof_with["_chain_data"]
+    assert "agent_identity" not in proof_with["_chain_data"]
+    assert proof_with["parties"]["agent_identity"] == "my-agent"
 
 
 # --- 8. Integration: POST /v1/proxy with identity headers ---

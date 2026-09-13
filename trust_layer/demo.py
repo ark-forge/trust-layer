@@ -98,6 +98,9 @@ def build_demo_proof(target: str, payload: dict) -> dict:
             "#2-chain-hash-algorithm"
         ),
         "hashes": proof["hashes"],
+        "commitments": proof["commitments"],
+        "_commitment_nonces": proof["_commitment_nonces"],
+        "_chain_data": proof["_chain_data"],
         "parties": {
             "buyer_fingerprint": "",
             "seller": "demo",

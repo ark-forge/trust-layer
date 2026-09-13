@@ -57,6 +57,12 @@ def _isolate_data(tmp_path, monkeypatch):
     monkeypatch.setattr(proxy_mod, "ARKFORGE_PUBLIC_KEY", test_pubkey)
     monkeypatch.setattr(proxy_mod, "BACKGROUND_TASKS_LOG", tmp_path / "data" / "background_tasks_log.jsonl")
 
+    # Batch anchoring — isolate the pending batch state and the batch records
+    import trust_layer.batch_anchor as batch_mod
+    monkeypatch.setattr(batch_mod, "BATCHES_DIR", tmp_path / "data" / "batches")
+    monkeypatch.setattr(batch_mod, "PENDING_FILE", tmp_path / "data" / "batches" / "pending.json")
+    monkeypatch.setattr(batch_mod, "PROOFS_DIR", tmp_path / "proofs")
+
     # Patch credits module
     import trust_layer.credits as credits_mod
     monkeypatch.setattr(credits_mod, "API_KEYS_FILE", tmp_path / "data" / "api_keys.json")

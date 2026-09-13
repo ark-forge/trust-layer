@@ -7,7 +7,8 @@ machine, so the dependency floor is deliberately low.
 
     python3 verify_proof.py prf_20260303_161853_4d0904
     python3 verify_proof.py --file proof.json
-    python3 verify_proof.py --offline --file proof.json   # skip network witnesses
+    python3 verify_proof.py --offline --file proof.json       # skip network witnesses
+    python3 verify_proof.py --file proof.json --disclose d.json  # check disclosed fields
 
 What it checks, witness by witness:
 
@@ -17,14 +18,34 @@ What it checks, witness by witness:
   2. Ed25519 signature — ArkForge's own signature over the chain hash, checked
                          against the key published at /.well-known/did.json.
                          Proves ArkForge issued it. Still not independent.
-  3. RFC 3161          — a third-party Timestamp Authority signed the chain hash
-                         at a point in time. INDEPENDENT of ArkForge.
-  4. Sigstore Rekor    — the chain hash is in a public append-only log, with an
+  3. Batch anchor      — the chain hash is a leaf of the batch Merkle tree whose
+                         root was anchored. Self-consistency again, but it is what
+                         carries witnesses 4 and 5 down to this individual proof.
+  4. RFC 3161          — a third-party Timestamp Authority signed the anchored
+                         hash at a point in time. INDEPENDENT of ArkForge.
+  5. Sigstore Rekor    — the anchored hash is in a public append-only log, with an
                          inclusion proof against a signed checkpoint.
                          INDEPENDENT of ArkForge.
 
-Only 3 and 4 are witnesses ArkForge cannot forge. Exit code is 0 only if every
+Only 4 and 5 are witnesses ArkForge cannot forge. Exit code is 0 only if every
 applicable check passes.
+
+Spec 3.0 and selective disclosure
+---------------------------------
+From spec 3.0 the chain hash is the Merkle root of one commitment per field,
+``sha256(field || 0x00 || nonce || canonical_json(value))``. A third party
+recomputes it from the published commitments alone — no field value is needed,
+and none is exposed. That is what makes the anchored hash verifiable from the
+public proof, which it was not before.
+
+The proof owner can open any subset of fields out of band by handing over a JSON
+file of ``(field, nonce, value)`` triplets::
+
+    {"disclosed": {"seller": {"nonce": "<64 hex>", "value": "api.example.com"}}}
+
+Pass it with ``--disclose``. Each triplet is checked against the published
+commitment, so a disclosed value is provably the one that was anchored — while
+every undisclosed field stays hidden behind its own independent nonce.
 """
 
 import argparse
@@ -108,19 +129,108 @@ def strip_sha256(value):
 # by raw string concatenation. Spec 1.2 and 2.1 use canonical JSON, which removed the
 # preimage ambiguity of concatenation. Mirrors trust_layer/proofs.py:159.
 LEGACY_SPEC_VERSIONS = {"1.0", "1.1", "2.0", None}
+# Spec versions whose chain hash is the Merkle root of per-field commitments.
+COMMITMENT_SPEC_VERSIONS = {"3.0"}
 
 
 def _canonical_json(data):
     return json.dumps(data, sort_keys=True, separators=(",", ":"), default=str)
 
 
-def check_chain_hash(proof, rep):
+def _leaf_hash(data):
+    """RFC 6962 leaf hash: sha256(0x00 || data)."""
+    return hashlib.sha256(b"\x00" + data).digest()
+
+
+def _node_hash(left, right):
+    """RFC 6962 interior node: sha256(0x01 || left || right)."""
+    return hashlib.sha256(b"\x01" + left + right).digest()
+
+
+def _mth(leaves):
+    """RFC 6962 Merkle Tree Hash over already-hashed leaves.
+
+    The odd node is promoted, never duplicated: duplicating it (the Bitcoin
+    shape, CVE-2012-2459) lets two different leaf sets share a root.
+    """
+    if len(leaves) == 1:
+        return leaves[0]
+    k = 1
+    while k * 2 < len(leaves):
+        k *= 2
+    return _node_hash(_mth(leaves[:k]), _mth(leaves[k:]))
+
+
+def _commit(field, nonce_hex, value):
+    """sha256(field || 0x00 || nonce || canonical_json(value)) — spec 3.0 commitment."""
+    preimage = (field.encode("utf-8") + b"\x00" + bytes.fromhex(nonce_hex)
+                + _canonical_json(value).encode("utf-8"))
+    return hashlib.sha256(preimage).hexdigest()
+
+
+def check_commitments(proof, rep, disclosure):
+    """Spec 3.0: recompute the chain hash as the Merkle root of the commitments.
+
+    Needs no field value, so it works on the public proof — which is the whole
+    point of spec 3.0. Disclosed triplets, if any, are checked against the
+    commitments they claim to open.
+    """
+    expected = strip_sha256(proof.get("hashes", {}).get("chain"))
+    commitments = proof.get("commitments") or {}
+    if not commitments:
+        rep.add("chain hash", FAIL,
+                "spec 3.0 proof carries no commitments — nothing to recompute the chain hash from")
+        return expected
+    try:
+        leaves = [_leaf_hash(bytes.fromhex(strip_sha256(commitments[f]))) for f in sorted(commitments)]
+        computed = _mth(leaves).hex()
+    except ValueError as e:
+        rep.add("chain hash", FAIL, f"malformed commitment: {e}")
+        return expected
+
+    if computed != expected:
+        rep.add("chain hash", FAIL,
+                f"commitment root {computed[:16]}... != published chain {expected[:16]}...")
+        return expected
+    rep.add("chain hash", OK,
+            f"Merkle root of {len(commitments)} field commitments, recomputed from public "
+            "data alone (proves nothing on its own)")
+
+    disclosed = (disclosure or {}).get("disclosed") or {}
+    if not disclosed:
+        return expected
+    bad = []
+    for field, item in sorted(disclosed.items()):
+        commitment = strip_sha256(commitments.get(field) or "")
+        if not commitment:
+            bad.append(f"{field}: no such commitment in the proof")
+            continue
+        try:
+            recomputed = _commit(field, item["nonce"], item["value"])
+        except (KeyError, ValueError, TypeError) as e:
+            bad.append(f"{field}: unusable triplet ({e})")
+            continue
+        if recomputed != commitment:
+            bad.append(f"{field}: value does not match its commitment")
+    if bad:
+        rep.add("selective disclosure", FAIL, "; ".join(bad)[:300])
+    else:
+        rep.add("selective disclosure", OK,
+                f"{len(disclosed)} disclosed field(s) match their anchored commitment: "
+                + ", ".join(sorted(disclosed)))
+    return expected
+
+
+def check_chain_hash(proof, rep, disclosure=None):
     """Recompute the chain hash from the proof's own fields.
 
     Deliberately labelled 'self-consistency': it cannot detect a fabricated proof,
     only a corrupted one. It does establish one thing the anchors do not — that the
     anchored chain hash really covers the request and response hashes shown.
     """
+    if proof.get("spec_version") in COMMITMENT_SPEC_VERSIONS:
+        return check_commitments(proof, rep, disclosure)
+
     expected = strip_sha256(proof.get("hashes", {}).get("chain"))
     parties = proof.get("parties") or {}
     fee = proof.get("certification_fee") or {}
@@ -237,7 +347,57 @@ def check_ed25519(proof, chain_hex, rep, offline):
                 (r.stderr or b"").decode(errors="replace").strip()[:160] or "verification failed")
 
 
-# --- 3. RFC 3161 -------------------------------------------------------------
+# --- 3. batch anchor ---------------------------------------------------------
+
+def check_batch_anchor(proof, chain_hex, rep):
+    """Walk the inclusion proof from this chain hash up to the anchored batch root.
+
+    Returns the hash the external witnesses actually attest: the batch root when
+    the proof is anchored in a batch, the chain hash itself for a proof anchored
+    on its own (spec 2.1 and earlier).
+
+    A proof whose batch has not closed yet has no external anchor. That is
+    reported as pending, never as a failure: a waiting proof is not a tampered
+    one.
+    """
+    anchor = proof.get("batch_anchor")
+    if not anchor:
+        return chain_hex
+    if anchor.get("status") != "anchored":
+        rep.add("batch anchor", SKIP,
+                f"batch {anchor.get('batch_id') or '?'} has not closed yet — this proof "
+                "carries no external anchor at this point")
+        return None
+    root = strip_sha256(anchor.get("root"))
+    index, size = anchor.get("leaf_index"), anchor.get("tree_size")
+    path = anchor.get("audit_path") or []
+    if not root or not isinstance(index, int) or not isinstance(size, int) or size < 1:
+        rep.add("batch anchor", FAIL, "malformed batch anchor (root, leaf_index or tree_size)")
+        return None
+    if not 0 <= index < size:
+        rep.add("batch anchor", FAIL, f"leaf_index {index} out of range for tree size {size}")
+        return None
+    try:
+        leaf = _leaf_hash(bytes.fromhex(chain_hex))
+        computed, consumed = _merkle_root(leaf, index, size, path)
+    except ValueError as e:
+        rep.add("batch anchor", FAIL, f"malformed audit path: {e}")
+        return None
+    if computed.hex() != root:
+        rep.add("batch anchor", FAIL,
+                f"audit path leads to {computed.hex()[:16]}..., not to the claimed root {root[:16]}...")
+        return None
+    if consumed != len(path):
+        rep.add("batch anchor", FAIL,
+                f"audit path carries {len(path)} nodes, {consumed} used by a tree of size {size}")
+        return None
+    rep.add("batch anchor", OK,
+            f"leaf {index} of {size} in batch {anchor.get('batch_id')} — the anchored root "
+            "covers this chain hash")
+    return root
+
+
+# --- 4. RFC 3161 -------------------------------------------------------------
 
 def _system_ca_file():
     for c in SYSTEM_CA_CANDIDATES:
@@ -247,6 +407,9 @@ def _system_ca_file():
 
 
 def check_rfc3161(proof, chain_hex, rep, offline):
+    if chain_hex is None:
+        rep.add("RFC 3161 timestamp", SKIP, "nothing anchored yet for this proof")
+        return
     tsa = proof.get("timestamp_authority") or {}
     tsr_b64 = tsa.get("tsr_base64")
     provider = tsa.get("provider") or ""
@@ -294,14 +457,15 @@ def check_rfc3161(proof, chain_hex, rep, offline):
     out = (r.stdout or b"").decode(errors="replace")
     err = (r.stderr or b"").decode(errors="replace")
     if r.returncode == 0 and "Verification: OK" in out:
+        what = "batch root" if (proof.get("batch_anchor") or {}).get("status") == "anchored" else "chain hash"
         rep.add("RFC 3161 timestamp", OK,
-                f"{provider} signed this chain hash", independent=True)
+                f"{provider} signed this {what}", independent=True)
     else:
         rep.add("RFC 3161 timestamp", FAIL,
                 (out + " " + err).strip()[:200] or "verification failed")
 
 
-# --- 4. Rekor ----------------------------------------------------------------
+# --- 5. Rekor ----------------------------------------------------------------
 
 def _merkle_root(leaf, index, size, path_hashes):
     """RFC 6962 inclusion-proof walk. Returns (root, siblings_consumed).
@@ -337,6 +501,13 @@ def _verify_ecdsa(pubkey_pem_bytes, signature, message, rep_name, rep):
 
 
 def check_rekor(proof, chain_hex, rep, offline):
+    if chain_hex is None:
+        rep.add("Sigstore Rekor", SKIP, "nothing anchored yet for this proof")
+        return
+    return _check_rekor(proof, chain_hex, rep, offline)
+
+
+def _check_rekor(proof, chain_hex, rep, offline):
     tl = proof.get("transparency_log") or {}
     uuid = tl.get("uuid")
     if not uuid:
@@ -470,6 +641,9 @@ def main():
     ap.add_argument("--file", help="read the proof JSON from a local file instead")
     ap.add_argument("--offline", action="store_true",
                     help="skip every check that needs the network")
+    ap.add_argument("--disclose",
+                    help="JSON file of disclosed (field, nonce, value) triplets to check "
+                         "against the published commitments")
     args = ap.parse_args()
 
     if args.file:
@@ -485,11 +659,14 @@ def main():
 
     print(f"Proof {proof.get('proof_id')} — spec {proof.get('spec_version')}")
     print()
+    disclosure = json.loads(Path(args.disclose).read_text()) if args.disclose else None
+
     rep = Report()
-    chain_hex = check_chain_hash(proof, rep)
+    chain_hex = check_chain_hash(proof, rep, disclosure)
     check_ed25519(proof, chain_hex, rep, args.offline)
-    check_rfc3161(proof, chain_hex, rep, args.offline)
-    check_rekor(proof, chain_hex, rep, args.offline)
+    anchored_hex = check_batch_anchor(proof, chain_hex, rep)
+    check_rfc3161(proof, anchored_hex, rep, args.offline)
+    check_rekor(proof, anchored_hex, rep, args.offline)
 
     print()
     if rep.failed:

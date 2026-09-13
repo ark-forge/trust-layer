@@ -53,9 +53,13 @@ def test_generate_proof_chain():
     assert proof["hashes"]["response"].startswith("sha256:")
     assert proof["hashes"]["chain"].startswith("sha256:")
 
-    # Chain must be reproducible
+    # Chain must be reproducible — from the proof's own commitments, since spec 3.0
+    # draws a fresh nonce per field and per proof. Same data, different chain hash.
+    from trust_layer.commitments import commitments_root
     proof2 = generate_proof(request_data, response_data, payment_data, timestamp)
-    assert proof["hashes"]["chain"] == proof2["hashes"]["chain"]
+    assert proof["hashes"]["chain"] != proof2["hashes"]["chain"]
+    assert proof["hashes"]["chain"] == f"sha256:{commitments_root(proof['commitments'])}"
+    assert proof["_chain_data"] == proof2["_chain_data"]
 
 
 def test_store_and_load_proof():
@@ -144,7 +148,7 @@ def test_generate_proof_includes_spec_version():
         {"target": "https://example.com"}, {"result": "ok"},
         {"transaction_id": "pi_spec"}, "2026-02-26T10:00:00Z",
     )
-    assert proof.get("spec_version") == "1.2"
+    assert proof.get("spec_version") == "3.0"
 
 
 def test_chain_hash_canonical_json_no_preimage_ambiguity():
