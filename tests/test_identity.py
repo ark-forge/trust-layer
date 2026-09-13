@@ -172,12 +172,14 @@ def test_no_header_preserves_identity(tmp_path):
 
 # --- 7. Chain hash unchanged with/without identity (backward compat) ---
 
-def test_identity_is_not_part_of_the_chain_commitment():
-    """Identity stays out of the chain preimage, with or without it.
+def test_identity_is_part_of_the_chain_commitment():
+    """Spec 3.1 inverts the 3.0 invariant: the identity triple IS committed.
 
-    Since spec 3.0 two proofs over the same data never share a chain hash — each
-    field is committed under a fresh nonce — so the invariant is checked on the
-    committed field set, not on the hash.
+    Up to 3.0 this test asserted the opposite, and that was the defect written down
+    as an invariant: identity served publicly, committed nowhere, therefore rewritable
+    by the issuer after anchoring. The committed field set is the same either way —
+    an absent identity is a committed ``None`` — but the committed VALUES differ, so
+    two proofs that differ only by identity no longer share a chain preimage.
     """
     common = dict(
         request_data={"target": "https://example.com"},
@@ -190,10 +192,15 @@ def test_identity_is_not_part_of_the_chain_commitment():
     proof_without = generate_proof(**common)
     proof_with = generate_proof(**common, agent_identity="my-agent", agent_version="1.0")
 
+    # Same field set: the triple is always committed, present or not.
     assert set(proof_without["_chain_data"]) == set(proof_with["_chain_data"])
-    assert proof_without["_chain_data"] == proof_with["_chain_data"]
-    assert "agent_identity" not in proof_with["_chain_data"]
+    # Different values: identity now lands inside what the anchors cover.
+    assert proof_without["_chain_data"] != proof_with["_chain_data"]
+    assert proof_with["_chain_data"]["agent_identity"] == "my-agent"
+    assert proof_without["_chain_data"]["agent_identity"] is None
     assert proof_with["parties"]["agent_identity"] == "my-agent"
+    # agent_version stays out: it carries no claim the Index scores.
+    assert "agent_version" not in proof_with["_chain_data"]
 
 
 # --- 8. Integration: POST /v1/proxy with identity headers ---

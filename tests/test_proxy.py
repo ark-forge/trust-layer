@@ -315,7 +315,7 @@ async def test_execute_proxy_has_spec_version(test_api_key):
             api_key=test_api_key,
         )
 
-    assert result["proof"]["spec_version"] == "3.0"
+    assert result["proof"]["spec_version"] == "3.1"
 
 
 @pytest.mark.asyncio

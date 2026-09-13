@@ -112,7 +112,7 @@ def test_generated_proof_is_spec_3_and_self_verifies():
     proof = generate_proof({"t": 1}, {"r": "ok"},
                            {"transaction_id": "pi_x"}, "2026-09-13T10:00:00+00:00",
                            buyer_fingerprint="f" * 64, seller="api.example.com")
-    assert proof["spec_version"] == "3.0"
+    assert proof["spec_version"] == "3.1"
     assert proof["hashes"]["chain"] == f"sha256:{commitments_root(proof['commitments'])}"
     assert verify_proof_integrity(proof)
 

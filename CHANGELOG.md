@@ -6,6 +6,33 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.9.0] — 2026-09-13
+
+### Added
+- spec 3.1 : le bloc d'identité entre dans les champs engagés, toujours, un agent sans
+  identité l'engageant à `null`. Jusqu'à 3.0 il était servi publiquement et engagé nulle
+  part : hors racine Merkle, donc hors `hashes.chain`, hors signature Ed25519, donc hors
+  jeton RFC 3161 et hors Rekor. L'émetteur pouvait le réécrire après ancrage sans qu'aucun
+  témoin externe ne bouge
+- `identity_consistent` engagé avec eux : c'est un jugement sur l'identité, l'ancrer à
+  côté de ses trois voisins évite de reconstruire le même trou un champ plus à gauche
+- `disclosed` dans la vue publique : les nonces du bloc, publiés, pour que n'importe qui
+  ouvre l'identité et la recoupe avec l'engagement ancré
+- `verify_proof.py` : témoin « agent identity » distinct, et une ligne explicite sur une
+  preuve antérieure à 3.1 qui déclare une identité — le silence sur une affirmation non
+  adossée se lit comme un accord
+- vecteurs de conformité 13 et 14 de proof-spec 3.1
+
+### Fixed
+- les champs plats d'identité de la vue publique sont lus depuis la donnée engagée, plus
+  depuis `parties` : éditer `parties` ne change plus rien de ce qu'un lecteur voit
+
+### Changed
+- `agent_identity_verified` vaut `True` ou `None`, jamais `False`, normalisé une seule
+  fois à la source pour que la valeur engagée et la valeur servie ne puissent pas diverger
+
+---
+
 ## [1.8.2] — 2026-09-13
 
 ### Internal

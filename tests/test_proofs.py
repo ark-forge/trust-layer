@@ -148,7 +148,7 @@ def test_generate_proof_includes_spec_version():
         {"target": "https://example.com"}, {"result": "ok"},
         {"transaction_id": "pi_spec"}, "2026-02-26T10:00:00Z",
     )
-    assert proof.get("spec_version") == "3.0"
+    assert proof.get("spec_version") == "3.1"
 
 
 def test_chain_hash_canonical_json_no_preimage_ambiguity():

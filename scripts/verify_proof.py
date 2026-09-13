@@ -133,7 +133,12 @@ def strip_sha256(value):
 # preimage ambiguity of concatenation. Mirrors trust_layer/proofs.py:159.
 LEGACY_SPEC_VERSIONS = {"1.0", "1.1", "2.0", None}
 # Spec versions whose chain hash is the Merkle root of per-field commitments.
-COMMITMENT_SPEC_VERSIONS = {"3.0"}
+COMMITMENT_SPEC_VERSIONS = {"3.0", "3.1"}
+# Spec versions that commit the identity triple and publish its nonces, so any third
+# party opens it from the proof alone. Before 3.1 these three fields were served next
+# to the proof but covered by no anchor.
+IDENTITY_SPEC_VERSIONS = {"3.1"}
+IDENTITY_FIELDS = ("agent_identity", "agent_identity_verified", "did_resolution_status")
 
 
 def _canonical_json(data):
@@ -199,7 +204,10 @@ def check_commitments(proof, rep, disclosure):
             f"Merkle root of {len(commitments)} field commitments, recomputed from public "
             "data alone (proves nothing on its own)")
 
-    disclosed = (disclosure or {}).get("disclosed") or {}
+    # Spec 3.1 publishes the identity triple's nonces in the proof itself, so this
+    # opening needs no out-of-band material. An owner-supplied bundle adds to it.
+    disclosed = dict(proof.get("disclosed") or {})
+    disclosed.update((disclosure or {}).get("disclosed") or {})
     if not disclosed:
         return expected
     bad = []
@@ -224,6 +232,64 @@ def check_commitments(proof, rep, disclosure):
     return expected
 
 
+def check_identity(proof, rep, disclosed, commitments):
+    """Spec 3.1: is the agent identity shown the one the anchors cover?
+
+    Deliberately its own witness. The chain-hash line says the published commitments
+    reproduce the anchored root; this line says the identity VALUES served alongside
+    open those commitments. Before 3.1 the second half did not exist, and an Index
+    ranking agents on ``agent_identity_verified`` was ranking on the issuer's word.
+
+    What this establishes is non-repudiation, not third-party verification of the
+    binding itself: no public artefact proves the Ed25519 challenge-response ever
+    happened. It proves the issuer cannot change its mind after anchoring.
+    """
+    if proof.get("spec_version") not in IDENTITY_SPEC_VERSIONS:
+        claimed = proof.get("agent_identity") or proof.get("agent_identity_verified")
+        if not claimed:
+            return  # nothing claimed, nothing to say
+        rep.add("agent identity", SKIP,
+                f"{proof.get('agent_identity') or 'identity'} declared "
+                f"(verified={proof.get('agent_identity_verified')!r}) but spec "
+                f"{proof.get('spec_version')} predates 3.1: these fields are covered by "
+                "no anchor, the issuer can restate them at will — NOT evidence")
+        return
+    missing = [f for f in IDENTITY_FIELDS if f not in commitments]
+    if missing:
+        rep.add("agent identity", FAIL,
+                "spec 3.1 proof with no commitment for " + ", ".join(missing))
+        return
+    unopened = [f for f in IDENTITY_FIELDS if f not in disclosed]
+    if unopened:
+        rep.add("agent identity", FAIL,
+                "committed but not opened: " + ", ".join(unopened))
+        return
+    bad = []
+    for field in IDENTITY_FIELDS:
+        item = disclosed[field]
+        try:
+            recomputed = _commit(field, item["nonce"], item["value"])
+        except (KeyError, ValueError, TypeError) as e:
+            bad.append(f"{field}: unusable triplet ({e})")
+            continue
+        if recomputed != strip_sha256(commitments[field]):
+            bad.append(f"{field}: served value does not match its anchored commitment")
+    if bad:
+        rep.add("agent identity", FAIL, "; ".join(bad)[:300])
+        return
+    identity = disclosed["agent_identity"]["value"]
+    verified = disclosed["agent_identity_verified"]["value"]
+    status = disclosed["did_resolution_status"]["value"]
+    if verified is True:
+        rep.add("agent identity", OK,
+                f"{identity} — verified DID, status {status}; the issuer committed to "
+                "this before anchoring and cannot restate it")
+    else:
+        rep.add("agent identity", OK,
+                f"{identity or 'none declared'} — self-declared, NOT a verified DID "
+                f"(status {status}); anchored as such")
+
+
 def check_chain_hash(proof, rep, disclosure=None):
     """Recompute the chain hash from the proof's own fields.
 
@@ -231,6 +297,9 @@ def check_chain_hash(proof, rep, disclosure=None):
     only a corrupted one. It does establish one thing the anchors do not — that the
     anchored chain hash really covers the request and response hashes shown.
     """
+    disclosed = dict(proof.get("disclosed") or {})
+    disclosed.update((disclosure or {}).get("disclosed") or {})
+    check_identity(proof, rep, disclosed, proof.get("commitments") or {})
     if proof.get("spec_version") in COMMITMENT_SPEC_VERSIONS:
         return check_commitments(proof, rep, disclosure)
 
