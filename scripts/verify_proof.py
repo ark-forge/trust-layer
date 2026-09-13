@@ -138,7 +138,8 @@ COMMITMENT_SPEC_VERSIONS = {"3.0", "3.1"}
 # party opens it from the proof alone. Before 3.1 these three fields were served next
 # to the proof but covered by no anchor.
 IDENTITY_SPEC_VERSIONS = {"3.1"}
-IDENTITY_FIELDS = ("agent_identity", "agent_identity_verified", "did_resolution_status")
+IDENTITY_FIELDS = ("agent_identity", "agent_identity_verified", "did_resolution_status",
+                   "identity_consistent")
 
 
 def _canonical_json(data):

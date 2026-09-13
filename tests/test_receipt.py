@@ -376,6 +376,7 @@ class TestChainHashWithReceipt:
             "agent_identity": None,
             "agent_identity_verified": None,
             "did_resolution_status": None,
+            "identity_consistent": None,
         }
         assert proof["_raw_chain_hash"] == commitments_root(proof["commitments"])
 

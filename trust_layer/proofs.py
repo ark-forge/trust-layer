@@ -23,7 +23,11 @@ _COMMITMENT_SPEC_VERSIONS = {"3.0", "3.1"}
 # Spec 3.1: the identity triple joins the chain fields, so the anchors cover it.
 # Up to 3.0 it was served publicly but committed nowhere, which left the issuer
 # free to rewrite it after anchoring with every external witness still verifying.
-IDENTITY_FIELDS = ("agent_identity", "agent_identity_verified", "did_resolution_status")
+# ``identity_consistent`` sits here too: it is a judgment ON the identity, computed by
+# the proxy and served publicly. Anchoring its three neighbours and leaving it out would
+# rebuild the same hole one field to the left.
+IDENTITY_FIELDS = ("agent_identity", "agent_identity_verified", "did_resolution_status",
+                   "identity_consistent")
 _IDENTITY_SPEC_VERSIONS = {"3.1"}
 
 # These three are the only fields whose nonce is published. A commitment hides its
@@ -71,6 +75,7 @@ def generate_proof(
     agent_version: Optional[str] = None,
     agent_identity_verified: Optional[bool] = None,
     did_resolution_status: Optional[str] = None,
+    identity_consistent: Optional[bool] = None,
     upstream_timestamp: Optional[str] = None,
     receipt_content_hash: Optional[str] = None,
     provider_payment: Optional[dict] = None,
@@ -101,6 +106,7 @@ def generate_proof(
     chain_data["agent_identity"] = agent_identity
     chain_data["agent_identity_verified"] = identity_verified
     chain_data["did_resolution_status"] = did_resolution_status
+    chain_data["identity_consistent"] = identity_consistent
     # Spec 3.0: hashes.chain BECOMES the Merkle root of the per-field commitments.
     # Nothing that was public stops being public; what is public becomes sufficient.
     from .commitments import build_commitments
@@ -126,6 +132,7 @@ def generate_proof(
             "agent_version": agent_version,
         },
         "certification_fee": payment_data,
+        "identity_consistent": identity_consistent,
         "timestamp": timestamp,
         "_raw_request_hash": request_hash,
         "_raw_response_hash": response_hash,

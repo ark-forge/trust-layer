@@ -765,15 +765,8 @@ async def execute_proxy(
     buyer_fingerprint = sha256_hex(api_key)
     seller = target_domain
     proof_id = proof_id_for_debit
-    proof = generate_proof(request_data, response_data, payment_data, timestamp, buyer_fingerprint, seller,
-                           agent_identity=agent_identity, agent_version=agent_version,
-                           agent_identity_verified=agent_identity_verified,
-                           did_resolution_status=did_resolution_status,
-                           upstream_timestamp=upstream_timestamp,
-                           receipt_content_hash=receipt_content_hash,
-                           provider_payment=provider_payment_record)
-
-    # Compute identity_consistent flag
+    # identity_consistent is computed BEFORE the proof: spec 3.1 commits it, so it has to
+    # exist when the commitments are built. It depends on nothing the call produces.
     identity_consistent = None
     if agent_identity:
         if key_info.get("verified_did") and agent_identity == key_info["verified_did"]:
@@ -789,6 +782,15 @@ async def execute_proxy(
                 identity_consistent = False
             else:
                 identity_consistent = True
+
+    proof = generate_proof(request_data, response_data, payment_data, timestamp, buyer_fingerprint, seller,
+                           agent_identity=agent_identity, agent_version=agent_version,
+                           agent_identity_verified=agent_identity_verified,
+                           did_resolution_status=did_resolution_status,
+                           identity_consistent=identity_consistent,
+                           upstream_timestamp=upstream_timestamp,
+                           receipt_content_hash=receipt_content_hash,
+                           provider_payment=provider_payment_record)
 
     verification_url = f"{TRUST_LAYER_BASE_URL}/v1/proof/{proof_id}"
     proof_record = {

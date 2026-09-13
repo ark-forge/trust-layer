@@ -46,6 +46,69 @@ def _proof(**kw):
     return generate_proof(**base)
 
 
+def test_identity_consistent_is_committed_too():
+    """Same family as the triple, same defect if left out.
+
+    ``identity_consistent`` is a judgment ON the identity, computed by the proxy and
+    served publicly. Anchoring the three fields next to it and leaving it out would
+    rebuild the same hole one field to the left.
+    """
+    proof = _proof(identity_consistent=True)
+    assert "identity_consistent" in proof["commitments"]
+    assert verify_proof_integrity(proof) is True
+    proof["identity_consistent"] = False
+    proof["_chain_data"]["identity_consistent"] = False
+    assert verify_proof_integrity(proof) is False
+
+
+def test_identity_consistent_opens_publicly_and_cannot_be_restated():
+    proof = _proof(identity_consistent=False)
+    proof["identity_consistent"] = True          # what a restating issuer would edit
+    public = get_public_proof(proof)
+    assert public["identity_consistent"] is False
+    item = public["disclosed"]["identity_consistent"]
+    assert verify_disclosure("identity_consistent", item["nonce"], item["value"],
+                             public["commitments"]["identity_consistent"])
+
+
+def test_a_stored_and_reloaded_proof_still_opens():
+    """The nonces must survive the disk, or a third party gets 'committed but not opened'.
+
+    Every other check here runs on the in-memory record; production serves a reloaded
+    one. Writing in one shape and reading in another is the defect this repo has already
+    paid for twice.
+    """
+    import os
+    from trust_layer.config import PROOFS_DIR
+    from trust_layer.proofs import load_proof, store_proof
+    proof = dict(_proof(), proof_id="prf_roundtrip_anchoring")
+    store_proof("prf_roundtrip_anchoring", proof)
+    try:
+        back = load_proof("prf_roundtrip_anchoring")
+        assert verify_proof_integrity(back) is True
+        public = get_public_proof(back)
+        assert set(public["disclosed"]) == set(IDENTITY_FIELDS)
+        for field, item in public["disclosed"].items():
+            assert verify_disclosure(field, item["nonce"], item["value"],
+                                     public["commitments"][field])
+    finally:
+        os.remove(PROOFS_DIR / "prf_roundtrip_anchoring.json")
+
+
+def test_the_demo_path_produces_a_valid_3_1_proof():
+    """demo.py assembles its record by hand; it must not drift from generate_proof."""
+    import os
+    from trust_layer.config import PROOFS_DIR
+    from trust_layer.demo import build_demo_proof
+    record = build_demo_proof("https://example.com/api", {"q": 1})
+    try:
+        assert record["spec_version"] == SPEC_VERSION
+        assert verify_proof_integrity(record) is True
+        assert set(get_public_proof(record)["disclosed"]) == set(IDENTITY_FIELDS)
+    finally:
+        os.remove(PROOFS_DIR / f"{record['proof_id']}.json")
+
+
 def test_spec_version_is_3_1():
     assert SPEC_VERSION == "3.1"
     assert _proof()["spec_version"] == "3.1"

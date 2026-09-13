@@ -125,8 +125,7 @@ def test_chain_hash(vector):
             chain_data["receipt_content_hash"] = inp["receipt_content_hash"]
         if vector.get("spec_version") == "3.1":
             # The identity triple is always committed, a missing identity as null.
-            for field in ("agent_identity", "agent_identity_verified",
-                          "did_resolution_status"):
+            for field in IDENTITY_FIELDS:
                 chain_data[field] = inp[field]
         assert chain_data == expected["chain_data"], f"Committed field set drifted for {vector['name']}"
 
@@ -195,7 +194,7 @@ _IDENTITY_VECTORS = [v for v in _vectors_data["vectors"] if v.get("spec_version"
 @pytest.mark.parametrize(
     "vector", _IDENTITY_VECTORS, ids=[v["name"] for v in _IDENTITY_VECTORS],
 )
-def test_identity_triple_opens_from_published_nonces(vector):
+def test_identity_block_opens_from_published_nonces(vector):
     """Spec 3.1 section: the three identity nonces are public, so anyone opens them.
 
     This is the whole point of the version bump. If the published nonces stopped
