@@ -6,6 +6,58 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.8.0] — 2026-09-13
+
+### Added
+- spec 3.0 : `hashes.chain` devient la racine Merkle d'un engagement par champ,
+  `sha256(champ || 0x00 || nonce || canonical_json(valeur))`, nonce de 32 octets
+  frais par champ et par preuve. La preuve publique publie les engagements et
+  aucune valeur : le tiers recalcule le hash ancré sans que `transaction_id` ni
+  `buyer_fingerprint` soient exposés
+- divulgation sélective : `GET /v1/proof/{id}/full` rend `commitment_nonces` et
+  `chain_data` au propriétaire, `verify_proof.py --disclose` vérifie les triplets
+  (champ, nonce, valeur) contre les engagements publiés. Aucune route nouvelle
+- ancrage par lot : une requête RFC 3161 et une entrée Sigstore Rekor par lot
+  (100 preuves ou 10 min) sur la racine Merkle, au lieu d'une par preuve. Chaque
+  preuve embarque son chemin d'inclusion et les artefacts d'ancre
+- `trust_layer/merkle.py` : RFC 6962 pour les deux niveaux, croisé contre une
+  preuve d'inclusion Sigstore réelle
+- `batch_anchor` exposé sur `GET /v1/proof/{id}/verify`
+- `POST /v1/admin/batch/close` (X-Internal-Secret) : ancre le lot en attente sans
+  attendre la taille ni l'âge. Utilisé par le gate de déploiement, qui doit
+  observer un ancrage réel — un gate qui cesse de mesurer l'ancrage est un leurre
+- reprise au démarrage d'un lot interrompu en pleine fermeture : il est déplacé
+  dans `batches/closing/` avant l'ancrage et n'en sort qu'une fois les preuves
+  estampillées
+- page de preuve : état « ANCHORING IN PROGRESS » tant que le lot n'est pas fermé,
+  au lieu d'un « timestamp not yet available » qui se lit comme une panne
+
+### Changed
+- le lot est horodaté au plan le plus exigeant qu'il contient : une preuve
+  `platform` route tout le lot vers DigiCert. Le routage TSA par plan a quitté le
+  chemin par preuve avec l'ancrage par lot
+- `TRUST_LAYER_BASE` surchargeable dans `verify_proof.py`, pour jouer la
+  procédure telle quelle contre une autre instance
+- README, guide et quick-reference réécrits : le one-liner de vérification
+  publié recalculait la formule des valeurs et répondait `TAMPERED` sur une
+  preuve publique honnête
+
+### Internal
+- une preuve dont le lot n'est pas fermé est `pending` et le dit, jamais
+  `TAMPERED` ; un chemin d'inclusion invalide ne se confond plus avec une attente
+- `verify_proof.py` rend un verdict, jamais une trace Python, sur une preuve
+  malformée (chemin tronqué, entrée non hexadécimale, engagement absurde)
+- un `tree_size` surévalué est refusé : la longueur du chemin d'inclusion est
+  déterministe et se vérifie, là où le seul parcours atteint la vraie racine et
+  s'arrête tôt en validant une forme d'arbre qui n'a jamais existé
+- les nonces d'engagement ne sortent que par `/v1/proof/{id}/full` : les réponses
+  du proxy sont débarrassées des champs préfixés `_`
+- le lot en attente vit sur disque en écriture atomique et se ferme sur un tic de
+  fond indépendant du trafic
+- 724 tests (+90)
+
+---
+
 ## [1.7.2] — 2026-09-11
 
 ### Fixed

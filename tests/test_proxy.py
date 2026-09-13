@@ -315,7 +315,7 @@ async def test_execute_proxy_has_spec_version(test_api_key):
             api_key=test_api_key,
         )
 
-    assert result["proof"]["spec_version"] == "1.2"
+    assert result["proof"]["spec_version"] == "3.0"
 
 
 @pytest.mark.asyncio
@@ -609,3 +609,25 @@ async def test_execute_proxy_extra_headers_max_count(test_api_key):
 
     assert exc_info.value.code == "invalid_request"
     assert exc_info.value.status == 400
+
+
+# --- commitment nonces leave by exactly one door -----------------------------
+
+@pytest.mark.asyncio
+async def test_proxy_response_carries_no_commitment_nonces(test_api_key):
+    """The nonces are what hide every undisclosed field. Their one way out is
+    GET /v1/proof/{id}/full, not every proxy response and every client log."""
+    import json
+    mock_client = _mock_http_client()
+
+    with patch("httpx.AsyncClient", return_value=mock_client), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+        result = await execute_proxy(target="https://example.com/api", method="POST",
+                                     payload={}, amount=0.0, currency="eur",
+                                     api_key=test_api_key)
+
+    blob = json.dumps(result, default=str)
+    assert "_commitment_nonces" not in blob
+    assert "_chain_data" not in blob
+    assert result["proof"]["commitments"]              # the public half is still there
+    assert not [k for k in result["proof"] if k.startswith("_")]

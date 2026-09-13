@@ -293,26 +293,42 @@ No browser required after the initial subscription setup.
 
 ---
 
-## Verify a proof (bash)
+## Verify a proof
 
 ```bash
-# Independent chain hash recomputation
-curl -s https://trust.arkforge.tech/v1/proof/prf_xxx > proof.json
-
-REQUEST_HASH=$(jq -r '.hashes.request' proof.json | sed 's/sha256://')
-RESPONSE_HASH=$(jq -r '.hashes.response' proof.json | sed 's/sha256://')
-PAYMENT_ID=$(jq -r '.certification_fee.transaction_id' proof.json)
-TIMESTAMP=$(jq -r '.timestamp' proof.json)
-BUYER=$(jq -r '.parties.buyer_fingerprint' proof.json)
-SELLER=$(jq -r '.parties.seller' proof.json)
-UPSTREAM=$(jq -r '.upstream_timestamp // empty' proof.json)
-RECEIPT_HASH=$(jq -r '.provider_payment.receipt_content_hash // empty' proof.json | sed 's/sha256://')
-
-COMPUTED=$(echo -n "${REQUEST_HASH}${RESPONSE_HASH}${PAYMENT_ID}${TIMESTAMP}${BUYER}${SELLER}${UPSTREAM}${RECEIPT_HASH}" | sha256sum | cut -d' ' -f1)
-EXPECTED=$(jq -r '.hashes.chain' proof.json | sed 's/sha256://')
-
-[ "$COMPUTED" = "$EXPECTED" ] && echo "VERIFIED" || echo "TAMPERED"
+curl -sO https://raw.githubusercontent.com/ark-forge/trust-layer/main/scripts/verify_proof.py
+python3 verify_proof.py prf_xxx                          # all witnesses
+python3 verify_proof.py prf_xxx --disclose fields.json   # + disclosed fields
 ```
+
+Exit 0 only if every applicable check passes and at least one independent witness confirms
+the proof. A proof whose batch has not closed yet exits non-zero with
+`NOT INDEPENDENTLY VERIFIED` — wait for the batch, it is at most 10 minutes.
+
+### Self-consistency by hand (spec 3.0)
+
+The chain hash is the Merkle root of the published per-field commitments, so no field value
+is needed:
+
+```bash
+curl -s https://trust.arkforge.tech/v1/proof/prf_xxx > proof.json
+jq -r '.commitments'  proof.json    # published, one per chain field
+jq -r '.hashes.chain' proof.json    # their RFC 6962 Merkle root, fields sorted
+jq -r '.batch_anchor' proof.json    # inclusion proof down from the anchored batch root
+```
+
+Recomputing it proves consistency, not truth. The evidence is the RFC 3161 timestamp and the
+Rekor entry on the batch root — see the user guide for doing those by hand.
+
+### Disclose one field to a counterparty
+
+```bash
+curl -s -H "X-Api-Key: $KEY" https://trust.arkforge.tech/v1/proof/prf_xxx/full \
+  | jq '{disclosed: {seller: {nonce: .commitment_nonces.seller, value: .chain_data.seller}}}' \
+  > fields.json
+```
+
+Send `fields.json`. Every field left out stays hidden behind its own nonce.
 
 ---
 

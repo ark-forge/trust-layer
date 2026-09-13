@@ -205,7 +205,7 @@ async def test_proxy_triggers_low_credits_after_debit(real_pro_key):
                 return_value=(True, 0, True, "")), \
          upatch("trust_layer.proxy._notify_low_credits_if_needed") as mock_notify, \
          upatch("trust_layer.proxy.httpx.AsyncClient", return_value=mock_client), \
-         upatch("trust_layer.proxy.submit_hash"), \
+         upatch("trust_layer.proxy.add_proof_to_batch"), \
          upatch("trust_layer.proxy.send_proof_email"), \
          upatch("trust_layer.proxy._update_agent_profile"), \
          upatch("trust_layer.proxy._update_service_profile"), \

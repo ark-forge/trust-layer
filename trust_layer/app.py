@@ -405,6 +405,26 @@ def _log_proof_access(proof_id: str, ip: str, user_agent: str):
             logger.warning("ABUSE DETECTED: IP %s made %d proof requests in 1h (in-memory)", ip, len(_proof_access_counts[ip]))
 
 
+async def _batch_anchor_loop():
+    """Close the pending anchor batch on age, independent of traffic.
+
+    A batch opened at 23:00 must not stay unanchored until the next request in
+    the morning, so the clock runs here rather than on the request path.
+    """
+    from .batch_anchor import close_due_batch, BATCH_TICK_SECONDS
+    while True:
+        try:
+            await asyncio.sleep(BATCH_TICK_SECONDS)
+            record = await asyncio.get_running_loop().run_in_executor(None, close_due_batch)
+            if record:
+                logger.info("Batch %s anchored on age: %d proofs",
+                            record["batch_id"], record["tree_size"])
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("Batch anchor tick failed: %s", e)
+
+
 async def _recover_pending_tsa():
     """Startup task: retry TSA for recent proofs stuck in 'submitted' status."""
     import base64 as _b64
@@ -552,6 +572,17 @@ async def lifespan(app):
     # Startup — trial key maintenance (daily at 08:00 UTC)
     trial_task = asyncio.create_task(_trial_maintenance_loop())
     _track_task(trial_task)
+    # Startup — finish any batch a crash left mid-close, BEFORE the tick opens new ones
+    try:
+        from .batch_anchor import recover_closing_batches
+        n = await asyncio.get_running_loop().run_in_executor(None, recover_closing_batches)
+        if n:
+            logger.info("Recovered %d batch(es) left mid-close", n)
+    except Exception as e:
+        logger.error("Batch close recovery failed: %s", e)
+    # Startup — batch anchor tick (closes the pending batch on age)
+    batch_task = asyncio.create_task(_batch_anchor_loop())
+    _track_task(batch_task)
     yield
     # Shutdown — wait for active tasks to finish (10s grace)
     drained = await drain_background_tasks(timeout=10.0)
@@ -899,6 +930,12 @@ async def verify_proof_endpoint(proof_id: str):
         },
         "transparency_log": {
             "status": rekor.get("status", "none") if rekor else "none",
+        },
+        # A proof whose batch has not closed yet has no external anchor. Saying so
+        # is the difference between "wait" and "this proof is not trustworthy".
+        "batch_anchor": {
+            "status": (proof.get("batch_anchor") or {}).get("status", "none"),
+            "batch_id": (proof.get("batch_anchor") or {}).get("batch_id"),
         },
         "signature_present": sig is not None,
         "verification_url": f"{TRUST_LAYER_BASE_URL}/v1/proof/{proof_id}",

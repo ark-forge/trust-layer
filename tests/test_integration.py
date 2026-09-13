@@ -294,7 +294,7 @@ def test_proxy_full_flow_has_signature_and_spec(client, api_key):
 
     assert r.status_code == 200
     proof = r.json()["proof"]
-    assert proof["spec_version"] == "1.2"
+    assert proof["spec_version"] == "3.0"
     assert proof["arkforge_signature"].startswith("ed25519:")
     assert proof["arkforge_pubkey"].startswith("ed25519:")
     assert proof["upstream_timestamp"] == "Thu, 26 Feb 2026 17:00:00 GMT"
@@ -309,7 +309,7 @@ def test_proxy_full_flow_has_signature_and_spec(client, api_key):
     r2 = client.get(f"/v1/proof/{proof_id}")
     assert r2.status_code == 200
     public = r2.json()
-    assert public["spec_version"] == "1.2"
+    assert public["spec_version"] == "3.0"
     assert public["arkforge_signature"].startswith("ed25519:")
     assert public["upstream_timestamp"] == "Thu, 26 Feb 2026 17:00:00 GMT"
 
@@ -834,6 +834,36 @@ def test_proof_full_returns_payment(client, api_key):
     assert data["parties"]["buyer_fingerprint"] != ""
 
 
+def test_proof_full_gives_the_owner_the_disclosure_material(client, api_key):
+    """The owner gets the nonces over HTTP — that is the whole disclosure mechanism.
+
+    No /disclose endpoint: with (field, nonce, value) in hand, the owner opens any
+    single field to a counterparty out of band, and the published commitment is
+    what the counterparty checks it against.
+    """
+    from trust_layer.commitments import verify_disclosure
+    mock_http = _mock_http_client()
+    with patch("httpx.AsyncClient", return_value=mock_http), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+        r = client.post(
+            "/v1/proxy",
+            json={"target": "https://example.com/api", "payload": {}},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+    proof_id = r.json()["proof"]["proof_id"]
+
+    full = client.get(f"/v1/proof/{proof_id}/full",
+                      headers={"Authorization": f"Bearer {api_key}"}).json()
+    public = client.get(f"/v1/proof/{proof_id}").json()
+
+    assert set(full["commitment_nonces"]) == set(public["commitments"])
+    for field, nonce in full["commitment_nonces"].items():
+        assert verify_disclosure(field, nonce, full["chain_data"][field],
+                                 public["commitments"][field])
+    # and the public proof still carries none of it
+    assert "commitment_nonces" not in public and "chain_data" not in public
+
+
 # ---------------------------------------------------------------------------
 # Platform plan — TSA routing E2E
 # ---------------------------------------------------------------------------
@@ -856,50 +886,56 @@ def test_platform_key_plan_detection(platform_key):
 
 
 def test_platform_proxy_call_routes_tsa_to_digicert(client, platform_key):
-    """E2E: proxy call with Platform key → background task calls submit_hash(plan='platform')
-    → first TSA attempt must be DigiCert, not FreeTSA."""
+    """E2E: a Platform key's proof carries its plan into the batch, and the batch
+    is timestamped at the most demanding plan it contains — DigiCert, not FreeTSA.
+
+    Since batch anchoring, the plan is no longer a per-proof TSA call: one request
+    covers the batch, so the routing decision moved to batch close.
+    """
+    import trust_layer.batch_anchor as ba
     mock_http = _mock_http_client()
     tsa_plans_seen = []
-
-    original_submit = __import__("trust_layer.timestamps", fromlist=["submit_hash"]).submit_hash
 
     def capture_submit_hash(hash_hex, plan=""):
         tsa_plans_seen.append(plan)
         return (b"\x30\x82\x00\x01", "digicert.com")
 
     with patch("httpx.AsyncClient", return_value=mock_http), \
-         patch("trust_layer.proxy.submit_hash", side_effect=capture_submit_hash), \
-         patch("trust_layer.proxy.submit_to_rekor", return_value={"status": "anchored"}), \
+         patch("trust_layer.timestamps.submit_hash", side_effect=capture_submit_hash), \
+         patch("trust_layer.batch_anchor._anchor_rekor", return_value={"status": "anchored"}), \
          patch("trust_layer.proxy._log_background_task"):
         r = client.post(
             "/v1/proxy",
             json={"target": "https://example.com/api", "payload": {"input": "test"}},
             headers={"X-Api-Key": platform_key},
         )
+        assert r.status_code == 200, f"Proxy call failed: {r.json()}"
+        ba.close_batch()
 
-    assert r.status_code == 200, f"Proxy call failed: {r.json()}"
     assert tsa_plans_seen == ["platform"], \
-        f"Expected submit_hash called with plan='platform', got: {tsa_plans_seen}"
+        f"Expected the batch timestamped with plan='platform', got: {tsa_plans_seen}"
 
 
 def test_platform_proof_records_digicert_provider(client, platform_key):
-    """E2E: proof stored on disk must show tsa_provider='digicert.com' for Platform key."""
+    """E2E: once its batch closes, the proof on disk shows tsa_provider='digicert.com'."""
+    import trust_layer.batch_anchor as ba
     from trust_layer.proofs import load_proof
 
     mock_http = _mock_http_client()
 
     with patch("httpx.AsyncClient", return_value=mock_http), \
-         patch("trust_layer.proxy.submit_hash", return_value=(b"\x30\x82\x00\x01", "digicert.com")), \
-         patch("trust_layer.proxy.submit_to_rekor", return_value={"status": "anchored"}), \
+         patch("trust_layer.timestamps.submit_hash", return_value=(b"\x30\x82\x00\x01", "digicert.com")), \
+         patch("trust_layer.batch_anchor._anchor_rekor", return_value={"status": "anchored"}), \
          patch("trust_layer.proxy._log_background_task"):
         r = client.post(
             "/v1/proxy",
             json={"target": "https://example.com/api", "payload": {}},
             headers={"X-Api-Key": platform_key},
         )
+        assert r.status_code == 200
+        proof_id = r.json()["proof"]["proof_id"]
+        ba.close_batch()
 
-    assert r.status_code == 200
-    proof_id = r.json()["proof"]["proof_id"]
     proof = load_proof(proof_id)
     assert proof is not None
     tsa_provider = proof.get("timestamp_authority", {}).get("provider", "")

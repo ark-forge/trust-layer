@@ -10,11 +10,14 @@ from typing import Optional
 from .config import PROOFS_DIR
 from .persistence import save_json, load_json
 
-SPEC_VERSION = "1.2"          # canonical_json chain hash (fixed preimage ambiguity)
-SPEC_VERSION_RECEIPT = "2.1"  # canonical_json chain hash + receipt evidence
+SPEC_VERSION = "3.0"          # per-field commitments, chain hash = their Merkle root
+SPEC_VERSION_VALUES = "1.2"   # canonical_json over the values themselves (pre-3.0)
+SPEC_VERSION_RECEIPT = "2.1"  # same, with receipt evidence
 
 # Legacy spec versions that used concatenation — still verified for backward compat
 _LEGACY_SPEC_VERSIONS = {"1.0", "1.1", "2.0", None}
+# Spec versions whose chain hash is the Merkle root of per-field commitments.
+_COMMITMENT_SPEC_VERSIONS = {"3.0"}
 
 
 def canonical_json(data: dict) -> str:
@@ -69,13 +72,17 @@ def generate_proof(
         chain_data["upstream_timestamp"] = upstream_timestamp
     if receipt_content_hash:
         chain_data["receipt_content_hash"] = receipt_content_hash
-    chain_hash = sha256_hex(canonical_json(chain_data))
-
-    # Spec version: 2.0 if receipt evidence is included, 1.1 otherwise
-    spec_version = SPEC_VERSION_RECEIPT if receipt_content_hash else SPEC_VERSION
+    # Spec 3.0: hashes.chain BECOMES the Merkle root of the per-field commitments.
+    # Nothing that was public stops being public; what is public becomes sufficient.
+    from .commitments import build_commitments
+    commitments, commitment_nonces, chain_hash = build_commitments(chain_data)
+    spec_version = SPEC_VERSION
 
     result = {
         "spec_version": spec_version,
+        "commitments": commitments,
+        "_commitment_nonces": commitment_nonces,
+        "_chain_data": chain_data,
         "hashes": {
             "request": f"sha256:{request_hash}",
             "response": f"sha256:{response_hash}",
@@ -150,6 +157,28 @@ def verify_proof_integrity(proof: dict) -> bool:
     spec_version = proof.get("spec_version")
     upstream_timestamp = proof.get("upstream_timestamp")
 
+    if spec_version in _COMMITMENT_SPEC_VERSIONS:
+        from .commitments import commitments_root, verify_disclosure
+        commitments = proof.get("commitments") or {}
+        if not commitments:
+            return False
+        try:
+            if commitments_root(commitments) != expected_chain:
+                return False
+        except ValueError:
+            return False
+        # Internally we hold the nonces and the values, so check every commitment too.
+        # A third party holds neither and stops at the root, which is the point.
+        nonces = proof.get("_commitment_nonces") or {}
+        chain_data = proof.get("_chain_data")
+        if nonces and chain_data is not None:
+            if set(nonces) != set(commitments) or set(chain_data) != set(commitments):
+                return False
+            for field, commitment in commitments.items():
+                if not verify_disclosure(field, nonces[field], chain_data[field], commitment):
+                    return False
+        return True
+
     # Receipt content hash (spec v2.0+)
     pe = proof.get("provider_payment") or {}
     receipt_content_hash = pe.get("receipt_content_hash", "")
@@ -183,6 +212,17 @@ def verify_proof_integrity(proof: dict) -> bool:
     return computed_chain == expected_chain
 
 
+def strip_private(proof_record: dict) -> dict:
+    """Drop the underscore-prefixed working fields before a record leaves the process.
+
+    The owner already holds their proof, so this is not a disclosure boundary — but
+    the commitment nonces are what keep every undisclosed field hidden, and they
+    have exactly one deliberate way out: GET /v1/proof/{id}/full. Shipping them in
+    every proxy response would scatter them through client logs instead.
+    """
+    return {k: v for k, v in proof_record.items() if not k.startswith("_")}
+
+
 def get_public_proof(proof: dict) -> dict:
     """Return proof data safe for public access.
 
@@ -196,6 +236,8 @@ def get_public_proof(proof: dict) -> dict:
         "is_demo": is_demo,
         "spec_version": proof.get("spec_version"),
         "hashes": proof.get("hashes"),
+        "commitments": proof.get("commitments"),
+        "batch_anchor": proof.get("batch_anchor"),
         "timestamp_authority": proof.get("timestamp_authority"),
         "timestamp": proof.get("timestamp"),
         "upstream_timestamp": proof.get("upstream_timestamp"),
@@ -248,4 +290,9 @@ def get_full_proof(proof: dict) -> dict:
     result["provider_payment"] = proof.get("provider_payment")
     result["buyer_reputation_score"] = proof.get("buyer_reputation_score")
     result["buyer_profile_url"] = proof.get("buyer_profile_url")
+    # Selective disclosure material: the owner hands (field, nonce, value) triplets
+    # out of band to whoever they choose. No dedicated endpoint, no signed bundle.
+    if proof.get("_commitment_nonces"):
+        result["commitment_nonces"] = proof.get("_commitment_nonces")
+        result["chain_data"] = proof.get("_chain_data")
     return result

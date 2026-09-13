@@ -67,6 +67,11 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
     dispute_id = proof.get("dispute_id")
 
     ots_status = ots.get("status", "unknown")
+    # Anchoring is per batch: between issuance and batch close a proof genuinely has
+    # no external witness. Saying "not yet available" there reads as a defect; the
+    # page says what it is and when it ends.
+    batch_anchor = proof.get("batch_anchor") or {}
+    awaiting_batch = batch_anchor.get("status") == "pending"
     seller = _esc(parties.get("seller", ""))
     agent_identity = parties.get("agent_identity")
     initiated_by = _esc(agent_identity) if agent_identity else "Software agent"
@@ -81,6 +86,15 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
         verdict_icon = "\u26a0\ufe0f"
         verdict_text = "INTEGRITY CHECK FAILED"
         verdict_sub = "The chain hash does not match. This proof may have been tampered with."
+    elif awaiting_batch:
+        verdict_bg = "#1e293b"
+        verdict_border = "#f59e0b"
+        verdict_icon = "\u23f3"
+        verdict_text = "ANCHORING IN PROGRESS"
+        verdict_sub = ("Chain hash issued and signed. Its external anchors \u2014 RFC 3161 "
+                       "timestamp and Sigstore Rekor entry \u2014 cover a batch of proofs "
+                       "and land within 10 minutes. Until then this page shows what "
+                       "ArkForge alone attests.")
     elif ots_status == "verified":
         verdict_bg = "#052e16"
         verdict_border = "#22c55e"
@@ -121,6 +135,8 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
     ots_color = "#22c55e" if ots_status == "verified" else "#f59e0b"
     if ots_status == "verified":
         ots_label = "certified timestamp confirms date cannot be altered"
+    elif awaiting_batch:
+        ots_label = "anchoring in progress \u2014 proofs are anchored in batches, within 10 minutes"
     else:
         ots_label = "timestamp not yet available"
 
@@ -135,6 +151,9 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
     elif rekor_status == "verified":
         rekor_label = "immutably anchored in Sigstore public log"
         rekor_witness_desc = "anchored in public log"
+    elif awaiting_batch:
+        rekor_label = "anchoring in progress \u2014 one public log entry covers the whole batch"
+        rekor_witness_desc = "anchoring within 10 minutes"
     else:
         rekor_label = "transparency log not yet available"
         rekor_witness_desc = "not yet available"

@@ -497,7 +497,7 @@ result = response.json()
 proof = result['proof']
 
 print(f"Proof ID: {proof['proof_id']}")
-print(f"Spec version: {proof['spec_version']}")  # → 2.0
+print(f"Spec version: {proof['spec_version']}")  # → 3.0
 
 provider_payment = proof['provider_payment']
 print(f"Receipt hash: {provider_payment['receipt_content_hash']}")
@@ -755,16 +755,20 @@ python3 verify_proof.py prf_20260303_161853_4d0904
 ```
 
 ```
-[ SKIP ] chain hash: preimage not published (parties.buyer_fingerprint,
-         certification_fee.transaction_id) — binding of request/response to the
-         anchored chain hash is not third-party verifiable
-[  OK  ] Ed25519 (ArkForge): valid — but the signer is the issuer, not a third party
-[  OK  ] RFC 3161 timestamp: freetsa.org signed this chain hash  [independent]
-[  OK  ] Sigstore Rekor: chain hash in the public log at index 1018479057, inclusion
-         proof and checkpoint valid  [independent]
+Proof prf_20260913_140000_aa0000 — spec 3.0
 
-VERDICT: VERIFIED — 2 independent witness(es) confirm this chain hash existed and was
-         attested outside ArkForge's control.
+[  OK  ] chain hash: Merkle root of 6 field commitments, recomputed from public data
+         alone (proves nothing on its own)
+[  OK  ] Ed25519 (ArkForge): valid — but the signer is the issuer, not a third party
+[  OK  ] batch anchor: leaf 0 of 4 in batch batch_20260913_132956_516 — the anchored
+         root covers this chain hash
+[  OK  ] RFC 3161 timestamp: freetsa.org signed this batch root  [independent]
+[  OK  ] Sigstore Rekor: batch root in the public log at index 2818228683, inclusion
+         proof and checkpoint valid; submitted by ArkForge's published key  [independent]
+
+VERDICT: VERIFIED — 2 independent witness(es) confirm this
+         batch root covering this chain hash existed and was attested outside
+         ArkForge's control.
 ```
 
 It exits non-zero if any check fails. Read the script before running it — it is deliberately
@@ -776,18 +780,123 @@ short, and a verification tool you have not read is just another party to trust.
 |---|---|---|
 | 1 | Chain hash recomputation | **Yes** — whoever fabricates a proof produces coherent hashes. Self-consistency only. |
 | 2 | Ed25519 signature | **Yes** — the signer is ArkForge. It proves issuance, not truth. |
-| 3 | RFC 3161 timestamp | **No** — an independent Timestamp Authority signed this hash at a point in time. |
-| 4 | Sigstore Rekor entry | **No** — the hash is in a public append-only log operated by the OpenSSF. |
+| 3 | Batch inclusion proof | **Yes** — self-consistency again, but it is what carries witnesses 4 and 5 down to this individual proof. |
+| 4 | RFC 3161 timestamp | **No** — an independent Timestamp Authority signed this hash at a point in time. |
+| 5 | Sigstore Rekor entry | **No** — the hash is in a public append-only log operated by the OpenSSF. |
 
-Only 3 and 4 are evidence against the issuer. A proof carrying neither is not a receipt,
-whatever the other two say.
+Only 4 and 5 are evidence against the issuer. A proof carrying neither is not a receipt,
+whatever the other three say.
+
+### The chain hash is a commitment root (spec 3.0)
+
+`hashes.chain` is the Merkle root of one commitment per chain field:
+
+```
+commitment = sha256(field_name || 0x00 || nonce || canonical_json(value))
+hashes.chain = RFC 6962 Merkle root of those commitments, fields in sorted order
+```
+
+Each field gets its own fresh 32-byte nonce, drawn per proof. So the public proof can
+publish every commitment without publishing a single value, and you recompute the anchored
+chain hash from public data alone:
+
+```bash
+curl -s https://trust.arkforge.tech/v1/proof/prf_xxx > proof.json
+jq -r '.commitments' proof.json        # what is published
+jq -r '.hashes.chain' proof.json       # their Merkle root
+```
+
+Before spec 3.0 the chain hash was computed over the values themselves, and the public proof
+redacts the transaction id and the buyer fingerprint — so a third party could not recompute
+it at all. That gap is closed, and closing it published nothing new.
+
+Proofs issued before spec 3.0 keep their own algorithm: raw concatenation up to spec 1.1,
+SHA-256 of canonical JSON for 1.2 and 2.1. `spec_version` says which applies and
+`verify_proof.py` handles all three.
+
+### Selective disclosure
+
+You hold the nonces. `GET /v1/proof/{id}/full` (your API key, your proof) returns them
+alongside the committed values:
+
+```json
+{
+  "commitment_nonces": {"seller": "d5908a0c…", "transaction_id": "7b31…"},
+  "chain_data": {"seller": "api.example.com", "transaction_id": "pi_3Pxxxx"}
+}
+```
+
+To prove one field to a counterparty without revealing the others, hand them that field's
+`(nonce, value)` pair — by email, in a dispute filing, in a contract annex, however you like.
+There is no disclosure endpoint and no signed bundle: the commitment is already anchored, so
+the pair alone is the proof.
+
+```json
+{"disclosed": {"seller": {"nonce": "d5908a0c…", "value": "api.example.com"}}}
+```
+
+```bash
+python3 verify_proof.py prf_xxx --disclose disclosure.json
+[  OK  ] selective disclosure: 1 disclosed field(s) match their anchored commitment: seller
+```
+
+A forged value is refused, and so is a nonce moved to another field — the field name is part
+of the preimage:
+
+```
+[ FAIL ] selective disclosure: seller: value does not match its commitment
+```
+
+Every field you do not disclose stays behind its own independent nonce: opening one tells a
+third party nothing about the others, not even about a low-entropy one such as an amount.
+
+### Anchoring is per batch, not per proof
+
+Chain hashes accumulate in a batch. The batch closes after 100 proofs or 10 minutes,
+whichever comes first, and **one** RFC 3161 request plus **one** Sigstore Rekor entry cover
+its Merkle root. Rekor is a public good operated by the OpenSSF; one permanent entry per
+transaction is not ours to write into it.
+
+Each proof then carries its own inclusion proof down from that root:
+
+```json
+"batch_anchor": {
+  "status": "anchored",
+  "batch_id": "batch_20260913_132956_516",
+  "leaf_index": 0,
+  "tree_size": 4,
+  "audit_path": ["…", "…"],
+  "root": "sha256:18748b6c…"
+}
+```
+
+The anchor artefacts — the RFC 3161 token, the Rekor entry reference, the audit path — are
+embedded in every proof. You need nothing but the proof itself to verify it; there is no
+batch endpoint to fetch and trust.
+
+**Between issuance and batch close, a proof has no external anchor.** That window is at most
+ten minutes and the proof says so: `batch_anchor.status` is `pending`, and both
+`GET /v1/proof/{id}/verify` and `verify_proof.py` report it as waiting, never as tampered.
+
+```
+[ SKIP ] batch anchor: batch batch_xxx has not closed yet — this proof carries no
+         external anchor at this point
+
+VERDICT: NOT INDEPENDENTLY VERIFIED — nothing here that ArkForge could not have
+         produced on its own. Self-consistency is not a receipt.
+```
+
+That verdict is correct, not a bug: a proof still waiting for its batch genuinely has no
+third-party witness yet. Wait for the batch, then verify.
 
 ### Doing it by hand
 
 The two independent witnesses, step by step. Each has one detail you cannot guess from
-the proof alone, which is why they are written out here.
+the proof alone, which is why they are written out here. Both apply to the **batch root**
+when `batch_anchor.status` is `anchored`, and to the chain hash itself for proofs issued
+before batching.
 
-**RFC 3161.** The timestamped artefact is the chain hash **decoded to its 32 raw bytes**,
+**RFC 3161.** The timestamped artefact is the anchored hash **decoded to its 32 raw bytes**,
 not the hex string. The certificates depend on the issuer: `timestamp_authority.provider`
 records which TSA actually signed, since the pool fails over across FreeTSA, DigiCert and
 Sectigo. FreeTSA's root is self-signed and must be fetched from FreeTSA; DigiCert and
@@ -797,28 +906,28 @@ Sectigo are in your system trust store and their tokens carry their own chain.
 curl -s https://trust.arkforge.tech/v1/proof/prf_xxx > proof.json
 jq -r '.timestamp_authority.provider' proof.json          # which TSA signed
 jq -r '.timestamp_authority.tsr_base64' proof.json | base64 -d > token.tsr
-jq -r '.hashes.chain' proof.json | sed 's/sha256://' | xxd -r -p > chain.bin
+# the anchored artefact: batch root if batched, chain hash otherwise
+jq -r '.batch_anchor.root // .hashes.chain' proof.json | sed 's/sha256://' | xxd -r -p > anchored.bin
 
 # freetsa.org:
 curl -sO https://freetsa.org/files/cacert.pem
 curl -sO https://freetsa.org/files/tsa.crt
-openssl ts -verify -data chain.bin -in token.tsr -CAfile cacert.pem -untrusted tsa.crt
+openssl ts -verify -data anchored.bin -in token.tsr -CAfile cacert.pem -untrusted tsa.crt
 
 # digicert.com or sectigo.com:
-openssl ts -verify -data chain.bin -in token.tsr -CAfile /etc/ssl/certs/ca-certificates.crt
+openssl ts -verify -data anchored.bin -in token.tsr -CAfile /etc/ssl/certs/ca-certificates.crt
 ```
 
-**Sigstore Rekor.** Rekor receives `sha256(chain_hash_hex)` — the SHA-256 of the chain hash
-**hex string**, not the chain hash itself. Checking that the entry exists is not enough:
-an entry exists for every artefact anybody ever logged. What matters is that *this* entry
-covers *this* chain hash.
+**Sigstore Rekor.** Rekor receives `sha256(anchored_hash_hex)` — the SHA-256 of the hex
+string, not of the hash itself. Checking that the entry exists is not enough: an entry exists
+for every artefact anybody ever logged. What matters is that *this* entry covers *this* root.
 
 ```bash
 UUID=$(jq -r '.transparency_log.uuid' proof.json)
 curl -s "https://rekor.sigstore.dev/api/v1/log/entries/$UUID" > entry.json
 
-# the logged artefact must be this proof's chain hash
-jq -r '.hashes.chain' proof.json | sed 's/sha256://' | tr -d '\n' | sha256sum
+# the logged artefact must be this proof's anchored hash
+jq -r '.batch_anchor.root // .hashes.chain' proof.json | sed 's/sha256://' | tr -d '\n' | sha256sum
 jq -r '.[].body' entry.json | base64 -d | jq -r '.spec.data.hash.value'
 ```
 
@@ -826,28 +935,16 @@ jq -r '.[].body' entry.json | base64 -d | jq -r '.spec.data.hash.value'
 signed entry timestamp against the log's public key, and the RFC 6962 inclusion proof against
 the log's signed checkpoint. An entry without a valid inclusion proof is a claim, not a log.
 
+**Batch inclusion.** The walk from your chain hash to the anchored root is RFC 6962 as well:
+leaves are `sha256(0x00 || chain_hash_bytes)`, interior nodes `sha256(0x01 || left || right)`,
+and an odd node is promoted rather than duplicated. `verify_proof.py` does this walk and
+refuses a path that reaches another root, a wrong `leaf_index`, or a path carrying more
+siblings than the tree shape uses.
+
 **Attribution.** The key that submits to Rekor is published at `GET /v1/pubkey` as
 `rekor_pubkey`. Compare it with `spec.signature.publicKey.content` in the entry. If they
 differ, the entry is somebody else's — a valid log entry attributed to the wrong party
 proves nothing.
-
-### Known limit: the chain hash preimage is not published
-
-`hashes.chain` is what both independent witnesses attest. It is computed over the request
-hash, the response hash, the certification transaction id, the timestamp, the buyer
-fingerprint and the seller. The public proof **redacts the transaction id and the buyer
-fingerprint**, so a third party cannot recompute it and therefore cannot confirm that the
-anchored hash is the one covering the request and response shown.
-
-What a third party can establish today: this chain hash existed at a given time and is in a
-public log. What they cannot: that it corresponds to these request and response hashes. The
-verifier reports that gap as `SKIP` rather than passing over it. Closing it requires
-publishing the preimage, which exposes the certification transaction id — a deliberate
-trade-off, not an oversight.
-
-For proofs issued before spec 1.2, the chain hash was a raw concatenation of those fields;
-from 1.2 onward it is the SHA-256 of their canonical JSON (sorted keys, no whitespace).
-`spec_version` in the proof says which applies, and `verify_proof.py` handles both.
 
 ---
 

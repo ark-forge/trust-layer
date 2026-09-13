@@ -56,12 +56,13 @@ def offline_fetch(monkeypatch):
     return state
 
 
-def _run(proof, offline=False):
+def _run(proof, offline=False, disclosure=None):
     rep = vp.Report()
-    chain = vp.check_chain_hash(proof, rep)
+    chain = vp.check_chain_hash(proof, rep, disclosure)
     vp.check_ed25519(proof, chain, rep, offline)
-    vp.check_rfc3161(proof, chain, rep, offline)
-    vp.check_rekor(proof, chain, rep, offline)
+    anchored = vp.check_batch_anchor(proof, chain, rep)
+    vp.check_rfc3161(proof, anchored, rep, offline)
+    vp.check_rekor(proof, anchored, rep, offline)
     return rep
 
 
@@ -270,4 +271,195 @@ def test_wrong_algorithm_for_the_spec_is_detected():
     proof = _preimage_proof("1.2")
     proof["spec_version"] = "2.0"   # forces the legacy branch on a canonical-JSON proof
     rep = _run(proof, offline=True)
+    assert _status(rep, "chain hash") == vp.FAIL
+
+
+# --- spec 3.0: the third party runs the published procedure on the PUBLIC proof --
+
+def _anchored_public_proof(client, monkeypatch, n_siblings=4):
+    """Issue a spec 3.0 proof, close its batch, and read it back from the public endpoint.
+
+    Nothing here is hand-built: the proof goes through generate_proof, the batch
+    through batch_anchor, and it comes back through GET /v1/proof/{id} — the same
+    bytes a third party gets. Only the two external anchors are faked, because
+    hitting a TSA and writing into the public Rekor log is not a unit test's job.
+    """
+    import base64 as _b64
+    import trust_layer.batch_anchor as ba
+    from trust_layer.proofs import generate_proof, store_proof
+
+    monkeypatch.setattr(ba, "_anchor_tsa",
+                        lambda root, plan="": {"status": "verified", "provider": "freetsa.org"})
+    monkeypatch.setattr(ba, "_anchor_rekor", lambda root: {"provider": "sigstore-rekor", "status": "included"})
+
+    target_id, nonces, chain_data = None, None, None
+    for i in range(n_siblings):
+        proof = generate_proof({"target": f"https://svc{i}.example", "payload": {"k": i}},
+                               {"result": "ok"},
+                               {"transaction_id": f"pi_secret_{i}", "amount": 0.5, "currency": "eur"},
+                               "2026-09-13T10:00:00+00:00",
+                               buyer_fingerprint="fp" * 32, seller=f"svc{i}.example")
+        proof_id = f"prf_20260913_10000{i}_aaaaaa"
+        record = dict(proof, proof_id=proof_id,
+                      timestamp_authority={"status": "pending_batch"},
+                      batch_anchor={"status": "pending"})
+        store_proof(proof_id, record)
+        ba.add_proof(proof_id, proof["_raw_chain_hash"])
+        if i == 0:
+            target_id, nonces, chain_data = proof_id, proof["_commitment_nonces"], proof["_chain_data"]
+    ba.close_batch()
+    public = client.get(f"/v1/proof/{target_id}").json()
+    return public, nonces, chain_data
+
+
+def test_third_party_verifies_the_public_proof_without_any_preimage(client, monkeypatch):
+    """The measurement that this lot exists for.
+
+    Before spec 3.0 this exact path answered TAMPERED: the public proof redacts
+    the preimage the chain hash was built on. It must now verify, and the
+    transaction id must not appear anywhere the third party can see.
+    """
+    public, _, _ = _anchored_public_proof(client, monkeypatch)
+    assert "pi_secret_0" not in json.dumps(public)
+    assert "fp" * 32 not in json.dumps(public)
+
+    rep = _run(public, offline=True)
+    assert _status(rep, "chain hash") == vp.OK
+    assert _status(rep, "batch anchor") == vp.OK
+    assert not rep.failed
+
+
+def test_third_party_refuses_a_tampered_commitment(client, monkeypatch):
+    public, _, _ = _anchored_public_proof(client, monkeypatch)
+    public["commitments"]["seller"] = "sha256:" + "00" * 32
+    rep = _run(public, offline=True)
+    assert _status(rep, "chain hash") == vp.FAIL
+
+
+def test_third_party_refuses_a_tampered_audit_path(client, monkeypatch):
+    public, _, _ = _anchored_public_proof(client, monkeypatch)
+    public["batch_anchor"]["audit_path"][0] = "00" * 32
+    rep = _run(public, offline=True)
+    assert _status(rep, "batch anchor") == vp.FAIL
+
+
+def test_third_party_refuses_a_wrong_leaf_index(client, monkeypatch):
+    public, _, _ = _anchored_public_proof(client, monkeypatch)
+    anchor = public["batch_anchor"]
+    anchor["leaf_index"] = (anchor["leaf_index"] + 1) % anchor["tree_size"]
+    rep = _run(public, offline=True)
+    assert _status(rep, "batch anchor") == vp.FAIL
+
+
+def test_third_party_refuses_an_out_of_range_leaf_index(client, monkeypatch):
+    public, _, _ = _anchored_public_proof(client, monkeypatch)
+    public["batch_anchor"]["leaf_index"] = public["batch_anchor"]["tree_size"]
+    rep = _run(public, offline=True)
+    assert _status(rep, "batch anchor") == vp.FAIL
+
+
+def test_third_party_refuses_a_root_that_is_not_the_one_walked(client, monkeypatch):
+    public, _, _ = _anchored_public_proof(client, monkeypatch)
+    public["batch_anchor"]["root"] = "sha256:" + "11" * 32
+    rep = _run(public, offline=True)
+    assert _status(rep, "batch anchor") == vp.FAIL
+
+
+def test_third_party_refuses_a_padded_audit_path(client, monkeypatch):
+    """A path with a leftover sibling does not match the shape that was walked."""
+    public, _, _ = _anchored_public_proof(client, monkeypatch)
+    public["batch_anchor"]["audit_path"].append("22" * 32)
+    rep = _run(public, offline=True)
+    assert _status(rep, "batch anchor") == vp.FAIL
+
+
+def test_a_proof_waiting_for_its_batch_is_pending_not_tampered(client, monkeypatch):
+    """The failure mode measured on 2026-09-13: an honest proof accused of fraud."""
+    import trust_layer.batch_anchor as ba
+    from trust_layer.proofs import generate_proof, store_proof
+    proof = generate_proof({"t": 1}, {"r": "ok"}, {"transaction_id": "pi_x"},
+                           "2026-09-13T10:00:00+00:00", buyer_fingerprint="f" * 64, seller="s")
+    proof_id = "prf_20260913_120000_bbbbbb"
+    store_proof(proof_id, dict(proof, proof_id=proof_id, batch_anchor={"status": "pending"},
+                               timestamp_authority={"status": "pending_batch"}))
+    ba.add_proof(proof_id, proof["_raw_chain_hash"])
+
+    public = client.get(f"/v1/proof/{proof_id}").json()
+    rep = _run(public, offline=True)
+    assert _status(rep, "chain hash") == vp.OK
+    assert _status(rep, "batch anchor") == vp.SKIP
+    assert _status(rep, "RFC 3161 timestamp") == vp.SKIP
+    assert not rep.failed
+
+
+# --- selective disclosure ----------------------------------------------------
+
+def test_disclosed_field_is_checked_against_the_anchored_commitment(client, monkeypatch):
+    public, nonces, chain_data = _anchored_public_proof(client, monkeypatch)
+    disclosure = {"disclosed": {"seller": {"nonce": nonces["seller"],
+                                           "value": chain_data["seller"]}}}
+    rep = _run(public, offline=True, disclosure=disclosure)
+    assert _status(rep, "selective disclosure") == vp.OK
+
+
+def test_a_forged_disclosed_value_is_refused(client, monkeypatch):
+    public, nonces, _ = _anchored_public_proof(client, monkeypatch)
+    disclosure = {"disclosed": {"seller": {"nonce": nonces["seller"], "value": "evil.example"}}}
+    rep = _run(public, offline=True, disclosure=disclosure)
+    assert _status(rep, "selective disclosure") == vp.FAIL
+
+
+def test_a_disclosure_moved_to_another_field_is_refused(client, monkeypatch):
+    """Domain separation at the verifier: the field name is in the preimage."""
+    public, nonces, chain_data = _anchored_public_proof(client, monkeypatch)
+    disclosure = {"disclosed": {"response_hash": {"nonce": nonces["request_hash"],
+                                                  "value": chain_data["request_hash"]}}}
+    rep = _run(public, offline=True, disclosure=disclosure)
+    assert _status(rep, "selective disclosure") == vp.FAIL
+
+
+def test_a_disclosure_for_an_unknown_field_is_refused(client, monkeypatch):
+    public, nonces, _ = _anchored_public_proof(client, monkeypatch)
+    disclosure = {"disclosed": {"not_a_field": {"nonce": nonces["seller"], "value": "x"}}}
+    rep = _run(public, offline=True, disclosure=disclosure)
+    assert _status(rep, "selective disclosure") == vp.FAIL
+
+
+def test_spec_3_proof_without_commitments_fails():
+    rep = _run({"spec_version": "3.0", "hashes": {"chain": "sha256:" + "ab" * 32}}, offline=True)
+    assert _status(rep, "chain hash") == vp.FAIL
+
+
+def test_a_failed_inclusion_is_not_reported_as_a_pending_anchor(client, monkeypatch):
+    """Found by playing the third party: a broken audit path used to print the
+    wait message, hiding a failure behind 'not anchored yet'."""
+    public, _, _ = _anchored_public_proof(client, monkeypatch)
+    public["batch_anchor"]["audit_path"][0] = "00" * 32
+    rep = _run(public, offline=True)
+    assert _status(rep, "batch anchor") == vp.FAIL
+    detail = next(d for w, _, d, _ in rep.rows if w == "RFC 3161 timestamp")
+    assert "did not verify" in detail and "not anchored yet" not in detail
+
+
+# --- a malformed proof gets a verdict, not a traceback -----------------------
+
+@pytest.mark.parametrize("break_it", [
+    lambda a: a.__setitem__("audit_path", a["audit_path"][:-1]),      # truncated
+    lambda a: a.__setitem__("audit_path", []),                        # empty
+    lambda a: a.__setitem__("audit_path", [None]),                    # wrong type
+    lambda a: a.__setitem__("audit_path", ["zz" * 32]),               # not hex
+    lambda a: a.__setitem__("tree_size", 4096),                       # shape lies
+])
+def test_a_malformed_audit_path_fails_without_crashing(client, monkeypatch, break_it):
+    public, _, _ = _anchored_public_proof(client, monkeypatch, n_siblings=8)
+    break_it(public["batch_anchor"])
+    rep = _run(public, offline=True)      # must not raise
+    assert _status(rep, "batch anchor") == vp.FAIL
+
+
+@pytest.mark.parametrize("value", ["zz" * 32, None, 42, {}])
+def test_a_malformed_commitment_fails_without_crashing(client, monkeypatch, value):
+    public, _, _ = _anchored_public_proof(client, monkeypatch)
+    public["commitments"]["seller"] = value
+    rep = _run(public, offline=True)      # must not raise
     assert _status(rep, "chain hash") == vp.FAIL
