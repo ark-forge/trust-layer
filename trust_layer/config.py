@@ -223,6 +223,33 @@ _TSA_CERTS_DIR = BASE_DIR / "trust_layer" / "certs"
 TSA_CA_FILE   = Path(os.environ.get("TSA_CA_FILE",   str(_TSA_CERTS_DIR / "cacert.pem")))
 TSA_CERT_FILE = Path(os.environ.get("TSA_CERT_FILE", str(_TSA_CERTS_DIR / "tsa.crt")))
 
+# Which CA material verifies which issuer. The pool fails over across three TSAs and a
+# token is only verifiable against its own issuer's root, so the mapping has to exist
+# somewhere — shipping one bundle and hoping is how a proof becomes unverifiable.
+#   bundled    : self-signed root, not in any OS trust store, shipped in trust_layer/certs
+#   system CA  : public WebTrust CA already trusted by the OS; the token carries its chain
+TSA_BUNDLED_PROVIDERS = {os.environ.get("TSA_PRIMARY_PROVIDER", "freetsa.org")}
+TSA_SYSTEM_CA_PROVIDERS = {"digicert.com", "sectigo.com"}
+
+_SYSTEM_CA_CANDIDATES = [
+    "/etc/ssl/certs/ca-certificates.crt",   # Debian/Ubuntu
+    "/etc/pki/tls/certs/ca-bundle.crt",     # RHEL/Fedora
+    "/etc/ssl/cert.pem",                    # Alpine/macOS
+]
+
+
+def _find_system_ca_file():
+    override = os.environ.get("TSA_SYSTEM_CA_FILE")
+    if override:
+        return Path(override)
+    for candidate in _SYSTEM_CA_CANDIDATES:
+        if Path(candidate).exists():
+            return Path(candidate)
+    return None
+
+
+TSA_SYSTEM_CA_FILE = _find_system_ca_file()
+
 # --- Sigstore Rekor transparency log ---
 REKOR_URL = os.environ.get("REKOR_URL", "https://rekor.sigstore.dev")
 REKOR_EC_KEY_PATH = Path(os.environ.get(

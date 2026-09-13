@@ -48,13 +48,18 @@ Agent  →  POST /v1/proxy  →  ArkForge  →  Upstream API
                      Immutable proof JSON + public HTML page
 ```
 
-**One call, three independent witnesses:**
+**One call, three witnesses — two of them independent of ArkForge:**
 
-| Witness | What it proves | Verifiable by |
-|---------|---------------|---------------|
-| Ed25519 Signature | Proof was issued by ArkForge | Anyone with the public key |
-| RFC 3161 Timestamp | Proof existed at the claimed time | Any RFC 3161 verifier |
-| Sigstore Rekor | Chain hash in a public append-only log | [search.sigstore.dev](https://search.sigstore.dev) |
+| Witness | What it proves | Independent of ArkForge? |
+|---------|---------------|--------------------------|
+| Ed25519 Signature | The proof was issued by ArkForge | **No** — ArkForge is the signer |
+| RFC 3161 Timestamp | The chain hash existed at the claimed time | **Yes** — a third-party TSA signs it |
+| Sigstore Rekor | The chain hash is in a public append-only log | **Yes** — OpenSSF operates the log |
+
+Only the last two are evidence against the issuer. Verify all three with
+[`scripts/verify_proof.py`](scripts/verify_proof.py) (Python 3 + openssl, no other
+dependency); see [Verify a proof](docs/user-guide.md#verify-a-proof) for the manual steps
+and for what the proof does **not** let a third party check.
 
 See a live proof: [example transaction](https://trust.arkforge.tech/v1/proof/prf_20260303_161853_4d0904)
 

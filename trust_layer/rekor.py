@@ -8,6 +8,7 @@ used for arkforge_signature.
 
 import base64
 import hashlib
+import json
 import logging
 import threading
 import time
@@ -59,6 +60,24 @@ def _get_or_create_rekor_ec_key():
 
         _ec_key_cache = key
         return key
+
+
+def get_rekor_public_key_pem() -> Optional[str]:
+    """PEM of the ECDSA P-256 key used to submit entries to Rekor.
+
+    Published so a third party can attribute a log entry to ArkForge. Without it the
+    log proves that *some* key attested a hash at time T, never that ArkForge did —
+    which is precisely the witness the anchoring is supposed to provide.
+    """
+    try:
+        key = _get_or_create_rekor_ec_key()
+        return key.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+    except Exception as e:
+        logger.warning("Rekor public key unavailable: %s", e)
+        return None
 
 
 def _build_entry(chain_hash_hex: str, ec_key=None) -> dict:
@@ -207,18 +226,131 @@ def submit_to_rekor(chain_hash_hex: str) -> dict:
     }
 
 
-def verify_rekor_entry(uuid: str) -> dict:
-    """Fetch and return a Rekor log entry by UUID for external verification."""
+def _rfc6962_root(leaf: bytes, index: int, size: int, path: list) -> tuple:
+    """RFC 6962 inclusion-proof walk. Returns (root, siblings_consumed).
+
+    A right-edge node is promoted without consuming a sibling, so the walk ends on
+    tree size rather than on path exhaustion. The caller checks that every sibling was
+    used: a leftover one means the proof does not match the shape that was walked.
+    """
+    h = leaf
+    idx, sz, i = index, size, 0
+    while sz > 1:
+        if idx % 2 == 1:
+            h = hashlib.sha256(b"\x01" + bytes.fromhex(path[i]) + h).digest()
+            i += 1
+        elif idx + 1 < sz:
+            h = hashlib.sha256(b"\x01" + h + bytes.fromhex(path[i])).digest()
+            i += 1
+        idx //= 2
+        sz = (sz + 1) // 2
+    return h, i
+
+
+def _ecdsa_verify(pubkey_pem: bytes, signature: bytes, message: bytes) -> bool:
+    from cryptography.hazmat.primitives.asymmetric import ec as _ec
+    from cryptography.hazmat.primitives.serialization import load_pem_public_key
     try:
-        resp = httpx.get(
-            f"{REKOR_URL}/api/v1/log/entries/{uuid}",
-            timeout=10.0,
-        )
+        key = load_pem_public_key(pubkey_pem)
+        key.verify(signature, message, _ec.ECDSA(hashes.SHA256()))
+        return True
+    except Exception:
+        return False
+
+
+def verify_rekor_entry(uuid: str, chain_hash_hex: Optional[str] = None) -> dict:
+    """Verify a Rekor log entry, optionally binding it to a specific chain hash.
+
+    Fetching an entry and seeing HTTP 200 proves only that *an* entry exists. It says
+    nothing about whose artefact it covers, and nothing about whether the log really
+    contains it — which is the whole point of anchoring. This performs the checks a
+    third party would:
+
+      1. the entry is a hashedrekord (the only kind Trust Layer writes);
+      2. its logged artefact hash equals sha256(chain_hash_hex), the convention used
+         on submission — without this the entry could be anybody's;
+      3. the entry's own ECDSA signature over the chain hash verifies;
+      4. the signed entry timestamp verifies against the log's public key;
+      5. the inclusion proof recomputes the checkpoint root, and the checkpoint is
+         signed by the log key it names.
+
+    Pass chain_hash_hex to get checks 2 and 3; without it they are reported as skipped
+    and `verified` stays False, because an unbound entry proves nothing about a proof.
+
+    Returns {verified, checks, entry, error}.
+    """
+    checks: dict = {}
+    try:
+        resp = httpx.get(f"{REKOR_URL}/api/v1/log/entries/{uuid}", timeout=10.0)
         if resp.status_code != 200:
-            return {"verified": False, "error": f"HTTP {resp.status_code}"}
+            return {"verified": False, "checks": checks, "error": f"HTTP {resp.status_code}"}
         data = resp.json()
-        return {"verified": True, "entry": data}
+        entry = next(iter(data.values()))
+
+        key_resp = httpx.get(f"{REKOR_URL}/api/v1/log/publicKey", timeout=10.0)
+        if key_resp.status_code != 200:
+            return {"verified": False, "checks": checks,
+                    "error": f"cannot fetch log public key: HTTP {key_resp.status_code}"}
+        log_pubkey = key_resp.content
+
+        body_bytes = base64.b64decode(entry["body"])
+        parsed = json.loads(body_bytes)
+
+        checks["kind"] = parsed.get("kind") == "hashedrekord"
+        if not checks["kind"]:
+            return {"verified": False, "checks": checks,
+                    "error": f"entry kind is '{parsed.get('kind')}', not hashedrekord"}
+
+        spec = parsed["spec"]
+
+        if chain_hash_hex:
+            expected = hashlib.sha256(chain_hash_hex.encode("utf-8")).hexdigest()
+            checks["artifact_matches_chain_hash"] = spec["data"]["hash"]["value"] == expected
+            submitter_pem = base64.b64decode(spec["signature"]["publicKey"]["content"])
+            checks["entry_signature"] = _ecdsa_verify(
+                submitter_pem,
+                base64.b64decode(spec["signature"]["content"]),
+                chain_hash_hex.encode("utf-8"),
+            )
+        else:
+            checks["artifact_matches_chain_hash"] = None
+            checks["entry_signature"] = None
+
+        set_payload = json.dumps(
+            {"body": entry["body"], "integratedTime": entry["integratedTime"],
+             "logID": entry["logID"], "logIndex": entry["logIndex"]},
+            sort_keys=True, separators=(",", ":"),
+        ).encode()
+        checks["signed_entry_timestamp"] = _ecdsa_verify(
+            log_pubkey, base64.b64decode(entry["verification"]["signedEntryTimestamp"]),
+            set_payload,
+        )
+
+        ip = entry["verification"]["inclusionProof"]
+        leaf = hashlib.sha256(b"\x00" + body_bytes).digest()
+        try:
+            root, consumed = _rfc6962_root(leaf, ip["logIndex"], ip["treeSize"], ip["hashes"])
+            checks["inclusion_proof"] = (
+                root.hex() == ip["rootHash"] and consumed == len(ip["hashes"])
+            )
+        except (IndexError, ValueError):
+            checks["inclusion_proof"] = False
+
+        cp_body, _, cp_sigblock = ip["checkpoint"].partition("\n\n")
+        cp_body += "\n"
+        cp_lines = cp_body.strip().split("\n")
+        cp_root_ok = base64.b64decode(cp_lines[2]).hex() == ip["rootHash"]
+        cp_sig_line = next(line for line in cp_sigblock.split("\n") if line.strip())
+        cp_raw = base64.b64decode(cp_sig_line.split()[-1])
+        checks["checkpoint"] = cp_root_ok and _ecdsa_verify(log_pubkey, cp_raw[4:], cp_body.encode())
+
+        verified = all(v for v in checks.values() if v is not None)
+        if chain_hash_hex is None:
+            # An entry not bound to a chain hash is not evidence about a proof.
+            verified = False
+        return {"verified": verified, "checks": checks, "entry": data}
+
     except httpx.HTTPError as e:
-        return {"verified": False, "error": str(e)}
+        return {"verified": False, "checks": checks, "error": str(e)}
     except Exception as e:
-        return {"verified": False, "error": str(e)}
+        return {"verified": False, "checks": checks, "error": str(e)}

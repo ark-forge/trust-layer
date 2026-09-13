@@ -99,13 +99,34 @@ def submit_hash(hash_hex: str, plan: str = "") -> Optional[Tuple[bytes, str]]:
     return None
 
 
-def verify_tsr(tsr_bytes: bytes, hash_hex: str) -> dict:
+def verify_tsr(tsr_bytes: bytes, hash_hex: str, provider: str = "") -> dict:
     """Verify a .tsr file against the original hash. Returns {verified, details}.
 
-    Uses TSA_CA_FILE and TSA_CERT_FILE from config (configurable via env vars).
-    Defaults to bundled FreeTSA certs.
+    `provider` is the issuer recorded in the proof (timestamp_authority.provider).
+    It matters: submit_hash fails over across FreeTSA, DigiCert and Sectigo, and each
+    needs different CA material. FreeTSA is self-signed and ships bundled; the two
+    WebTrust CAs are in the system trust store and their tokens carry their own chain.
+    Verifying a DigiCert token against FreeTSA's root fails — so an unrecognised
+    provider is refused rather than checked against the wrong root.
+
+    Passing no provider keeps the historical behaviour (the configured/bundled certs),
+    which is what TSA_CA_FILE/TSA_CERT_FILE overrides exist for (QTSP endpoints).
     """
-    from .config import TSA_CA_FILE, TSA_CERT_FILE
+    from .config import (TSA_CA_FILE, TSA_CERT_FILE, TSA_SYSTEM_CA_FILE,
+                         TSA_BUNDLED_PROVIDERS, TSA_SYSTEM_CA_PROVIDERS)
+
+    use_system_ca = False
+    if provider:
+        if provider in TSA_BUNDLED_PROVIDERS:
+            use_system_ca = False
+        elif provider in TSA_SYSTEM_CA_PROVIDERS:
+            if TSA_SYSTEM_CA_FILE is None:
+                return {"verified": False,
+                        "details": f"no system CA bundle available to verify a {provider} token"}
+            use_system_ca = True
+        else:
+            return {"verified": False,
+                    "details": f"unknown timestamp issuer '{provider}' — no CA material mapped"}
 
     result = {"verified": False, "details": None}
     data_path = None
@@ -130,12 +151,14 @@ def verify_tsr(tsr_bytes: bytes, hash_hex: str) -> dict:
         Path(tsr_path).write_bytes(tsr_bytes)
 
         # Verify against configured CA (FreeTSA by default, QTSP cert if configured)
-        proc = subprocess.run(
-            ["openssl", "ts", "-verify", "-data", data_path,
-             "-in", tsr_path, "-CAfile", str(TSA_CA_FILE),
-             "-untrusted", str(TSA_CERT_FILE)],
-            capture_output=True, text=True, timeout=10,
-        )
+        if use_system_ca:
+            verify_args = ["openssl", "ts", "-verify", "-data", data_path,
+                           "-in", tsr_path, "-CAfile", str(TSA_SYSTEM_CA_FILE)]
+        else:
+            verify_args = ["openssl", "ts", "-verify", "-data", data_path,
+                           "-in", tsr_path, "-CAfile", str(TSA_CA_FILE),
+                           "-untrusted", str(TSA_CERT_FILE)]
+        proc = subprocess.run(verify_args, capture_output=True, text=True, timeout=10)
         if proc.returncode == 0 and "Verification: OK" in proc.stdout:
             result["verified"] = True
             result["details"] = proc.stdout.strip()
