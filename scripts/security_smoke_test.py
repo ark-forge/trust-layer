@@ -41,10 +41,17 @@ failed = 0
 findings = []
 
 
+# The edge rejects the default "Python-urllib/x.y" User-Agent with a bare 403. Without
+# an explicit one this whole gate fails on its very first call, and says "could not
+# create test key" — a gate that cannot reach the service measures nothing.
+USER_AGENT = "ArkForge-SecuritySmokeTest/1.0"
+
+
 def _request(method: str, url: str, body: Any = None, headers: dict | None = None,
              expected_status: int | None = None, label: str = "") -> tuple[int, dict]:
     data = json.dumps(body).encode() if body is not None else None
-    req_headers = {"Content-Type": "application/json", **(headers or {})}
+    req_headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT,
+                   **(headers or {})}
     req = urllib.request.Request(url, data=data, headers=req_headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -111,7 +118,6 @@ def run(base: str, existing_key: str = ""):
                   f"Use --key <api_key> to provide an existing key.{RESET}")
             sys.exit(2)
         print(f"\nTest key created: {free_key[:20]}...")
-    print(f"\nTest key created: {free_key[:20]}...")
 
     delay = 1.2  # seconds between requests — stays under nginx rate limit
 
