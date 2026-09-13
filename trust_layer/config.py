@@ -1,5 +1,6 @@
 """Configuration — env vars, paths, constants."""
 
+import logging as _logging
 import os
 from pathlib import Path
 
@@ -49,6 +50,7 @@ def _load_secrets() -> None:
         from automation.vault import vault as _vault  # type: ignore[import]
         _stripe = _vault.get_section("stripe") or {}
         _smtp = _vault.get_section("smtp") or {}
+        _proveit = _vault.get_section("proveit") or {}
         _mapping = {
             "STRIPE_LIVE_SECRET_KEY":        _stripe.get("live_secret_key", ""),
             "STRIPE_TEST_SECRET_KEY":         _stripe.get("test_secret_key", ""),
@@ -67,6 +69,10 @@ def _load_secrets() -> None:
             "SMTP_LOGIN":                     _smtp.get("login", ""),
             "SMTP_USER":                      _smtp.get("user", ""),
             "SMTP_PASSWORD":                  _smtp.get("password", ""),
+            # PROVE IT challenge corpus. Written by scripts/provision_challenge_secret.py;
+            # never set by hand on a host — see that script's docstring.
+            "TRUST_LAYER_CHALLENGE_SECRET":   _proveit.get("challenge_secret", ""),
+            "TRUST_LAYER_CHALLENGE_HOSTS":    _proveit.get("challenge_hosts", ""),
         }
         for _k, _v in _mapping.items():
             if _v:
@@ -184,6 +190,49 @@ TRUSTED_INTERNAL_HOSTS = {
     for h in os.environ.get("TRUST_LAYER_TRUSTED_INTERNAL_HOSTS", "").split(",")
     if h.strip()
 }
+
+# --- Challenge Secret (PROVE IT corpus) ---
+# Deliberately NOT the same secret as INTERNAL_SECRET: the corpus is exposed to
+# challenge participants, while INTERNAL_SECRET opens the deployment smoke test.
+# Sharing one secret would make its rotation an event for both, and would extend
+# to a participant-facing service the secret whose leak was the v1.7.0 flaw.
+CHALLENGE_SECRET = os.environ.get("TRUST_LAYER_CHALLENGE_SECRET", "")
+
+# Hostnames allowed to receive CHALLENGE_SECRET when proxied through /v1/proxy.
+CHALLENGE_HOSTS = {
+    h.strip().lower()
+    for h in os.environ.get("TRUST_LAYER_CHALLENGE_HOSTS", "").split(",")
+    if h.strip()
+}
+
+def challenge_config_problems(secret: str, hosts: set) -> list:
+    """Incoherences between the challenge secret and its allowlist.
+
+    Both come from the vault, and the vault loader swallows every exception. If
+    the vault is unreachable, the secret silently becomes "" while the allowlist
+    may still be set from settings.env: the proxy then forwards nothing, the
+    corpus answers 403 to every participant, and the outage reads as a corpus
+    failure rather than a configuration one. This turns that into a message.
+
+    Pure function so it can be tested without importing a vault.
+    """
+    problems = []
+    if hosts and not secret:
+        problems.append(
+            "challenge hosts are configured but TRUST_LAYER_CHALLENGE_SECRET is empty: "
+            "the corpus will reject every participant. Check the vault section 'proveit'."
+        )
+    if secret and not hosts:
+        problems.append(
+            "TRUST_LAYER_CHALLENGE_SECRET is set but no challenge host is allowlisted: "
+            "the secret is inert and the corpus is unreachable through the proxy."
+        )
+    return problems
+
+
+for _problem in challenge_config_problems(CHALLENGE_SECRET, CHALLENGE_HOSTS):
+    _logging.getLogger("trust_layer.config").error("Challenge config: %s", _problem)
+
 
 # --- Webhook idempotency (prevents replay attacks on Stripe webhooks) ---
 WEBHOOK_IDEMPOTENCY_FILE = DATA_DIR / "webhook_idempotency.jsonl"
