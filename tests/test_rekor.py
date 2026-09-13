@@ -2,6 +2,8 @@
 
 import base64
 import hashlib
+import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -216,17 +218,77 @@ def test_submit_to_rekor_failure():
 
 # --- verify_rekor_entry tests ---
 
-def test_verify_rekor_entry_success():
-    """verify_rekor_entry returns verified=True on HTTP 200."""
-    fake_response = MagicMock()
-    fake_response.status_code = 200
-    fake_response.json.return_value = {"some": "entry"}
+def _fixture_entry():
+    """A real Rekor entry, captured 2026-09-13, with the proof it anchors."""
+    base = Path(__file__).parent / "fixtures" / "verify_proof"
+    proof = json.loads((base / "proof_rekor.json").read_text())
+    entry = json.loads((base / "rekor_entry.json").read_text())
+    log_key = (base / "rekor_log_pubkey.pem").read_bytes()
+    chain = proof["hashes"]["chain"].replace("sha256:", "")
+    return entry, log_key, chain
 
-    with patch("trust_layer.rekor.httpx.get", return_value=fake_response):
-        result = verify_rekor_entry("some_uuid")
 
+def _patched_get(entry, log_key):
+    """Serve the log entry and the log public key from the fixtures."""
+    def fake_get(url, **kwargs):
+        r = MagicMock()
+        r.status_code = 200
+        if url.endswith("/publicKey"):
+            r.content = log_key
+        else:
+            r.json.return_value = entry
+        return r
+    return fake_get
+
+
+def test_verify_rekor_entry_verifies_a_real_entry():
+    entry, log_key, chain = _fixture_entry()
+    with patch("trust_layer.rekor.httpx.get", side_effect=_patched_get(entry, log_key)):
+        result = verify_rekor_entry("uuid", chain)
     assert result["verified"] is True
-    assert "entry" in result
+    assert all(result["checks"].values())
+
+
+def test_verify_rekor_entry_rejects_a_mismatched_chain_hash():
+    """The defect this replaced: HTTP 200 alone was treated as verified, so a genuine
+    entry for somebody else's artefact passed. An entry must be bound to THIS proof."""
+    entry, log_key, _ = _fixture_entry()
+    with patch("trust_layer.rekor.httpx.get", side_effect=_patched_get(entry, log_key)):
+        result = verify_rekor_entry("uuid", "ab" * 32)
+    assert result["verified"] is False
+    assert result["checks"]["artifact_matches_chain_hash"] is False
+    assert result["checks"]["entry_signature"] is False
+
+
+def test_verify_rekor_entry_unbound_is_not_evidence():
+    """Without a chain hash the entry cannot be tied to any proof, so it is not
+    reported as verified even though the log-side checks all pass."""
+    entry, log_key, _ = _fixture_entry()
+    with patch("trust_layer.rekor.httpx.get", side_effect=_patched_get(entry, log_key)):
+        result = verify_rekor_entry("uuid")
+    assert result["verified"] is False
+    assert result["checks"]["inclusion_proof"] is True
+    assert result["checks"]["artifact_matches_chain_hash"] is None
+
+
+def test_verify_rekor_entry_rejects_a_corrupted_inclusion_proof():
+    entry, log_key, chain = _fixture_entry()
+    entry = json.loads(json.dumps(entry))
+    next(iter(entry.values()))["verification"]["inclusionProof"]["hashes"][0] = "00" * 32
+    with patch("trust_layer.rekor.httpx.get", side_effect=_patched_get(entry, log_key)):
+        result = verify_rekor_entry("uuid", chain)
+    assert result["verified"] is False
+    assert result["checks"]["inclusion_proof"] is False
+
+
+def test_verify_rekor_entry_rejects_another_entry_kind():
+    entry, log_key, chain = _fixture_entry()
+    base = Path(__file__).parent / "fixtures" / "verify_proof"
+    other = json.loads((base / "rekor_unrelated.json").read_text())
+    with patch("trust_layer.rekor.httpx.get", side_effect=_patched_get(other, log_key)):
+        result = verify_rekor_entry("uuid", chain)
+    assert result["verified"] is False
+    assert result["checks"]["kind"] is False
 
 
 def test_verify_rekor_entry_not_found():

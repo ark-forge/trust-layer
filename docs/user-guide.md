@@ -736,43 +736,118 @@ The `agent_identity_verified` field can be used by verifiers to distinguish cryp
 
 **Public URL:**
 ```
-https://arkforge.tech/trust/v/prf_20260302_135727_5b47d5
+https://arkforge.tech/trust/v/prf_20260303_161853_4d0904
 ```
 
 **Or via API:**
 ```bash
-curl https://trust.arkforge.tech/v1/proof/prf_20260302_135727_5b47d5
+curl https://trust.arkforge.tech/v1/proof/prf_20260303_161853_4d0904
 ```
 
-**2 independent witnesses:**
-- Ed25519 signature (ArkForge)
-- RFC 3161 timestamp (FreeTSA primary, DigiCert + Sectigo fallback — `timestamp_authority.provider` records the actual issuer)
+### Independent verification
 
-**Independent verification (without trusting Trust Layer):**
+Run the verifier. It needs Python 3.8+ and `openssl`, nothing else — no `pip install`,
+no `rekor-cli`, no `cosign`:
 
 ```bash
-# Fetch the proof
-curl -s https://trust.arkforge.tech/v1/proof/prf_xxx > proof.json
-
-# Extract fields
-REQUEST_HASH=$(jq -r '.hashes.request' proof.json | sed 's/sha256://')
-RESPONSE_HASH=$(jq -r '.hashes.response' proof.json | sed 's/sha256://')
-PAYMENT_ID=$(jq -r '.certification_fee.transaction_id' proof.json)
-TIMESTAMP=$(jq -r '.timestamp' proof.json)
-BUYER=$(jq -r '.parties.buyer_fingerprint' proof.json)
-SELLER=$(jq -r '.parties.seller' proof.json)
-UPSTREAM=$(jq -r '.upstream_timestamp // empty' proof.json)
-
-# Mode B: include receipt hash if present
-RECEIPT_HASH=$(jq -r '.provider_payment.receipt_content_hash // empty' proof.json | sed 's/sha256://')
-
-# Recompute chain hash
-COMPUTED=$(echo -n "${REQUEST_HASH}${RESPONSE_HASH}${PAYMENT_ID}${TIMESTAMP}${BUYER}${SELLER}${UPSTREAM}${RECEIPT_HASH}" | sha256sum | cut -d' ' -f1)
-
-# Compare
-EXPECTED=$(jq -r '.hashes.chain' proof.json | sed 's/sha256://')
-[ "$COMPUTED" = "$EXPECTED" ] && echo "VERIFIED" || echo "TAMPERED"
+curl -sO https://raw.githubusercontent.com/ark-forge/trust-layer/main/scripts/verify_proof.py
+python3 verify_proof.py prf_20260303_161853_4d0904
 ```
+
+```
+[ SKIP ] chain hash: preimage not published (parties.buyer_fingerprint,
+         certification_fee.transaction_id) — binding of request/response to the
+         anchored chain hash is not third-party verifiable
+[  OK  ] Ed25519 (ArkForge): valid — but the signer is the issuer, not a third party
+[  OK  ] RFC 3161 timestamp: freetsa.org signed this chain hash  [independent]
+[  OK  ] Sigstore Rekor: chain hash in the public log at index 1018479057, inclusion
+         proof and checkpoint valid  [independent]
+
+VERDICT: VERIFIED — 2 independent witness(es) confirm this chain hash existed and was
+         attested outside ArkForge's control.
+```
+
+It exits non-zero if any check fails. Read the script before running it — it is deliberately
+short, and a verification tool you have not read is just another party to trust.
+
+### What each witness is worth
+
+|  | Witness | Can ArkForge produce it alone? |
+|---|---|---|
+| 1 | Chain hash recomputation | **Yes** — whoever fabricates a proof produces coherent hashes. Self-consistency only. |
+| 2 | Ed25519 signature | **Yes** — the signer is ArkForge. It proves issuance, not truth. |
+| 3 | RFC 3161 timestamp | **No** — an independent Timestamp Authority signed this hash at a point in time. |
+| 4 | Sigstore Rekor entry | **No** — the hash is in a public append-only log operated by the OpenSSF. |
+
+Only 3 and 4 are evidence against the issuer. A proof carrying neither is not a receipt,
+whatever the other two say.
+
+### Doing it by hand
+
+The two independent witnesses, step by step. Each has one detail you cannot guess from
+the proof alone, which is why they are written out here.
+
+**RFC 3161.** The timestamped artefact is the chain hash **decoded to its 32 raw bytes**,
+not the hex string. The certificates depend on the issuer: `timestamp_authority.provider`
+records which TSA actually signed, since the pool fails over across FreeTSA, DigiCert and
+Sectigo. FreeTSA's root is self-signed and must be fetched from FreeTSA; DigiCert and
+Sectigo are in your system trust store and their tokens carry their own chain.
+
+```bash
+curl -s https://trust.arkforge.tech/v1/proof/prf_xxx > proof.json
+jq -r '.timestamp_authority.provider' proof.json          # which TSA signed
+jq -r '.timestamp_authority.tsr_base64' proof.json | base64 -d > token.tsr
+jq -r '.hashes.chain' proof.json | sed 's/sha256://' | xxd -r -p > chain.bin
+
+# freetsa.org:
+curl -sO https://freetsa.org/files/cacert.pem
+curl -sO https://freetsa.org/files/tsa.crt
+openssl ts -verify -data chain.bin -in token.tsr -CAfile cacert.pem -untrusted tsa.crt
+
+# digicert.com or sectigo.com:
+openssl ts -verify -data chain.bin -in token.tsr -CAfile /etc/ssl/certs/ca-certificates.crt
+```
+
+**Sigstore Rekor.** Rekor receives `sha256(chain_hash_hex)` — the SHA-256 of the chain hash
+**hex string**, not the chain hash itself. Checking that the entry exists is not enough:
+an entry exists for every artefact anybody ever logged. What matters is that *this* entry
+covers *this* chain hash.
+
+```bash
+UUID=$(jq -r '.transparency_log.uuid' proof.json)
+curl -s "https://rekor.sigstore.dev/api/v1/log/entries/$UUID" > entry.json
+
+# the logged artefact must be this proof's chain hash
+jq -r '.hashes.chain' proof.json | sed 's/sha256://' | tr -d '\n' | sha256sum
+jq -r '.[].body' entry.json | base64 -d | jq -r '.spec.data.hash.value'
+```
+
+`verify_proof.py` then checks what a shell one-liner cannot: the entry's own signature, the
+signed entry timestamp against the log's public key, and the RFC 6962 inclusion proof against
+the log's signed checkpoint. An entry without a valid inclusion proof is a claim, not a log.
+
+**Attribution.** The key that submits to Rekor is published at `GET /v1/pubkey` as
+`rekor_pubkey`. Compare it with `spec.signature.publicKey.content` in the entry. If they
+differ, the entry is somebody else's — a valid log entry attributed to the wrong party
+proves nothing.
+
+### Known limit: the chain hash preimage is not published
+
+`hashes.chain` is what both independent witnesses attest. It is computed over the request
+hash, the response hash, the certification transaction id, the timestamp, the buyer
+fingerprint and the seller. The public proof **redacts the transaction id and the buyer
+fingerprint**, so a third party cannot recompute it and therefore cannot confirm that the
+anchored hash is the one covering the request and response shown.
+
+What a third party can establish today: this chain hash existed at a given time and is in a
+public log. What they cannot: that it corresponds to these request and response hashes. The
+verifier reports that gap as `SKIP` rather than passing over it. Closing it requires
+publishing the preimage, which exposes the certification transaction id — a deliberate
+trade-off, not an oversight.
+
+For proofs issued before spec 1.2, the chain hash was a raw concatenation of those fields;
+from 1.2 onward it is the SHA-256 of their canonical JSON (sorted keys, no whitespace).
+`spec_version` in the proof says which applies, and `verify_proof.py` handles both.
 
 ---
 

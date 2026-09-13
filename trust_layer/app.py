@@ -3109,7 +3109,15 @@ async def get_pubkey():
     """Return ArkForge's Ed25519 public key for proof signature verification."""
     if not ARKFORGE_PUBLIC_KEY:
         return _error_response("not_configured", "Signing key not configured", 503)
-    return {"pubkey": ARKFORGE_PUBLIC_KEY, "algorithm": "Ed25519"}
+    body = {"pubkey": ARKFORGE_PUBLIC_KEY, "algorithm": "Ed25519"}
+    # The Rekor submission key is a different key with a different job: it attributes
+    # a transparency-log entry to ArkForge. Unpublished, an entry is unattributable.
+    from .rekor import get_rekor_public_key_pem
+    rekor_pem = get_rekor_public_key_pem()
+    if rekor_pem:
+        body["rekor_pubkey"] = rekor_pem
+        body["rekor_algorithm"] = "ECDSA-P256-SHA256"
+    return body
 
 
 # --- GET /.well-known/did.json ---
