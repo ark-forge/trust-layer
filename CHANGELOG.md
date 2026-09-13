@@ -6,6 +6,16 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.8.1] — 2026-09-13
+
+### Fixed
+- le binding ecrivait le challenge dans Redis et le relisait en memoire
+
+### Internal
+- ajouter fakeredis a l'extra test
+
+---
+
 ## [1.8.0] — 2026-09-13
 
 ### Added
