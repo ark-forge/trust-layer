@@ -764,3 +764,71 @@ def test_service_secret_names_all_resolve():
     for header, secret_name, hosts_name in proxy_mod._SERVICE_SECRETS:
         assert secret_name in vars(proxy_mod), f"{header}: {secret_name} not imported"
         assert hosts_name in vars(proxy_mod), f"{header}: {hosts_name} not imported"
+
+
+# --- Scrubbing by value, not only by header name ---------------------------
+# Found by the §4.2 reviewer, confirmed by execution: filtering on dict keys
+# misses every place a secret can appear inside a string. The corpus is exposed
+# to challenge participants, so an upstream that echoes headers into a non-JSON
+# body (traceback, error page, CDN) would hand them the secret.
+
+_SECRET_IN_TEXT = "challenge-s3cret-VALEUR"
+
+
+def _scrub_with_challenge_secret(body):
+    import trust_layer.proxy as proxy_mod
+    with patch.object(proxy_mod, "CHALLENGE_SECRET", _SECRET_IN_TEXT):
+        return proxy_mod._scrub_service_secrets(body)
+
+
+def test_scrub_non_json_upstream_body():
+    """A non-JSON upstream response lands in {"_raw_text": <str>}: a string under
+    a non-secret key, which key filtering never inspects."""
+    out = _scrub_with_challenge_secret(
+        {"_raw_text": f"Traceback...\nX-Challenge-Secret: {_SECRET_IN_TEXT}\n"}
+    )
+    assert _SECRET_IN_TEXT not in str(out)
+
+
+def test_scrub_secret_under_a_non_secret_key():
+    out = _scrub_with_challenge_secret(
+        {"echo": f"headers were X-Challenge-Secret: {_SECRET_IN_TEXT}"}
+    )
+    assert _SECRET_IN_TEXT not in str(out)
+
+
+def test_scrub_secret_nested_in_a_list_of_strings():
+    out = _scrub_with_challenge_secret({"log": ["ok", f"sent {_SECRET_IN_TEXT}"]})
+    assert _SECRET_IN_TEXT not in str(out)
+
+
+def test_scrub_leaves_innocent_text_intact():
+    """Value scrubbing must not eat the body: only the secret goes."""
+    out = _scrub_with_challenge_secret({"msg": "entité ENT-4417 conforme", "n": 42})
+    assert out["msg"] == "entité ENT-4417 conforme"
+    assert out["n"] == 42
+
+
+def test_scrub_ignores_a_pathologically_short_secret():
+    """A misconfigured one-character secret must not redact the whole body."""
+    import trust_layer.proxy as proxy_mod
+    with patch.object(proxy_mod, "CHALLENGE_SECRET", "a"):
+        out = proxy_mod._scrub_service_secrets({"msg": "banana"})
+    assert out["msg"] == "banana"
+
+
+def test_challenge_config_problems_detects_both_incoherences():
+    """The vault loader swallows every exception (config.py:_load_secrets). If the
+    vault is unreachable, the secret silently becomes "" while the allowlist may
+    still be set: the proxy forwards nothing, the corpus 403s every participant,
+    and the outage reads as a corpus failure rather than a configuration one."""
+    from trust_layer.config import challenge_config_problems as problems
+
+    assert problems("s3cret", {"corpus.arkforge.tech"}) == []
+    assert problems("", set()) == []
+
+    hosts_no_secret = problems("", {"corpus.arkforge.tech"})
+    assert len(hosts_no_secret) == 1 and "proveit" in hosts_no_secret[0]
+
+    secret_no_hosts = problems("s3cret", set())
+    assert len(secret_no_hosts) == 1 and "inert" in secret_no_hosts[0]

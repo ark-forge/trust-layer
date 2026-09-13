@@ -153,23 +153,49 @@ def _service_secret_headers(target_domain: str) -> dict:
     return headers
 
 
-def _scrub_service_secrets(body: object) -> object:
-    """Remove service-to-service secret headers from a response body (recursive).
+# Below this length a "secret" is a misconfiguration, and redacting it by value
+# would eat innocent text out of the body. Real secrets are 43 chars (token_urlsafe(32)).
+_MIN_SCRUBBABLE_SECRET_LEN = 8
 
-    Secrets are injected in forward headers only. If the upstream service echoes
-    request headers back (e.g. httpbin /anything), they would appear in the
-    response body. This scrubber removes them before the body is returned to the
-    client. The chain hash is computed BEFORE this call, so integrity is not
-    affected and a scorer recomputing the hash works from the unscrubbed body.
+
+def _scrub_service_secrets(body: object) -> object:
+    """Remove service-to-service secrets from a response body (recursive).
+
+    Secrets are injected in forward headers only. If the upstream echoes request
+    headers back, they come back in the body, and they must not reach the caller.
+
+    Two filters, because one is not enough. Filtering on dict keys misses every
+    place a secret can sit inside a string: a non-JSON upstream response lands in
+    {"_raw_text": <str>}, and an echo can put the secret under any key at all.
+    The corpus is reachable by challenge participants, so that gap is exposed to
+    an adversarial audience (found by the §4.2 reviewer, 2026-09-13).
+
+    The chain hash is computed BEFORE this call, so integrity is unaffected: a
+    scorer recomputes from the bytes the corpus served, not from what the caller
+    receives. A corpus must never echo request headers in the first place — this
+    is the second line, not the first.
     """
+    values = [
+        v for v in (globals().get(name) or "" for _, name, _ in _SERVICE_SECRETS)
+        if len(v) >= _MIN_SCRUBBABLE_SECRET_LEN
+    ]
+    return _scrub_body(body, values)
+
+
+def _scrub_body(body: object, values: list) -> object:
     if isinstance(body, dict):
         return {
-            k: _scrub_service_secrets(v)
+            k: _scrub_body(v, values)
             for k, v in body.items()
             if k.lower() not in _SECRET_HEADER_NAMES
         }
     if isinstance(body, list):
-        return [_scrub_service_secrets(item) for item in body]
+        return [_scrub_body(item, values) for item in body]
+    if isinstance(body, str):
+        for secret in values:
+            if secret in body:
+                body = body.replace(secret, "[redacted]")
+        return body
     return body
 
 
