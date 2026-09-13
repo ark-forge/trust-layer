@@ -17,6 +17,10 @@ setup(
         "test": [
             "pytest>=7.0.0",
             "pytest-asyncio>=0.23.0",
+            # Les tests du binding DID doivent tourner AVEC un Redis actif :
+            # sans lui, écriture et lecture retombent toutes deux en mémoire et
+            # le défaut de production ne se voit pas.
+            "fakeredis>=2.34.0",
         ],
     },
 )
