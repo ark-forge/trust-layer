@@ -6,6 +6,17 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.8.2] — 2026-09-13
+
+### Internal
+- le dry-run annoncait la moitie de ce qu il ferait
+- --host pose aussi l allowlist du corpus
+- scrubber par valeur, provisionnement du secret par le coffre
+- fermer la table de mutation et garder les noms de config des fautes de frappe
+- secret dedie au corpus du challenge, distinct du secret interne
+
+---
+
 ## [1.8.1] — 2026-09-13
 
 ### Fixed
