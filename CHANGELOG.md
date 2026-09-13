@@ -9,6 +9,27 @@ Versions follow [Semantic Versioning](https://semver.org/).
 ## [1.8.0] — 2026-09-13
 
 ### Added
+- engagements par champ (spec 3.0) + ancrage par lot Merkle
+- rendre les ancrages externes vérifiables par un tiers
+- émettre la clé du challenge par un chemin rejouable
+
+### Fixed
+- le smoke test de sécurité partait en Python-urllib et prenait un 403
+
+### Tests
+- couvrir les vecteurs spec 3.0 de proof-spec
+
+### Internal
+- durcissement du lot, du vérificateur et des chemins de sortie des nonces
+- docs+mesure: réécrire la procédure de vérification, exercée en tiers sur un lot réel
+- ne plus exposer le webhook secret Stripe via /v1/admin/smoke/setup
+- mettre a jour setuptools avant pip-audit
+
+---
+
+## [1.8.0] — 2026-09-13
+
+### Added
 - spec 3.0 : `hashes.chain` devient la racine Merkle d'un engagement par champ,
   `sha256(champ || 0x00 || nonce || canonical_json(valeur))`, nonce de 32 octets
   frais par champ et par preuve. La preuve publique publie les engagements et
