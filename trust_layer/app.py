@@ -2309,7 +2309,7 @@ async def bind_did_initiate(
             )
 
         try:
-            bound_at = await loop.run_in_executor(None, bind_did_to_key, api_key, did)
+            bound_at = await loop.run_in_executor(None, bind_did_to_key, api_key, did, "oatr_delegation")
         except DIDResolutionError as e:
             return _error_response("bind_failed", e.message, e.status)
 
@@ -2369,7 +2369,7 @@ async def bind_did_confirm(
 
     loop = asyncio.get_running_loop()
     try:
-        bound_at = await loop.run_in_executor(None, bind_did_to_key, api_key, payload["did"])
+        bound_at = await loop.run_in_executor(None, bind_did_to_key, api_key, payload["did"], "challenge_response")
     except DIDResolutionError as e:
         return _error_response("bind_failed", e.message, e.status)
 

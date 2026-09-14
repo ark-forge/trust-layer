@@ -1,20 +1,25 @@
 #!/usr/bin/env bash
 # deploy_trust_layer_prod.sh — Deploy Trust Layer to production with gates + staged rollout + rollback
 #
-# Usage: ./scripts/deploy_trust_layer_prod.sh [--minor|--major] [--force] [--skip-smoke]
+# Usage: ./scripts/deploy_trust_layer_prod.sh [--force] [--skip-smoke]
 #
 # Flags:
 #   --force        Bypass CI GitHub check
 #   --skip-smoke   Skip post-deploy smoke test (use for emergency hotfixes)
-#   --minor        Bump minor version (1.0.x → 1.1.0)
-#   --major        Bump major version (1.x.x → 2.0.0)
-#   (default)      Bump patch (1.0.2 → 1.0.3)
 #
-# Staged rollout (blue/green with existing HA infra):
-#   Phase 2a — Deploy to LOCAL FAILOVER first (direct health check, read-only canary)
-#   Phase 2b — Canary validation on failover (health + version + read endpoints)
-#   Phase 2c — Deploy to OVH PRIMARY (nginx falls back to validated failover during restart)
-#   Phase 2.5 — Full smoke test against production (nginx → OVH)
+# The version is decided in the PR, never here: bump trust_layer/__init__.py and add the
+# "## [x.y.z]" entry to CHANGELOG.md before merging. This script pushes nothing to main
+# (main requires the CI check; a push from here would bypass it). It only pushes the tag.
+#
+# Topology (checked at start from /var/lib/arkforge/failover_state.json on both nodes):
+#   PRIMARY  = this host (VPS1). Serves trust.arkforge.tech directly (nginx → 127.0.0.1:8100),
+#              no HA upstream: its restart is a short outage, nothing falls back.
+#   STANDBY  = VPS2 (OVH). Writes blocked, no traffic.
+#
+# Staged rollout:
+#   Phase 2a — Deploy to STANDBY first, canary on it (no traffic at risk)
+#   Phase 2b — Deploy to PRIMARY, health check direct then through the public URL
+#   Phase 2.5 — Full smoke test against production
 
 set -euo pipefail
 
@@ -22,27 +27,17 @@ set -euo pipefail
 REPO_DIR="/opt/claude-ceo/workspace/arkforge-trust-layer"
 SERVICE="arkforge-trust-layer"
 HEALTH_URL="https://trust.arkforge.tech/v1/health"
+LOCAL_URL="http://127.0.0.1:8100"
 PROOF_SPEC_DIR="/opt/claude-ceo/workspace/proof-spec"
 AGENT_CLIENT_DIR="/opt/claude-ceo/workspace/agent-client"
 SETTINGS_ENV="/opt/claude-ceo/config/settings.env"
 LOG_FILE="/opt/claude-ceo/logs/deploy_trust_layer.log"
-OVH_HOST="ubuntu@51.91.99.178"
-OVH_REPO="/opt/claude-ceo/workspace/arkforge-trust-layer"
+FAILOVER_STATE="/var/lib/arkforge/failover_state.json"
+STANDBY_HOST="ubuntu@51.91.99.178"
+STANDBY_REPO="/opt/claude-ceo/workspace/arkforge-trust-layer"
 SMOKE_TEST_SCRIPT="$REPO_DIR/scripts/smoke_test_prod.py"
 SECURITY_TEST_SCRIPT="$REPO_DIR/scripts/security_smoke_test.py"
-
-# --- Args ---
-VERSION_BUMP="patch"
-FORCE_CI=false
-SKIP_SMOKE=false
-for arg in "$@"; do
-    case "$arg" in
-        --minor)      VERSION_BUMP="minor" ;;
-        --major)      VERSION_BUMP="major" ;;
-        --force)      FORCE_CI=true ;;
-        --skip-smoke) SKIP_SMOKE=true ;;
-    esac
-done
+SSH="ssh -o ConnectTimeout=10"
 
 # --- Logging ---
 mkdir -p "$(dirname "$LOG_FILE")"
@@ -77,21 +72,69 @@ print(t.get('chat_ids', ''))
     done
 }
 
-# --- Version bump helper ---
-bump_version() {
-    local current="$1" bump="$2"
-    local major minor patch
-    major=$(echo "$current" | cut -d. -f1 | tr -d 'v')
-    minor=$(echo "$current" | cut -d. -f2)
-    patch=$(echo "$current" | cut -d. -f3)
-    case "$bump" in
-        major) echo "v$((major + 1)).0.0" ;;
-        minor) echo "v${major}.$((minor + 1)).0" ;;
-        patch) echo "v${major}.${minor}.$((patch + 1))" ;;
+# --- Args ---
+FORCE_CI=false
+SKIP_SMOKE=false
+for arg in "$@"; do
+    case "$arg" in
+        --force)      FORCE_CI=true ;;
+        --skip-smoke) SKIP_SMOKE=true ;;
+        --minor|--major)
+            echo "$arg n'existe plus : la version se fixe dans la PR (trust_layer/__init__.py + CHANGELOG.md)." >&2
+            exit 2 ;;
+        *)
+            echo "Argument inconnu : $arg" >&2
+            exit 2 ;;
     esac
+done
+
+# --- JSON field from stdin ("" if unreadable) ---
+json_field() {
+    python3 -c "
+import sys, json
+try: print(json.load(sys.stdin).get('$1', ''))
+except Exception: print('')
+"
 }
 
-# --- Ensure we're on main and up to date ---
+# --- Health of a node: "status version role" ---
+local_health() { curl -s --max-time 5 "$LOCAL_URL/v1/health" 2>/dev/null || true; }
+standby_health() { $SSH "$STANDBY_HOST" "curl -s --max-time 5 $LOCAL_URL/v1/health" 2>/dev/null || true; }
+standby_http_code() { $SSH "$STANDBY_HOST" "curl -s -o /dev/null -w '%{http_code}' --max-time 5 $LOCAL_URL$1" 2>/dev/null || echo "000"; }
+
+# --- Rollbacks ---
+rollback_local_tree() {
+    git reset --hard "$PREV_COMMIT" >> "$LOG_FILE" 2>&1
+}
+rollback_primary() {
+    log "Rollback primary: git reset --hard $PREV_COMMIT"
+    rollback_local_tree
+    sudo systemctl restart "$SERVICE"
+}
+rollback_standby() {
+    log "Rollback standby: git reset --hard $STANDBY_PREV_COMMIT"
+    if $SSH "$STANDBY_HOST" \
+        "git -C ${STANDBY_REPO} reset --hard $STANDBY_PREV_COMMIT && sudo systemctl restart $SERVICE" \
+        >> "$LOG_FILE" 2>&1; then
+        log "Rollback standby OK"
+    else
+        log "CRITICAL: Rollback standby FAILED — intervention manuelle requise"
+        telegram_notify "CRITICAL: rollback standby FAILED — intervention manuelle requise"
+    fi
+}
+check_public_after_rollback() {
+    local i status
+    for i in 1 2; do
+        sleep 5
+        status=$(curl -s --max-time 5 "$HEALTH_URL" | json_field status 2>/dev/null || echo "error")
+        if [ "$status" = "ok" ]; then log "Service opérationnel après rollback"; return 0; fi
+    done
+    log "WARN: Service ne répond pas après rollback — vérification manuelle requise"
+}
+
+# ============================================================
+# PHASE 0 — TOPOLOGY + SOURCES
+# ============================================================
 cd "$REPO_DIR"
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 if [ "$CURRENT_BRANCH" != "main" ]; then
@@ -99,29 +142,81 @@ if [ "$CURRENT_BRANCH" != "main" ]; then
 fi
 
 log "=== Trust Layer Deploy — $(date -u) ==="
-log "Branch: main | Version bump: $VERSION_BUMP | Force CI: $FORCE_CI | Skip smoke: $SKIP_SMOKE"
+log "Force CI: $FORCE_CI | Skip smoke: $SKIP_SMOKE"
+
+# Roles are read, never assumed: after a failover the order below would restart the node
+# serving traffic first. Refuse rather than guess.
+LOCAL_STATE=$(cat "$FAILOVER_STATE" 2>/dev/null || echo "{}")
+STANDBY_STATE=$($SSH "$STANDBY_HOST" "cat $FAILOVER_STATE" 2>/dev/null || echo "{}")
+LOCAL_ROLE="$(echo "$LOCAL_STATE" | json_field role)/$(echo "$LOCAL_STATE" | json_field writes)"
+STANDBY_ROLE="$(echo "$STANDBY_STATE" | json_field role)/$(echo "$STANDBY_STATE" | json_field writes)"
+log "Topology: local=$LOCAL_ROLE standby($STANDBY_HOST)=$STANDBY_ROLE"
+if [ "$LOCAL_ROLE" != "primary/enabled" ] || [ "$STANDBY_ROLE" != "standby/blocked" ]; then
+    fail "Topology unexpected (local=$LOCAL_ROLE, $STANDBY_HOST=$STANDBY_ROLE). This script deploys standby first then the local primary; after a failover it must not run as is."
+fi
+
+# Gates must test the code about to be deployed: update every clone they read first.
+PREV_COMMIT=$(git rev-parse HEAD)
+log "Previous commit (rollback point): $PREV_COMMIT"
+git pull --ff-only origin main >> "$LOG_FILE" 2>&1 || fail "git pull --ff-only failed on $REPO_DIR"
+for dir in "$PROOF_SPEC_DIR" "$AGENT_CLIENT_DIR"; do
+    if ! git -C "$dir" pull --ff-only origin main >> "$LOG_FILE" 2>&1; then
+        rollback_local_tree
+        fail "git pull --ff-only failed on $dir"
+    fi
+done
+NEW_COMMIT=$(git rev-parse HEAD)
+log "Deploy commit: $NEW_COMMIT | proof-spec: $(git -C "$PROOF_SPEC_DIR" rev-parse --short HEAD)"
+
+STANDBY_PREV_COMMIT=$($SSH "$STANDBY_HOST" "git -C ${STANDBY_REPO} rev-parse HEAD" 2>/dev/null || echo "unknown")
+log "Standby commit: $STANDBY_PREV_COMMIT"
+if [ "$NEW_COMMIT" = "$PREV_COMMIT" ] && [ "$STANDBY_PREV_COMMIT" = "$NEW_COMMIT" ]; then
+    log "Rien à déployer — primary et standby sont déjà sur $NEW_COMMIT. Exiting."
+    exit 0
+fi
+if [ "$STANDBY_PREV_COMMIT" = "unknown" ]; then
+    rollback_local_tree
+    fail "Cannot read standby commit on $STANDBY_HOST — no rollback point, refusing to deploy"
+fi
+
+# --- Version: decided in the PR ---
+NEW_VERSION=$(grep -oP '(?<=__version__ = ")[^"]+' trust_layer/__init__.py 2>/dev/null || echo "")
+NEW_TAG="v$NEW_VERSION"
+LAST_TAG=$(git tag --sort=-v:refname | head -1)
+if [ -z "$LAST_TAG" ]; then LAST_TAG="v0.0.0"; fi
+log "Version: $LAST_TAG → $NEW_TAG"
+if [ -z "$NEW_VERSION" ]; then
+    rollback_local_tree
+    fail "Cannot read __version__ from trust_layer/__init__.py"
+fi
+if [ -n "$(git tag -l "$NEW_TAG")" ] \
+   || [ "$(printf '%s\n%s\n' "$LAST_TAG" "$NEW_TAG" | sort -V | tail -1)" != "$NEW_TAG" ]; then
+    rollback_local_tree
+    fail "Version $NEW_VERSION is not above $LAST_TAG — bump trust_layer/__init__.py in a PR"
+fi
+if ! grep -q "^## \[$NEW_VERSION\]" CHANGELOG.md; then
+    rollback_local_tree
+    fail "CHANGELOG.md has no '## [$NEW_VERSION]' entry — add it in the PR"
+fi
+
+CHANGELOG=$(git log "${LAST_TAG}..HEAD" --oneline --no-merges 2>/dev/null | head -20 | sed 's/^/• /' || echo "• No changelog available")
 
 # ============================================================
 # PHASE 1 — GATES LOCALES
 # ============================================================
 log "--- Phase 1: Gates ---"
 
-# Gate 1 — CI GitHub
-# After a PR merge, CI ran on the PR branch — not on main directly.
-# Strategy: check main first; if empty/null, fall back to the last successful
-# run on any branch for the current HEAD commit (covers squash-merge PRs).
+# Gate 1 — CI GitHub on the exact commit being deployed
 if [ "$FORCE_CI" = false ]; then
-    log "Gate 1/4: CI GitHub on main..."
-    HEAD_SHA=$(git rev-parse HEAD)
-    CI_STATUS=$(gh run list --repo ark-forge/trust-layer --branch main --limit 1 --json conclusion --jq '.[0].conclusion' 2>/dev/null || echo "")
-    if [ -z "$CI_STATUS" ] || [ "$CI_STATUS" = "null" ]; then
-        # No run on main yet — look for a successful run on the commit that was merged
-        CI_STATUS=$(gh run list --repo ark-forge/trust-layer --limit 10 --json conclusion,headSha --jq "[.[] | select(.conclusion==\"success\")] | .[0].conclusion" 2>/dev/null || echo "unknown")
+    log "Gate 1/4: CI GitHub on $NEW_COMMIT..."
+    CI_OK=$(gh api "repos/ark-forge/trust-layer/commits/$NEW_COMMIT/check-runs" \
+        --jq '[.check_runs[] | select(.name == "test" and .conclusion == "success")] | length' 2>/dev/null || echo "0")
+    # gh prints its error body on stdout: anything but a positive count is a failure.
+    if ! [[ "$CI_OK" =~ ^[1-9][0-9]*$ ]]; then
+        rollback_local_tree
+        fail "CI gate FAILED — no successful 'test' check on $NEW_COMMIT. Use --force to bypass."
     fi
-    if [ "$CI_STATUS" != "success" ]; then
-        fail "CI gate FAILED — last run: '$CI_STATUS'. Use --force to bypass."
-    fi
-    log "Gate 1/4: CI OK (last run: success)"
+    log "Gate 1/4: CI OK"
 else
     log "Gate 1/4: CI bypassed (--force)"
 fi
@@ -129,9 +224,11 @@ fi
 # Gate 2 — proof-spec check_consistency
 log "Gate 2/4: proof-spec check_consistency.py..."
 if [ ! -f "$PROOF_SPEC_DIR/check_consistency.py" ]; then
+    rollback_local_tree
     fail "proof-spec not found at $PROOF_SPEC_DIR"
 fi
 if ! python3 "$PROOF_SPEC_DIR/check_consistency.py" >> "$LOG_FILE" 2>&1; then
+    rollback_local_tree
     fail "proof-spec check_consistency.py FAILED"
 fi
 log "Gate 2/4: proof-spec OK"
@@ -139,9 +236,11 @@ log "Gate 2/4: proof-spec OK"
 # Gate 3 — agent-client tests
 log "Gate 3/4: agent-client pytest..."
 if [ ! -d "$AGENT_CLIENT_DIR/tests" ]; then
+    rollback_local_tree
     fail "agent-client not found at $AGENT_CLIENT_DIR"
 fi
 if ! python3 -m pytest "$AGENT_CLIENT_DIR/tests/" -q --tb=short >> "$LOG_FILE" 2>&1; then
+    rollback_local_tree
     fail "agent-client tests FAILED"
 fi
 log "Gate 3/4: agent-client tests OK"
@@ -149,6 +248,7 @@ log "Gate 3/4: agent-client tests OK"
 # Gate 4 — Trust Layer tests
 log "Gate 4/4: trust-layer pytest..."
 if ! "$REPO_DIR/venv/bin/python3" -m pytest tests/ -q --tb=short >> "$LOG_FILE" 2>&1; then
+    rollback_local_tree
     fail "trust-layer tests FAILED"
 fi
 log "Gate 4/4: trust-layer tests OK"
@@ -156,195 +256,95 @@ log "Gate 4/4: trust-layer tests OK"
 log "All gates PASSED"
 
 # ============================================================
-# PHASE 2 — DEPLOY (staged rollout: failover first → OVH primary)
+# PHASE 2 — DEPLOY (staged rollout: standby first → primary)
 # ============================================================
 log "--- Phase 2: Deploy ---"
 
-# Compute version early — deployed code must embed the correct version
-LAST_TAG=$(git tag --sort=-v:refname | head -1)
-if [ -z "$LAST_TAG" ]; then LAST_TAG="v0.0.0"; fi
-NEW_TAG=$(bump_version "$LAST_TAG" "$VERSION_BUMP")
-NEW_VERSION="${NEW_TAG#v}"
-log "Version: $LAST_TAG → $NEW_TAG"
-
-# Build changelog before version-bump commit (cleaner history)
-CHANGELOG=$(git log "${LAST_TAG}..HEAD" --oneline --no-merges 2>/dev/null | head -20 | sed 's/^/• /' || echo "• No changelog available")
-
-# Save rollback point BEFORE version bump
-PREV_COMMIT=$(git rev-parse HEAD)
-log "Previous commit (rollback point): $PREV_COMMIT"
-
-# Bump trust_layer/__init__.py (idempotent — skipped if already correct)
-# Pull first so we don't create a redundant commit if origin already has the bump.
-git pull origin main >> "$LOG_FILE" 2>&1
-CURRENT_APP_VERSION=$(grep -oP '(?<=__version__ = ")[^"]+' trust_layer/__init__.py 2>/dev/null || echo "")
-if [ "$CURRENT_APP_VERSION" != "$NEW_VERSION" ]; then
-    sed -i "s/^__version__ = .*/__version__ = \"$NEW_VERSION\"/" trust_layer/__init__.py
-    git add trust_layer/__init__.py
-    git commit -m "chore: bump version to $NEW_VERSION" >> "$LOG_FILE" 2>&1
-    git push origin main >> "$LOG_FILE" 2>&1
-    log "Version bumped $CURRENT_APP_VERSION → $NEW_VERSION"
-else
-    log "Version already at $NEW_VERSION — no bump needed"
-fi
-
-NEW_COMMIT=$(git rev-parse HEAD)
-log "Local commit: $NEW_COMMIT"
-
-# Vérifier si OVH est déjà sur ce commit (évite un restart inutile mais ne bloque pas)
-OVH_COMMIT=$(ssh -o ConnectTimeout=10 "$OVH_HOST" \
-    "GIT_DIR=${OVH_REPO}/.git git rev-parse HEAD 2>/dev/null" 2>/dev/null || echo "unknown")
-log "OVH commit: $OVH_COMMIT"
-
-if [ "$NEW_COMMIT" = "$PREV_COMMIT" ] && [ "$OVH_COMMIT" = "$NEW_COMMIT" ]; then
-    log "Rien à déployer — local et OVH sont déjà sur $NEW_COMMIT. Exiting."
-    exit 0
-fi
-
 # ----------------------------------------------------------------
-# Phase 2a — Deploy to LOCAL FAILOVER first (direct health check)
+# Phase 2a — Deploy to STANDBY + canary (no traffic at risk)
 # ----------------------------------------------------------------
-log "--- Phase 2a: Deploy to local failover ---"
-sudo systemctl restart "$SERVICE"
-sleep 5
-
-FAILOVER_HEALTHY=false
-for i in 1 2 3; do
-    STATUS_FA=$(curl -s --max-time 5 "http://127.0.0.1:8100/v1/health" | python3 -c "
-import sys, json
-try:
-    d = json.load(sys.stdin)
-    print(d.get('status', 'error'))
-except:
-    print('error')
-" 2>/dev/null || echo "error")
-    log "Phase 2a attempt $i/3: status=$STATUS_FA"
-    if [ "$STATUS_FA" = "ok" ]; then
-        FAILOVER_HEALTHY=true
-        break
-    fi
-    sleep 5
-done
-
-if [ "$FAILOVER_HEALTHY" = false ]; then
-    log "Phase 2a FAILED — local failover not responding after restart"
-    git reset --hard "$PREV_COMMIT" >> "$LOG_FILE" 2>&1
-    sudo systemctl restart "$SERVICE"
-    fail "Phase 2a FAILED — rolled back local to $PREV_COMMIT (OVH untouched)"
-fi
-log "Phase 2a OK — local failover healthy"
-
-# ----------------------------------------------------------------
-# Phase 2b — Canary validation on failover (read-only, direct)
-# ----------------------------------------------------------------
-log "--- Phase 2b: Canary validation on failover ---"
-CANARY_OK=true
-
-FAILOVER_VERSION=$(curl -s --max-time 5 "http://127.0.0.1:8100/v1/health" | python3 -c "
-import sys, json
-try: print(json.load(sys.stdin).get('version', ''))
-except: print('')
-" 2>/dev/null || echo "")
-log "Phase 2b: failover version=$FAILOVER_VERSION"
-
-CANARY_PRICING=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "http://127.0.0.1:8100/v1/pricing")
-log "Phase 2b: /v1/pricing → HTTP $CANARY_PRICING"
-if [ "$CANARY_PRICING" != "200" ]; then CANARY_OK=false; fi
-
-CANARY_ROOT=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "http://127.0.0.1:8100/")
-log "Phase 2b: / → HTTP $CANARY_ROOT"
-if [ "$CANARY_ROOT" != "200" ]; then CANARY_OK=false; fi
-
-if [ "$CANARY_OK" = false ]; then
-    log "Phase 2b FAILED — rolling back local only (OVH untouched)"
-    git reset --hard "$PREV_COMMIT" >> "$LOG_FILE" 2>&1
-    sudo systemctl restart "$SERVICE"
-    fail "Phase 2b canary FAILED — rolled back local to $PREV_COMMIT"
-fi
-log "Phase 2b OK — canary passed (version=$FAILOVER_VERSION)"
-
-# ----------------------------------------------------------------
-# Phase 2c — Deploy to OVH PRIMARY
-# (nginx falls back to validated failover during OVH restart)
-# ----------------------------------------------------------------
-log "--- Phase 2c: Deploy to OVH primary ($OVH_HOST) ---"
-# Sync vault secrets before deploy (ensures SMTP, Stripe keys are current on OVH)
+log "--- Phase 2a: Deploy to standby ($STANDBY_HOST) ---"
+# Sync vault secrets before deploy (ensures SMTP, Stripe keys are current on the standby)
 VAULT_FILE="/opt/claude-ceo/config/vault.json.enc"
-rsync -az --no-group -e "ssh -o ConnectTimeout=10" "$VAULT_FILE" "${OVH_HOST}:${VAULT_FILE}" >> "$LOG_FILE" 2>&1 \
-    && log "Phase 2c: vault synced to OVH" \
+rsync -az --no-group -e "$SSH" "$VAULT_FILE" "${STANDBY_HOST}:${VAULT_FILE}" >> "$LOG_FILE" 2>&1 \
+    && log "Phase 2a: vault synced to standby" \
     || log "WARN: vault sync failed (non-blocking)"
-if ssh -o ConnectTimeout=10 "$OVH_HOST" \
-    "GIT_DIR=${OVH_REPO}/.git GIT_WORK_TREE=${OVH_REPO} git pull origin main 2>&1 && \
-     sudo systemctl restart arkforge-trust-layer 2>&1" >> "$LOG_FILE" 2>&1; then
-    log "Phase 2c: OVH deploy OK"
-else
-    log "Phase 2c FAILED — rolling back both servers"
-    git reset --hard "$PREV_COMMIT" >> "$LOG_FILE" 2>&1
-    sudo systemctl restart "$SERVICE"
-    if ssh -o ConnectTimeout=10 "$OVH_HOST" \
-        "cd ${OVH_REPO} && git reset --hard $PREV_COMMIT && sudo systemctl restart arkforge-trust-layer" \
-        >> "$LOG_FILE" 2>&1; then
-        log "Rollback OVH OK"
-    else
-        log "CRITICAL: Rollback OVH FAILED — intervention manuelle requise"
-        telegram_notify "CRITICAL: rollback OVH FAILED après Phase 2c — intervention manuelle requise"
-    fi
-    fail "Phase 2c OVH deploy FAILED — rolled back both servers to $PREV_COMMIT"
+
+STANDBY_OK=true
+if ! $SSH "$STANDBY_HOST" \
+    "git -C ${STANDBY_REPO} pull --ff-only origin main 2>&1 && sudo systemctl restart $SERVICE 2>&1" \
+    >> "$LOG_FILE" 2>&1; then
+    log "Phase 2a: git pull / restart failed on standby"
+    STANDBY_OK=false
 fi
 
-# Health check via nginx (validates full stack: nginx → OVH primary, 6 × 5s = 30s)
-log "Health check: $HEALTH_URL (6 attempts × 5s)..."
-HEALTHY=false
+if [ "$STANDBY_OK" = true ]; then
+    # The version served proves the process runs the new code, not just that the tree moved.
+    STANDBY_VERSION=""
+    for i in 1 2 3 4; do
+        sleep 5
+        H=$(standby_health)
+        STANDBY_VERSION=$(echo "$H" | json_field version)
+        log "Phase 2a attempt $i/4: status=$(echo "$H" | json_field status) version=$STANDBY_VERSION role=$(echo "$H" | json_field role)"
+        if [ "$(echo "$H" | json_field status)" = "ok" ] && [ "$STANDBY_VERSION" = "$NEW_VERSION" ]; then break; fi
+    done
+    if [ "$STANDBY_VERSION" != "$NEW_VERSION" ]; then STANDBY_OK=false; fi
+fi
+
+if [ "$STANDBY_OK" = true ]; then
+    for path in /v1/pricing /; do
+        CODE=$(standby_http_code "$path")
+        log "Phase 2a canary: $path → HTTP $CODE"
+        if [ "$CODE" != "200" ]; then STANDBY_OK=false; fi
+    done
+fi
+
+if [ "$STANDBY_OK" = false ]; then
+    rollback_standby
+    rollback_local_tree
+    fail "Phase 2a FAILED on standby — rolled back standby to $STANDBY_PREV_COMMIT (primary untouched)"
+fi
+log "Phase 2a OK — standby runs $NEW_VERSION"
+
+# ----------------------------------------------------------------
+# Phase 2b — Deploy to PRIMARY (short outage: nothing falls back)
+# ----------------------------------------------------------------
+log "--- Phase 2b: Deploy to primary (local) ---"
+sudo systemctl restart "$SERVICE"
+
+PRIMARY_OK=false
 for i in $(seq 1 6); do
     sleep 5
-    STATUS=$(curl -s --max-time 5 "$HEALTH_URL" | python3 -c "
-import sys, json
-try:
-    d = json.load(sys.stdin)
-    e = d.get('environment', 'production')
-    s = d.get('status', '')
-    print(f\"{s}:{e}\")
-except Exception as ex:
-    print(f'error:{ex}')
-" 2>/dev/null || echo "error:timeout")
-    SVC_STATUS=$(echo "$STATUS" | cut -d: -f1)
-    SVC_ENV=$(echo "$STATUS" | cut -d: -f2)
-    log "Attempt $i/6: status=$SVC_STATUS environment=$SVC_ENV"
-    if [ "$SVC_STATUS" = "ok" ] && [ "$SVC_ENV" = "production" ]; then
-        HEALTHY=true
+    H=$(local_health)
+    log "Phase 2b attempt $i/6: status=$(echo "$H" | json_field status) version=$(echo "$H" | json_field version) role=$(echo "$H" | json_field role)"
+    if [ "$(echo "$H" | json_field status)" = "ok" ] && [ "$(echo "$H" | json_field version)" = "$NEW_VERSION" ]; then
+        PRIMARY_OK=true
         break
     fi
 done
 
-if [ "$HEALTHY" = false ]; then
-    log "Health check FAILED — rolling back both servers to $PREV_COMMIT"
-    git reset --hard "$PREV_COMMIT" >> "$LOG_FILE" 2>&1
-    sudo systemctl restart "$SERVICE"
-    if ssh -o ConnectTimeout=10 "$OVH_HOST" \
-        "cd ${OVH_REPO} && git reset --hard $PREV_COMMIT && sudo systemctl restart arkforge-trust-layer" \
-        >> "$LOG_FILE" 2>&1; then
-        log "Rollback OVH OK"
-    else
-        log "CRITICAL: Rollback OVH FAILED — intervention manuelle requise"
-        telegram_notify "CRITICAL: rollback OVH FAILED après health check — intervention manuelle requise"
-    fi
-    # Vérification post-rollback (2 × 5s)
-    ROLLBACK_OK=false
-    for i in 1 2; do
+# Then through the public URL: validates Cloudflare → nginx → primary.
+if [ "$PRIMARY_OK" = true ]; then
+    PRIMARY_OK=false
+    for i in $(seq 1 6); do
+        H=$(curl -s --max-time 5 "$HEALTH_URL" || true)
+        log "Public health $i/6: status=$(echo "$H" | json_field status) environment=$(echo "$H" | json_field environment) version=$(echo "$H" | json_field version)"
+        if [ "$(echo "$H" | json_field status)" = "ok" ] \
+           && [ "$(echo "$H" | json_field environment)" = "production" ] \
+           && [ "$(echo "$H" | json_field version)" = "$NEW_VERSION" ]; then
+            PRIMARY_OK=true
+            break
+        fi
         sleep 5
-        RB_STATUS=$(curl -s --max-time 5 "$HEALTH_URL" | python3 -c "
-import sys, json
-try: print(json.load(sys.stdin).get('status',''))
-except: print('error')
-" 2>/dev/null || echo "error")
-        if [ "$RB_STATUS" = "ok" ]; then ROLLBACK_OK=true; break; fi
     done
-    if [ "$ROLLBACK_OK" = true ]; then
-        log "Service opérationnel après rollback"
-    else
-        log "WARN: Service ne répond pas après rollback — vérification manuelle requise"
-    fi
-    fail "Health check FAILED — rolled back to $PREV_COMMIT"
+fi
+
+if [ "$PRIMARY_OK" = false ]; then
+    log "Phase 2b FAILED — rolling back both nodes"
+    rollback_primary
+    rollback_standby
+    check_public_after_rollback
+    fail "Phase 2b FAILED — rolled back primary to $PREV_COMMIT and standby to $STANDBY_PREV_COMMIT"
 fi
 
 log "Service healthy after deploy"
@@ -360,7 +360,7 @@ else
         log "WARN: smoke or security test script missing — skipping"
     else
         SMOKE_LOG="$LOG_FILE.smoke"
-        SMOKE_BASE_URL="${HEALTH_URL%/v1/health}"  # strip /v1/health → https://arkforge.fr/trust
+        SMOKE_BASE_URL="${HEALTH_URL%/v1/health}"  # strip /v1/health → https://trust.arkforge.tech
         SMOKE_INTERNAL_SECRET=$(grep "^TRUST_LAYER_INTERNAL_SECRET=" "$SETTINGS_ENV" | cut -d= -f2-)
         # Stripe webhook secret: same resolution order as the server (vault, then
         # settings.env). /v1/admin/smoke/setup no longer hands it out (2026-09-12).
@@ -390,43 +390,10 @@ except Exception:
             SMOKE_EXIT=${PIPESTATUS[0]}
             log "Phase 2.5: Smoke test FAILED (exit $SMOKE_EXIT)"
             SMOKE_RESULT="FAILED"
-
-            # Rollback local (reset sur le commit précédent, reste sur main)
-            log "Rollback local: git reset --hard $PREV_COMMIT"
-            git reset --hard "$PREV_COMMIT" >> "$LOG_FILE" 2>&1
-            sudo systemctl restart "$SERVICE"
-
-            # Rollback OVH (reset + restart, vérification explicite)
-            log "Rollback OVH: git reset --hard $PREV_COMMIT"
-            if ssh -o ConnectTimeout=10 "$OVH_HOST" \
-                "cd ${OVH_REPO} && \
-                 git reset --hard $PREV_COMMIT >> /tmp/rollback.log 2>&1 && \
-                 sudo systemctl restart arkforge-trust-layer >> /tmp/rollback.log 2>&1" \
-                >> "$LOG_FILE" 2>&1; then
-                log "Rollback OVH OK"
-            else
-                log "CRITICAL: Rollback OVH FAILED — serveur OVH peut être dans un état incohérent"
-                telegram_notify "CRITICAL: rollback OVH FAILED après smoke test — intervention manuelle requise"
-            fi
-
-            # Vérification post-rollback (2 × 5s)
-            ROLLBACK_OK=false
-            for i in 1 2; do
-                sleep 5
-                RB_STATUS=$(curl -s --max-time 5 "$HEALTH_URL" | python3 -c "
-import sys, json
-try: print(json.load(sys.stdin).get('status',''))
-except: print('error')
-" 2>/dev/null || echo "error")
-                if [ "$RB_STATUS" = "ok" ]; then ROLLBACK_OK=true; break; fi
-            done
-            if [ "$ROLLBACK_OK" = true ]; then
-                log "Service opérationnel après rollback"
-            else
-                log "WARN: Service ne répond pas après rollback — vérification manuelle requise"
-            fi
-
-            fail "Smoke test FAILED — rolled back both servers to $PREV_COMMIT"
+            rollback_primary
+            rollback_standby
+            check_public_after_rollback
+            fail "Smoke test FAILED — rolled back primary to $PREV_COMMIT and standby to $STANDBY_PREV_COMMIT"
         fi
     fi
 fi
@@ -435,21 +402,8 @@ fi
 # PHASE 3 — RELEASE
 # ============================================================
 log "--- Phase 3: Release ---"
-# NEW_TAG, LAST_TAG, CHANGELOG already computed in Phase 2
-
-# Update CHANGELOG.md before tagging (deploy script pushes via personal token,
-# bypassing branch protection — GITHUB_TOKEN in CI cannot)
-if python3 scripts/update_changelog.py HEAD "$LAST_TAG" "$NEW_TAG" >> "$LOG_FILE" 2>&1; then
-    git add CHANGELOG.md
-    git diff --cached --quiet || {
-        git commit -m "docs(changelog): $NEW_TAG [skip ci]" >> "$LOG_FILE" 2>&1
-        git push origin main >> "$LOG_FILE" 2>&1
-        log "CHANGELOG.md committed to main"
-    }
-else
-    log "WARN: update_changelog.py failed — skipping CHANGELOG commit"
-fi
-
+# Only the tag is pushed. Release notes come from .github/workflows/release.yml;
+# CHANGELOG.md was written in the PR.
 git tag "$NEW_TAG"
 git push origin "$NEW_TAG" >> "$LOG_FILE" 2>&1
 log "Tag $NEW_TAG pushed"

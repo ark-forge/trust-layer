@@ -413,6 +413,9 @@ def test_bind_did_confirm_success(client, test_api_key):
     assert data["verified_did"] == "did:web:example.com"
     assert "bound_at" in data
     assert data["method"] == "challenge_response"
+    # the journal records what the route claims, not just what it answers
+    from trust_layer.keys import load_api_keys
+    assert load_api_keys()[test_api_key]["verified_did_method"] == "challenge_response"
 
 
 def test_bind_did_path_b_oatr(client, test_api_key):
@@ -446,6 +449,8 @@ def test_bind_did_path_b_oatr(client, test_api_key):
     data = resp.json()
     assert data["verified_did"] == "did:web:example.com"
     assert data["method"] == "oatr_delegation"
+    from trust_layer.keys import load_api_keys
+    assert load_api_keys()[test_api_key]["verified_did_method"] == "oatr_delegation"
 
 
 def test_bind_did_invalid_did(client, test_api_key):
@@ -742,32 +747,60 @@ def test_bind_did_history_recorded_on_rebind_to_different_did(test_api_key):
     """
     from trust_layer.keys import load_api_keys
 
-    bound_at_1 = bind_did_to_key(test_api_key, "did:web:first.example.com")
-    bound_at_2 = bind_did_to_key(test_api_key, "did:web:second.example.com")
+    bound_at_1 = bind_did_to_key(test_api_key, "did:web:first.example.com", "oatr_delegation")
+    bound_at_2 = bind_did_to_key(test_api_key, "did:web:second.example.com", "challenge_response")
 
     keys = load_api_keys()
     profile = keys[test_api_key]
     assert profile["verified_did"] == "did:web:second.example.com"
     assert profile["verified_did_bound_at"] == bound_at_2
+    assert profile["verified_did_method"] == "challenge_response"
 
     history = profile.get("verified_did_history")
     assert history is not None and len(history) == 1
     entry = history[0]
     assert entry["did"] == "did:web:first.example.com"
     assert entry["bound_at"] == bound_at_1
-    assert "unbound_at" in entry
+    assert entry["method"] == "oatr_delegation"
+    assert entry["unbound_at"] == bound_at_2
 
 
 def test_bind_did_no_history_entry_on_rebind_to_same_did(test_api_key):
     """Re-binding to the SAME did must not create a history entry."""
     from trust_layer.keys import load_api_keys
 
-    bind_did_to_key(test_api_key, "did:web:same.example.com")
-    bind_did_to_key(test_api_key, "did:web:same.example.com")
+    bind_did_to_key(test_api_key, "did:web:same.example.com", "challenge_response")
+    bind_did_to_key(test_api_key, "did:web:same.example.com", "challenge_response")
 
     keys = load_api_keys()
     profile = keys[test_api_key]
     assert profile.get("verified_did_history", []) == []
+
+
+def test_bind_did_same_did_by_another_method_is_journaled(test_api_key):
+    """Same DID, different method: the proof of control changed, so the journal must say so.
+
+    Otherwise an OATR delegation silently replaces a challenge-response and nothing records
+    that the key was never re-proven by signature.
+    """
+    from trust_layer.keys import load_api_keys
+
+    bound_at_1 = bind_did_to_key(test_api_key, "did:web:same.example.com", "challenge_response")
+    bind_did_to_key(test_api_key, "did:web:same.example.com", "oatr_delegation")
+
+    profile = load_api_keys()[test_api_key]
+    assert profile["verified_did_method"] == "oatr_delegation"
+    assert profile["verified_did_history"] == [{
+        "did": "did:web:same.example.com",
+        "bound_at": bound_at_1,
+        "method": "challenge_response",
+        "unbound_at": profile["verified_did_bound_at"],
+    }]
+
+
+def test_bind_did_rejects_unknown_method(test_api_key):
+    with pytest.raises(ValueError):
+        bind_did_to_key(test_api_key, "did:web:x.example.com", "trust_me")
 
 
 def test_consume_falls_back_to_memory_when_redis_returns_after_outage(monkeypatch):

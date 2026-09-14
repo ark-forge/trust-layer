@@ -446,10 +446,21 @@ def verify_oatr_delegation(did: str, oatr_issuer_id: str, did_pub_bytes: bytes) 
 # ---------------------------------------------------------------------------
 # Bind DID to API key
 # ---------------------------------------------------------------------------
-def bind_did_to_key(api_key: str, did: str) -> str:
-    """Record a verified DID in the API key profile. Returns bound_at ISO8601."""
+BIND_METHODS = ("challenge_response", "oatr_delegation")
+
+
+def bind_did_to_key(api_key: str, did: str, method: str) -> str:
+    """Record a verified DID in the API key profile. Returns bound_at ISO8601.
+
+    A binding is never overwritten silently: when the DID or the method that proved control
+    changes, the previous binding is pushed to verified_did_history. A binding made before
+    the method was recorded journals method None.
+    """
     import datetime
     from .keys import _KEYS_LOCK, load_api_keys, save_api_keys
+
+    if method not in BIND_METHODS:
+        raise ValueError(f"unknown DID binding method: {method!r}")
 
     bound_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
@@ -459,15 +470,18 @@ def bind_did_to_key(api_key: str, did: str) -> str:
             raise DIDResolutionError("API key not found", 404)
         profile = keys[api_key]
         previous_did = profile.get("verified_did")
-        if previous_did and previous_did != did:
+        previous_method = profile.get("verified_did_method")
+        if previous_did and (previous_did != did or previous_method != method):
             history = profile.setdefault("verified_did_history", [])
             history.append({
                 "did": previous_did,
                 "bound_at": profile.get("verified_did_bound_at"),
+                "method": previous_method,
                 "unbound_at": bound_at,
             })
         profile["verified_did"] = did
         profile["verified_did_bound_at"] = bound_at
+        profile["verified_did_method"] = method
         save_api_keys(keys)
 
     return bound_at
