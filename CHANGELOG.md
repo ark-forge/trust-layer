@@ -6,7 +6,24 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [1.9.0] — 2026-09-13
+## [1.9.0] — 2026-09-14
+
+### Security
+- binding DID : la méthode qui a prouvé le contrôle (`challenge_response`, `oatr_delegation`)
+  est enregistrée, et un changement de DID **ou de méthode** pousse l'ancien lien dans
+  `verified_did_history`. Une délégation OATR ne remplace plus en silence une preuve par
+  signature
+- déploiement : le script ne pousse plus rien sur `main` (bump et CHANGELOG contournaient le
+  check CI obligatoire). La version et le CHANGELOG se fixent dans la PR ; `--minor` et
+  `--major` sont retirés ; seul le tag est poussé
+- déploiement : l'ordre était inversé. Le script redémarrait d'abord le primary (VPS1, seul
+  à servir `trust.arkforge.tech`, sans upstream de repli) en l'appelant « failover », puis le
+  standby en l'appelant « primary ». Il lit désormais les rôles dans `failover_state.json`,
+  refuse toute autre topologie, déploie le standby en premier avec canari, puis le primary
+- déploiement : les gates tournaient sur l'arbre d'avant le `git pull`, et proof-spec /
+  agent-client n'étaient jamais mis à jour. Les trois clones sont tirés en `--ff-only` avant
+  les gates ; le gate CI vérifie le commit déployé, plus « le dernier run sur main » ; la santé
+  exige la version attendue, pas seulement `status: ok`
 
 ### Added
 - spec 3.1 : le bloc d'identité entre dans les champs engagés, toujours, un agent sans
