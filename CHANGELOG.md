@@ -6,6 +6,19 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.10.1] — 2026-09-14
+
+### Added
+- `scripts/provision_challenge_key.py --profil calibration` : clé `internal` sans email
+  (`proveit_calibration`, coffre `proveit.calibration_api_key`) pour les runs de référence des profils LLM
+  de PROVE IT. Six runs dépassent le quota `free` de la clé de validation, et une clé distincte de celle de
+  l'opérateur garde les DID de calibration hors de son historique de liaison
+
+### Operations
+- script seul, rien de servi par l'application. Le déploiement sert à faire relire au proxy
+  `proveit.challenge_keys` après `provision_challenge_secret.py --allow-key-ref proveit_calibration` :
+  émettre et autoriser la clé avant de déployer ce commit
+
 ## [1.10.0] — 2026-09-14
 
 ### Added

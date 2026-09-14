@@ -16,6 +16,11 @@ doit le publier.
 Profil `validation` : plan `free`, pour passer le challenge comme un participant
 (quota compris). Sans email : un email ferait partir un mail par preuve.
 
+Profil `calibration` : plan `internal`, sans email, pour les runs de référence
+des profils LLM (prove-it, decisions-goal D5). Six runs dépassent le quota free
+de la clé de validation ; une clé à part garde son DID hors de l'historique de
+liaison de la clé de l'opérateur.
+
 Avant l'ouverture, une clé émise ici n'atteint le corpus qu'une fois autorisée :
 `provision_challenge_secret.py --allow-key-ref <ref>`.
 """
@@ -35,6 +40,8 @@ PROFILS = {
                   "email": "proveit@arkforge.fr", "vault_path": "proveit.challenge_api_key"},
     "validation": {"ref_id": "proveit_validation", "plan": "free",
                    "email": "", "vault_path": "proveit.validation_api_key"},
+    "calibration": {"ref_id": "proveit_calibration", "plan": "internal",
+                    "email": "", "vault_path": "proveit.calibration_api_key"},
 }
 CEO_ROOT = "/opt/claude-ceo"
 
