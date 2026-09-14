@@ -6,6 +6,16 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.9.3] — 2026-09-14
+
+### Fixed
+- `scripts/verify_proof.py` : des paires divulguées (`--disclose` ou bloc `disclosed`) sur une preuve
+  sans engagements (spec < 3.0) produisent une ligne « selective disclosure » en FAIL. Avant, aucune
+  ligne : un consommateur qui ne cherche que les FAIL lisait le silence comme une ouverture réussie
+
+### Operations
+- script de vérification tierce seul, rien de servi par l'application : aucun déploiement requis
+
 ## [1.9.2] — 2026-09-14
 
 ### Fixed

@@ -430,6 +430,25 @@ def test_spec_3_proof_without_commitments_fails():
     assert _status(rep, "chain hash") == vp.FAIL
 
 
+@pytest.mark.parametrize("source", ["argument", "proof"])
+def test_a_disclosure_on_a_proof_without_commitments_fails(offline_fetch, source):
+    """A pre-3.0 proof commits no field: pairs handed over for it open nothing. Silence
+    would read as success to any consumer that only looks for FAIL lines."""
+    proof = _load("proof_rekor.json")
+    pairs = {"disclosed": {"request_hash": {"nonce": "00" * 32, "value": "bogus"}}}
+    if source == "proof":
+        proof.update(pairs)
+        pairs = None
+    rep = _run(proof, disclosure=pairs)
+    assert _status(rep, "selective disclosure") == vp.FAIL
+    assert "no commitments" in _detail(rep, "selective disclosure")
+
+
+def test_a_proof_without_commitments_and_no_disclosure_says_nothing(offline_fetch):
+    rep = _run(_load("proof_rekor.json"))
+    assert not [r for r in rep.rows if r[0] == "selective disclosure"]
+
+
 def test_a_failed_inclusion_is_not_reported_as_a_pending_anchor(client, monkeypatch):
     """Found by playing the third party: a broken audit path used to print the
     wait message, hiding a failure behind 'not anchored yet'."""
