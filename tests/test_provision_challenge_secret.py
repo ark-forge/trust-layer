@@ -32,6 +32,9 @@ class Coffre:
         self.valeur = secret
         self.ecritures += 1
 
+    def relire(self):
+        return self.valeur
+
 
 def test_emet_quand_le_coffre_est_vide():
     c = Coffre()
@@ -120,7 +123,7 @@ def _empreinte(cle):
 
 def test_autoriser_cle_ajoute_l_empreinte_jamais_la_cle():
     c = Coffre("")
-    r = prov.autoriser_cle("proveit_challenge", lire=c.lire, ecrire=c.ecrire,
+    r = prov.autoriser_cle("proveit_challenge", lire=c.lire, ecrire=c.ecrire, relire=c.relire,
                            trouver=_trouver({"proveit_challenge": {"active": True, "_key": CLE}}))
     assert r["changed"] is True
     assert c.valeur == _empreinte(CLE)
@@ -131,7 +134,7 @@ def test_autoriser_cle_garde_les_empreintes_existantes_et_rejoue_sans_ecrire():
     autre = "d" * 64
     c = Coffre(autre)
     trouver = _trouver({"proveit_challenge": {"active": True, "_key": CLE}})
-    prov.autoriser_cle("proveit_challenge", lire=c.lire, ecrire=c.ecrire, trouver=trouver)
+    prov.autoriser_cle("proveit_challenge", lire=c.lire, ecrire=c.ecrire, relire=c.relire, trouver=trouver)
     assert set(c.valeur.split(",")) == {autre, _empreinte(CLE)}
 
     r = prov.autoriser_cle("proveit_challenge", lire=c.lire, ecrire=c.ecrire, trouver=trouver)
@@ -154,12 +157,54 @@ def test_autoriser_cle_inconnue_ou_desactivee_est_une_erreur(infos):
     assert c.ecritures == 0
 
 
+class CoffrePartage(Coffre):
+    """Un autre écrivain réécrit le coffre juste après nous, depuis sa copie d'avant.
+
+    C'est la course réelle : `automation.vault` réécrit tout le fichier depuis sa
+    copie en mémoire, sans verrou. Notre écriture est perdue sans erreur.
+    """
+
+    def __init__(self, initial=""):
+        super().__init__(initial)
+        self.sur_disque = initial
+
+    def ecrire(self, valeur):
+        super().ecrire(valeur)
+        # l'autre processus avait lu avant nous et réécrit sa copie : notre valeur disparaît
+
+    def relire(self):
+        return self.sur_disque
+
+
+def test_autoriser_cle_ecrasee_par_un_autre_ecrivain_est_une_erreur():
+    """Sans relecture, le script annonce « empreinte ajoutée » et le proxy ne la verra jamais."""
+    c = CoffrePartage("")
+    with pytest.raises(prov.ErreurCoffre):
+        prov.autoriser_cle("proveit_challenge", lire=c.lire, ecrire=c.ecrire, relire=c.relire,
+                           trouver=_trouver({"proveit_challenge": {"active": True, "_key": CLE}}))
+
+
+def test_autoriser_cle_relue_intacte_passe():
+    c = CoffrePartage("")
+    c.relire = lambda: c.valeur
+    r = prov.autoriser_cle("proveit_challenge", lire=c.lire, ecrire=c.ecrire, relire=c.relire,
+                           trouver=_trouver({"proveit_challenge": {"active": True, "_key": CLE}}))
+    assert r["changed"] is True
+
+
+def test_fermer_la_saison_ecrasee_par_un_autre_ecrivain_est_une_erreur():
+    """Le cas qui compte : un --close perdu laisse la saison ouverte à toutes les clés."""
+    c = CoffrePartage("true")
+    with pytest.raises(prov.ErreurCoffre):
+        prov.declarer_saison(False, lire=c.lire, ecrire=c.ecrire, relire=c.relire)
+
+
 def test_declarer_saison_ecrit_true_ou_false_et_rejoue():
     c = Coffre("")
-    assert prov.declarer_saison(True, lire=c.lire, ecrire=c.ecrire)["changed"] is True
+    assert prov.declarer_saison(True, lire=c.lire, ecrire=c.ecrire, relire=c.relire)["changed"] is True
     assert c.valeur == "true"
-    assert prov.declarer_saison(True, lire=c.lire, ecrire=c.ecrire)["changed"] is False
-    prov.declarer_saison(False, lire=c.lire, ecrire=c.ecrire)
+    assert prov.declarer_saison(True, lire=c.lire, ecrire=c.ecrire, relire=c.relire)["changed"] is False
+    prov.declarer_saison(False, lire=c.lire, ecrire=c.ecrire, relire=c.relire)
     assert c.valeur == "false" and c.ecritures == 2
 
 

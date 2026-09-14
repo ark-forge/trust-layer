@@ -86,6 +86,26 @@ def _lire_champ(cle: str) -> str:
     return (_vault().get_section(VAULT_SECTION) or {}).get(cle, "")
 
 
+def _relire_champ(cle: str) -> str:
+    """Relit depuis le disque, pas depuis la copie en mémoire.
+
+    `automation.vault` réécrit tout le fichier depuis sa copie, sans verrou : un autre
+    processus qui écrit juste après nous efface notre valeur sans erreur. Relire la
+    copie en mémoire retrouverait toujours notre propre écriture.
+    """
+    v = _vault()
+    v.reload()
+    return (v.get_section(VAULT_SECTION) or {}).get(cle, "")
+
+
+def relire_cles() -> str:
+    return _relire_champ(KEYS_KEY)
+
+
+def relire_saison() -> str:
+    return _relire_champ(OPEN_KEY)
+
+
 def lire_cles() -> str:
     return _lire_champ(KEYS_KEY)
 
@@ -108,7 +128,7 @@ def _trouver_cle(ref: str):
 
 
 def autoriser_cle(ref: str, lire=lire_cles, ecrire=ecrire_cles, trouver=_trouver_cle,
-                  dry_run: bool = False) -> dict:
+                  relire=relire_cles, dry_run: bool = False) -> dict:
     """Ajoute l'empreinte de la clé active de `ref` à la liste d'avant ouverture.
 
     Seule l'empreinte va au coffre et au compte rendu, jamais la clé.
@@ -123,11 +143,14 @@ def autoriser_cle(ref: str, lire=lire_cles, ecrire=ecrire_cles, trouver=_trouver
     if dry_run:
         return {"changed": False, "ref": ref, "count": len(actuelles), "would_write": True}
     ecrire(",".join(actuelles + [empreinte]))
+    if empreinte not in [e.strip() for e in relire().split(",")]:
+        raise ErreurCoffre(f"empreinte de « {ref} » absente à la relecture : écrasée par un "
+                           f"autre écrivain du coffre, relancer")
     return {"changed": True, "ref": ref, "count": len(actuelles) + 1}
 
 
 def declarer_saison(ouverte: bool, lire=lire_saison, ecrire=ecrire_saison,
-                    dry_run: bool = False) -> dict:
+                    relire=relire_saison, dry_run: bool = False) -> dict:
     """Écrit l'état de saison. Toujours explicite : « true » ou « false »."""
     voulu = "true" if ouverte else "false"
     actuel = lire()
@@ -136,6 +159,10 @@ def declarer_saison(ouverte: bool, lire=lire_saison, ecrire=ecrire_saison,
     if dry_run:
         return {"changed": False, "value": actuel, "would_write": voulu}
     ecrire(voulu)
+    relu = relire()
+    if relu != voulu:
+        raise ErreurCoffre(f"{OPEN_PATH} relu à « {relu or 'vide'} » au lieu de « {voulu} » : "
+                           f"écrasé par un autre écrivain du coffre, relancer")
     return {"changed": True, "value": voulu, "previous": actuel}
 
 
