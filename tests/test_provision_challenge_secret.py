@@ -102,3 +102,68 @@ def test_declarer_hotes_dry_run_n_ecrit_pas():
     h = Hotes("ancien.example")
     r = prov.declarer_hotes("corpus.arkforge.tech", lire=h.lire, ecrire=h.ecrire, dry_run=True)
     assert h.ecritures == 0 and r["would_write"] == "corpus.arkforge.tech"
+
+
+# --- Clés autorisées avant l'ouverture ----------------------------------------
+
+CLE = "mcp_int_" + "c" * 48
+
+
+def _trouver(infos):
+    return lambda ref: infos.get(ref)
+
+
+def _empreinte(cle):
+    import hashlib
+    return hashlib.sha256(cle.encode("utf-8")).hexdigest()
+
+
+def test_autoriser_cle_ajoute_l_empreinte_jamais_la_cle():
+    c = Coffre("")
+    r = prov.autoriser_cle("proveit_challenge", lire=c.lire, ecrire=c.ecrire,
+                           trouver=_trouver({"proveit_challenge": {"active": True, "_key": CLE}}))
+    assert r["changed"] is True
+    assert c.valeur == _empreinte(CLE)
+    assert CLE not in c.valeur and CLE not in str(r)
+
+
+def test_autoriser_cle_garde_les_empreintes_existantes_et_rejoue_sans_ecrire():
+    autre = "d" * 64
+    c = Coffre(autre)
+    trouver = _trouver({"proveit_challenge": {"active": True, "_key": CLE}})
+    prov.autoriser_cle("proveit_challenge", lire=c.lire, ecrire=c.ecrire, trouver=trouver)
+    assert set(c.valeur.split(",")) == {autre, _empreinte(CLE)}
+
+    r = prov.autoriser_cle("proveit_challenge", lire=c.lire, ecrire=c.ecrire, trouver=trouver)
+    assert r["changed"] is False and c.ecritures == 1
+
+
+def test_autoriser_cle_dry_run_n_ecrit_pas():
+    c = Coffre("")
+    r = prov.autoriser_cle("proveit_challenge", lire=c.lire, ecrire=c.ecrire, dry_run=True,
+                           trouver=_trouver({"proveit_challenge": {"active": True, "_key": CLE}}))
+    assert c.ecritures == 0 and r["would_write"] is True
+
+
+@pytest.mark.parametrize("infos", [{}, {"proveit_challenge": {"active": False, "_key": CLE}}])
+def test_autoriser_cle_inconnue_ou_desactivee_est_une_erreur(infos):
+    """Autoriser une ref sans clé active ferait croire le corpus accessible."""
+    c = Coffre("")
+    with pytest.raises(prov.ErreurCoffre):
+        prov.autoriser_cle("proveit_challenge", lire=c.lire, ecrire=c.ecrire, trouver=_trouver(infos))
+    assert c.ecritures == 0
+
+
+def test_declarer_saison_ecrit_true_ou_false_et_rejoue():
+    c = Coffre("")
+    assert prov.declarer_saison(True, lire=c.lire, ecrire=c.ecrire)["changed"] is True
+    assert c.valeur == "true"
+    assert prov.declarer_saison(True, lire=c.lire, ecrire=c.ecrire)["changed"] is False
+    prov.declarer_saison(False, lire=c.lire, ecrire=c.ecrire)
+    assert c.valeur == "false" and c.ecritures == 2
+
+
+def test_declarer_saison_dry_run_n_ecrit_pas():
+    c = Coffre("false")
+    r = prov.declarer_saison(True, lire=c.lire, ecrire=c.ecrire, dry_run=True)
+    assert c.ecritures == 0 and r["would_write"] == "true"

@@ -346,6 +346,35 @@ async def test_execute_proxy_idempotency(test_api_key):
     assert mock_client.post.call_count == 1
 
 
+@pytest.mark.asyncio
+async def test_idempotency_cache_is_per_caller(test_api_key):
+    """The cache returns a stored result without reaching any per-caller check.
+    Keyed on the idempotency key alone, another key replaying it would receive
+    the first caller's response: another customer's data, or the private corpus
+    body without passing the challenge key gate (§4.2 review, 2026-09-14)."""
+    from trust_layer.keys import create_api_key
+    other_key = create_api_key("cus_other", "ref_other", "other@example.com", test_mode=True)
+    add_credits(test_api_key, 10.00, "pi_test_idemp_a")
+    add_credits(other_key, 10.00, "pi_test_idemp_b")
+
+    mock_client = _mock_http_client()
+    with patch("httpx.AsyncClient", return_value=mock_client), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+        first = await execute_proxy(
+            target="https://example.com/api",
+            method="POST", payload={}, amount=PROOF_PRICE, currency="eur",
+            api_key=test_api_key, idempotency_key="shared-key",
+        )
+        second = await execute_proxy(
+            target="https://example.com/api",
+            method="POST", payload={}, amount=PROOF_PRICE, currency="eur",
+            api_key=other_key, idempotency_key="shared-key",
+        )
+
+    assert mock_client.post.call_count == 2
+    assert first["proof"]["proof_id"] != second["proof"]["proof_id"]
+
+
 # ---------------------------------------------------------------------------
 # Security: X-Internal-Secret scrubbing (A5)
 # ---------------------------------------------------------------------------
@@ -659,12 +688,14 @@ def _mock_json_client(captured_headers):
 @pytest.mark.asyncio
 async def test_challenge_secret_forwarded_to_challenge_host(test_api_key):
     """X-Challenge-Secret IS forwarded to a host listed in CHALLENGE_HOSTS."""
+    from trust_layer.proofs import sha256_hex
     add_credits(test_api_key, 10.00, "pi_test_challenge_ok")
     captured = {}
 
     with patch("httpx.AsyncClient", return_value=_mock_json_client(captured)), \
          patch("trust_layer.proxy.CHALLENGE_SECRET", "challenge-s3cret"), \
          patch("trust_layer.proxy.CHALLENGE_HOSTS", {"corpus.arkforge.tech"}), \
+         patch("trust_layer.proxy.CHALLENGE_KEYS", {sha256_hex(test_api_key)}), \
          patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
         await execute_proxy(
             target="https://corpus.arkforge.tech/registres/entites/ENT-4417",
@@ -707,6 +738,7 @@ async def test_challenge_and_internal_allowlists_are_independent(test_api_key):
          patch("trust_layer.proxy.TRUSTED_INTERNAL_HOSTS", {"smoke.arkforge.tech"}), \
          patch("trust_layer.proxy.CHALLENGE_SECRET", "challenge-s3cret"), \
          patch("trust_layer.proxy.CHALLENGE_HOSTS", {"corpus.arkforge.tech"}), \
+         patch("trust_layer.proxy.CHALLENGE_OPEN", True), \
          patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
         await execute_proxy(
             target="https://corpus.arkforge.tech/catalogue",
@@ -739,6 +771,70 @@ async def test_extra_headers_cannot_forge_challenge_secret(test_api_key):
         )
 
     assert captured.get("X-Challenge-Secret") != "FORGED"
+
+
+# --- Before the season opens, the corpus is ours alone ------------------------
+# Anyone gets a key from /v1/keys/free-signup. If the secret followed the host
+# alone, the private corpus would be readable by anyone before the season opens.
+# Keys are named by fingerprint, not by ref: a free key's ref is
+# free_signup_<email>, which anyone can recreate once the original is inactive.
+
+async def _challenge_call(api_key, captured, *, open_, keys):
+    with patch("httpx.AsyncClient", return_value=_mock_json_client(captured)), \
+         patch("trust_layer.proxy.CHALLENGE_SECRET", "challenge-s3cret"), \
+         patch("trust_layer.proxy.CHALLENGE_HOSTS", {"corpus.arkforge.tech"}), \
+         patch("trust_layer.proxy.CHALLENGE_OPEN", open_), \
+         patch("trust_layer.proxy.CHALLENGE_KEYS", keys), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+        await execute_proxy(
+            target="https://corpus.arkforge.tech/registres",
+            method="POST", payload={}, amount=PROOF_PRICE, currency="eur",
+            api_key=api_key,
+        )
+
+
+@pytest.mark.asyncio
+async def test_challenge_secret_withheld_from_unlisted_key_while_closed(test_api_key):
+    captured = {}
+    await _challenge_call(test_api_key, captured, open_=False, keys={"0" * 64})
+    assert "X-Challenge-Secret" not in captured
+    assert "challenge-s3cret" not in str(captured)
+
+
+@pytest.mark.asyncio
+async def test_challenge_secret_withheld_from_everyone_when_closed_and_no_keys(test_api_key):
+    """Fail closed: an unreadable vault yields no keys and no open flag, and
+    must not open the corpus to every caller."""
+    captured = {}
+    await _challenge_call(test_api_key, captured, open_=False, keys=set())
+    assert "X-Challenge-Secret" not in captured
+
+
+@pytest.mark.asyncio
+async def test_challenge_secret_forwarded_to_any_key_once_open(test_api_key):
+    captured = {}
+    await _challenge_call(test_api_key, captured, open_=True, keys=set())
+    assert captured.get("X-Challenge-Secret") == "challenge-s3cret"
+
+
+@pytest.mark.asyncio
+async def test_challenge_key_list_does_not_gate_internal_secret(test_api_key):
+    """The key list belongs to the challenge secret only."""
+    captured = {}
+    with patch("httpx.AsyncClient", return_value=_mock_json_client(captured)), \
+         patch("trust_layer.proxy.INTERNAL_SECRET", "internal-s3cret"), \
+         patch("trust_layer.proxy.TRUSTED_INTERNAL_HOSTS", {"smoke.arkforge.tech"}), \
+         patch("trust_layer.proxy.CHALLENGE_SECRET", "challenge-s3cret"), \
+         patch("trust_layer.proxy.CHALLENGE_HOSTS", {"corpus.arkforge.tech"}), \
+         patch("trust_layer.proxy.CHALLENGE_OPEN", False), \
+         patch("trust_layer.proxy.CHALLENGE_KEYS", set()), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+        await execute_proxy(
+            target="https://smoke.arkforge.tech/check",
+            method="POST", payload={}, amount=PROOF_PRICE, currency="eur",
+            api_key=test_api_key,
+        )
+    assert captured.get("X-Internal-Secret") == "internal-s3cret"
 
 
 def test_scrub_removes_challenge_secret_echoed_by_upstream():
@@ -822,7 +918,9 @@ def test_challenge_config_problems_detects_both_incoherences():
     vault is unreachable, the secret silently becomes "" while the allowlist may
     still be set: the proxy forwards nothing, the corpus 403s every participant,
     and the outage reads as a corpus failure rather than a configuration one."""
-    from trust_layer.config import challenge_config_problems as problems
+    from functools import partial
+    from trust_layer.config import challenge_config_problems
+    problems = partial(challenge_config_problems, open_=True, keys=set())
 
     assert problems("s3cret", {"corpus.arkforge.tech"}) == []
     assert problems("", set()) == []
@@ -832,3 +930,54 @@ def test_challenge_config_problems_detects_both_incoherences():
 
     secret_no_hosts = problems("s3cret", set())
     assert len(secret_no_hosts) == 1 and "inert" in secret_no_hosts[0]
+
+
+def test_challenge_config_problems_flags_a_closed_season_nobody_can_reach():
+    from trust_layer.config import challenge_config_problems as problems
+
+    fp = "a" * 64
+    hosts = {"corpus.arkforge.tech"}
+    assert problems("s3cret", hosts, open_=False, keys={fp}) == []
+    assert problems("s3cret", hosts, open_=True, keys=set()) == []
+
+    nobody = problems("s3cret", hosts, open_=False, keys=set())
+    assert len(nobody) == 1 and "challenge_keys" in nobody[0]
+
+
+def test_vault_decides_challenge_access_over_the_environment():
+    """setdefault lets any pre-existing variable (unit file, settings.env line)
+    win over the vault. Harmless for secret values, not for the season state:
+    a stray TRUST_LAYER_CHALLENGE_OPEN=true would open the corpus whatever the
+    vault says. When the vault is read, it decides these two, empty included."""
+    from trust_layer.config import _apply_vault_values as apply
+
+    env = {"TRUST_LAYER_CHALLENGE_OPEN": "true", "TRUST_LAYER_CHALLENGE_KEYS": "a" * 64,
+           "SMTP_HOST": "from-env"}
+    apply({"TRUST_LAYER_CHALLENGE_OPEN": "", "TRUST_LAYER_CHALLENGE_KEYS": "",
+           "SMTP_HOST": "from-vault"}, env)
+
+    assert env["TRUST_LAYER_CHALLENGE_OPEN"] == ""
+    assert env["TRUST_LAYER_CHALLENGE_KEYS"] == ""
+    assert env["SMTP_HOST"] == "from-env"     # other values keep the existing precedence
+
+
+def test_parse_challenge_open_accepts_only_an_explicit_true():
+    """Anything but an explicit "true" keeps the season closed."""
+    from trust_layer.config import parse_challenge_open as parse
+
+    assert parse("true") is True and parse(" TRUE ") is True
+    for raw in ("", "false", "1", "yes", "open", "tru"):
+        assert parse(raw) is False, raw
+
+
+def test_parse_challenge_keys_keeps_only_fingerprints():
+    """A raw API key pasted in place of its fingerprint must not grant access
+    (and must not sit in memory as an allowlist entry)."""
+    from trust_layer.config import parse_challenge_keys as parse
+
+    fp = "ab" * 32
+    assert parse(f" {fp.upper()} , ,{fp}") == ({fp}, [])
+    keys, rejected = parse(f"{fp},mcp_free_0123456789abcdef,{'z' * 64}")
+    assert keys == {fp}
+    assert len(rejected) == 2
+    assert all("mcp_free_" not in r for r in rejected)
