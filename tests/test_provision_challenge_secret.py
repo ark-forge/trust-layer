@@ -5,6 +5,7 @@ fonction prend donc un lecteur et un écrivain injectables, et ces tests ne
 touchent aucun coffre réel.
 """
 
+import copy
 import importlib.util
 import sys
 from pathlib import Path
@@ -221,6 +222,35 @@ def test_autoriser_cle_relue_avec_une_empreinte_perdue_est_une_erreur():
     with pytest.raises(prov.ErreurCoffre):
         prov.autoriser_cle("proveit_challenge", lire=c.lire, ecrire=c.ecrire, relire=c.relire,
                            trouver=_trouver({"proveit_challenge": {"active": True, "_key": CLE}}))
+
+
+class FauxVault:
+    """Même comportement que `automation.vault` : copie en mémoire chargée une fois, `reload` la vide."""
+
+    def __init__(self, disque):
+        self.disque = disque
+        self.memoire = None
+
+    def reload(self):
+        self.memoire = None
+
+    def get_section(self, section):
+        if self.memoire is None:
+            self.memoire = copy.deepcopy(self.disque)
+        return dict(self.memoire.get(section, {}))
+
+
+@pytest.mark.parametrize("relire,champ", [
+    ("relire_secret", "challenge_secret"), ("relire_hotes", "challenge_hosts"),
+    ("relire_cles", "challenge_keys"), ("relire_saison", "challenge_open"),
+])
+def test_relecture_par_defaut_lit_le_disque_pas_la_copie_en_memoire(monkeypatch, relire, champ):
+    """Câblage réel : sans `reload`, la relecture retrouverait toujours notre propre écriture."""
+    v = FauxVault({"proveit": {champ: "valeur-en-memoire"}})
+    monkeypatch.setattr(prov, "_vault", lambda: v)
+    v.get_section("proveit")
+    v.disque["proveit"][champ] = "valeur-d-un-autre-ecrivain"
+    assert getattr(prov, relire)() == "valeur-d-un-autre-ecrivain"
 
 
 def test_declarer_saison_ecrit_true_ou_false_et_rejoue():
