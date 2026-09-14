@@ -6,6 +6,19 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.9.2] — 2026-09-14
+
+### Fixed
+- `scripts/provision_challenge_secret.py` : `--allow-key-ref` et `--open` / `--close` relisent le
+  coffre sur disque après écriture et échouent si la valeur a disparu. Le coffre réécrit tout son
+  fichier depuis sa copie en mémoire, sans verrou : un autre écrivain passant juste après effaçait
+  l'écriture sans erreur, et le script annonçait un succès. Cas grave : un `--close` perdu laissait
+  la saison ouverte à toutes les clés. La cause (écriture non atomique du coffre) n'est pas corrigée ici
+
+### Operations
+- ce déploiement fait relire le coffre au proxy : les deux clés PROVE IT autorisées avant
+  l'ouverture (`proveit_challenge`, `proveit_validation`) sont prises en compte
+
 ## [1.9.1] — 2026-09-14
 
 ### Security
