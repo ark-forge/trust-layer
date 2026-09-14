@@ -626,6 +626,26 @@ Response:
 
 From this point, all proxy calls from this API key include `agent_identity_verified: true` in the proof receipt — without any change to your call code.
 
+**Read the binding back**
+
+```bash
+curl https://trust.arkforge.tech/v1/keys/identity -H "X-Api-Key: mcp_pro_xxx..."
+```
+
+Response (identity only: no email, plan or payment reference):
+```json
+{
+  "verified_did": "did:web:example.com",
+  "verified_did_method": "challenge_response",
+  "verified_did_bound_at": "2026-03-30T13:00:00+00:00",
+  "verified_did_history": [
+    {"did": "did:key:z6Mk...", "bound_at": "2026-03-01T09:00:00+00:00", "method": "challenge_response", "unbound_at": "2026-03-30T13:00:00+00:00"}
+  ]
+}
+```
+
+Every change of DID or binding method appends the previous binding to `verified_did_history`.
+
 ---
 
 ### Path B — OATR delegation (skip challenge)

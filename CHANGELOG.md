@@ -6,6 +6,17 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.10.0] — 2026-09-14
+
+### Added
+- `GET /v1/keys/identity` : le porteur d'une clé lit le DID lié à sa clé (`verified_did`, méthode, date)
+  et son historique de liaison (`verified_did_history`). Identité seule : ni email, ni plan, ni référence
+  de paiement. Consommateur : le service de saison PROVE IT (un DID par clé, DID liés à une même clé comptés
+  comme un seul participant)
+
+### Operations
+- nouvelle route servie par l'application : déploiement requis (`deploy_trust_layer_prod.sh`)
+
 ## [1.9.3] — 2026-09-14
 
 ### Fixed
