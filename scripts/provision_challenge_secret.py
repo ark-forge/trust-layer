@@ -258,6 +258,7 @@ def _rapporter_acces(args) -> None:
 
 def _rapporter_acces_ou_echouer(args) -> int:
     try:
+        _rapporter_hotes(args)
         _rapporter_acces(args)
     except ErreurCoffre as exc:
         print(f"ÉCHEC : {exc}", file=sys.stderr)
@@ -302,7 +303,6 @@ def main() -> int:
             print(f"secret déjà présent dans {VAULT_PATH} : rien à faire")
         # surtout pas de return ici : un dry-run qui tait la moitié de ce qu'il
         # ferait est pire qu'absent, il fait valider une action non annoncée.
-        _rapporter_hotes(args)
         return _rapporter_acces_ou_echouer(args)
 
     if r["created"]:
@@ -313,7 +313,6 @@ def main() -> int:
     else:
         print(f"secret déjà présent dans {VAULT_PATH}, rien à faire")
 
-    _rapporter_hotes(args)
     return _rapporter_acces_ou_echouer(args)
 
 

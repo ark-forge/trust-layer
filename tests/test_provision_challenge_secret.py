@@ -224,6 +224,18 @@ def test_autoriser_cle_relue_avec_une_empreinte_perdue_est_une_erreur():
                            trouver=_trouver({"proveit_challenge": {"active": True, "_key": CLE}}))
 
 
+def test_main_hotes_ecrases_sort_en_echec_propre(monkeypatch, capsys):
+    """Une écriture perdue sur les hôtes rend ÉCHEC et rc 1, pas une trace Python."""
+    monkeypatch.setattr(prov, "provisionner", lambda **kw: {"created": False, "present": True})
+
+    def perdu(*a, **kw):
+        raise prov.ErreurCoffre("écrasé")
+    monkeypatch.setattr(prov, "declarer_hotes", perdu)
+    monkeypatch.setattr(sys, "argv", ["provision_challenge_secret.py", "--host", "corpus.arkforge.tech"])
+    assert prov.main() == 1
+    assert "ÉCHEC" in capsys.readouterr().err
+
+
 class FauxVault:
     """Même comportement que `automation.vault` : copie en mémoire chargée une fois, `reload` la vide."""
 
