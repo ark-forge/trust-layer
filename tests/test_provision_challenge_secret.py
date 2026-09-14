@@ -38,7 +38,7 @@ class Coffre:
 
 def test_emet_quand_le_coffre_est_vide():
     c = Coffre()
-    r = prov.provisionner(lire=c.lire, ecrire=c.ecrire)
+    r = prov.provisionner(lire=c.lire, ecrire=c.ecrire, relire=c.relire)
     assert r["created"] is True
     assert c.ecritures == 1
     assert len(c.valeur) >= 32
@@ -48,7 +48,7 @@ def test_rejeu_idempotent():
     """Relancer le script ne doit pas remplacer un secret en service : le proxy
     et le corpus le partagent, une réécriture silencieuse casserait le corpus."""
     c = Coffre("secret-en-service")
-    r = prov.provisionner(lire=c.lire, ecrire=c.ecrire)
+    r = prov.provisionner(lire=c.lire, ecrire=c.ecrire, relire=c.relire)
     assert r["created"] is False
     assert c.ecritures == 0
     assert c.valeur == "secret-en-service"
@@ -56,7 +56,7 @@ def test_rejeu_idempotent():
 
 def test_rotate_remplace_explicitement():
     c = Coffre("ancien")
-    r = prov.provisionner(lire=c.lire, ecrire=c.ecrire, rotate=True)
+    r = prov.provisionner(lire=c.lire, ecrire=c.ecrire, relire=c.relire, rotate=True)
     assert r["created"] is True and r["rotated"] is True
     assert c.valeur != "ancien" and c.ecritures == 1
 
@@ -73,15 +73,15 @@ def test_le_secret_n_est_jamais_rendu():
     """Le secret ne doit exister qu'au coffre. Une fonction qui le rend finit
     dans un log, une sortie de script ou un rapport."""
     c = Coffre()
-    r = prov.provisionner(lire=c.lire, ecrire=c.ecrire)
+    r = prov.provisionner(lire=c.lire, ecrire=c.ecrire, relire=c.relire)
     assert c.valeur not in str(r)
     assert not any(isinstance(v, str) and v == c.valeur for v in r.values())
 
 
 def test_secrets_successifs_differents():
     a, b = Coffre(), Coffre()
-    prov.provisionner(lire=a.lire, ecrire=a.ecrire)
-    prov.provisionner(lire=b.lire, ecrire=b.ecrire)
+    prov.provisionner(lire=a.lire, ecrire=a.ecrire, relire=a.relire)
+    prov.provisionner(lire=b.lire, ecrire=b.ecrire, relire=b.relire)
     assert a.valeur != b.valeur
 
 
@@ -91,7 +91,7 @@ class Hotes(Coffre):
 
 def test_declarer_hotes_ecrit_quand_ca_change():
     h = Hotes("")
-    r = prov.declarer_hotes("corpus.arkforge.tech", lire=h.lire, ecrire=h.ecrire)
+    r = prov.declarer_hotes("corpus.arkforge.tech", lire=h.lire, ecrire=h.ecrire, relire=h.relire)
     assert r["changed"] is True and h.valeur == "corpus.arkforge.tech"
 
 
@@ -197,6 +197,30 @@ def test_fermer_la_saison_ecrasee_par_un_autre_ecrivain_est_une_erreur():
     c = CoffrePartage("true")
     with pytest.raises(prov.ErreurCoffre):
         prov.declarer_saison(False, lire=c.lire, ecrire=c.ecrire, relire=c.relire)
+
+
+def test_rotation_ecrasee_par_un_autre_ecrivain_est_une_erreur():
+    """Rotation après fuite : annoncer « remplacé » alors que l'ancien secret reste au coffre
+    laisse le secret compromis en service."""
+    c = CoffrePartage("ancien-secret-fuite")
+    with pytest.raises(prov.ErreurCoffre):
+        prov.provisionner(lire=c.lire, ecrire=c.ecrire, relire=c.relire, rotate=True)
+
+
+def test_declarer_hotes_ecrase_par_un_autre_ecrivain_est_une_erreur():
+    c = CoffrePartage("")
+    with pytest.raises(prov.ErreurCoffre):
+        prov.declarer_hotes("corpus.arkforge.tech", lire=c.lire, ecrire=c.ecrire, relire=c.relire)
+
+
+def test_autoriser_cle_relue_avec_une_empreinte_perdue_est_une_erreur():
+    """L'autre écrivain a gardé notre empreinte mais perdu une clé déjà autorisée."""
+    autre = "d" * 64
+    c = CoffrePartage(autre)
+    c.relire = lambda: _empreinte(CLE)
+    with pytest.raises(prov.ErreurCoffre):
+        prov.autoriser_cle("proveit_challenge", lire=c.lire, ecrire=c.ecrire, relire=c.relire,
+                           trouver=_trouver({"proveit_challenge": {"active": True, "_key": CLE}}))
 
 
 def test_declarer_saison_ecrit_true_ou_false_et_rejoue():

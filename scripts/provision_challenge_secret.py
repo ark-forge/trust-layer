@@ -35,6 +35,7 @@ saison, ou prévoir côté corpus l'acceptation transitoire de deux secrets.
 
 import argparse
 import hashlib
+import hmac
 import logging
 import secrets
 import sys
@@ -98,6 +99,14 @@ def _relire_champ(cle: str) -> str:
     return (v.get_section(VAULT_SECTION) or {}).get(cle, "")
 
 
+def relire_secret() -> str:
+    return _relire_champ(VAULT_KEY)
+
+
+def relire_hotes() -> str:
+    return _relire_champ(HOSTS_KEY)
+
+
 def relire_cles() -> str:
     return _relire_champ(KEYS_KEY)
 
@@ -142,10 +151,12 @@ def autoriser_cle(ref: str, lire=lire_cles, ecrire=ecrire_cles, trouver=_trouver
         return {"changed": False, "ref": ref, "count": len(actuelles)}
     if dry_run:
         return {"changed": False, "ref": ref, "count": len(actuelles), "would_write": True}
-    ecrire(",".join(actuelles + [empreinte]))
-    if empreinte not in [e.strip() for e in relire().split(",")]:
-        raise ErreurCoffre(f"empreinte de « {ref} » absente à la relecture : écrasée par un "
-                           f"autre écrivain du coffre, relancer")
+    voulu = ",".join(actuelles + [empreinte])
+    ecrire(voulu)
+    # Égalité stricte : un autre écrivain peut garder notre empreinte et en perdre une autre.
+    if relire() != voulu:
+        raise ErreurCoffre(f"{KEYS_PATH} relu différent de ce qui vient d'être écrit pour « {ref} » : "
+                           f"écrasé par un autre écrivain du coffre, relancer")
     return {"changed": True, "ref": ref, "count": len(actuelles) + 1}
 
 
@@ -167,7 +178,7 @@ def declarer_saison(ouverte: bool, lire=lire_saison, ecrire=ecrire_saison,
 
 
 def declarer_hotes(hotes: str, lire=lire_hotes, ecrire=ecrire_hotes,
-                   dry_run: bool = False) -> dict:
+                   relire=relire_hotes, dry_run: bool = False) -> dict:
     """Déclare l'allowlist des hôtes du corpus. Sans elle le secret est inerte.
 
     Laisser ce geste à un humain sur l'hôte, c'est la main sur settings.env que la
@@ -180,10 +191,13 @@ def declarer_hotes(hotes: str, lire=lire_hotes, ecrire=ecrire_hotes,
     if dry_run:
         return {"changed": False, "value": actuel, "would_write": hotes}
     ecrire(hotes)
+    if relire() != hotes:
+        raise ErreurCoffre(f"{HOSTS_PATH} relu différent de « {hotes} » : écrasé par un autre "
+                           f"écrivain du coffre, relancer")
     return {"changed": True, "value": hotes, "previous": actuel}
 
 
-def provisionner(lire=lire_au_coffre, ecrire=ecrire_au_coffre,
+def provisionner(lire=lire_au_coffre, ecrire=ecrire_au_coffre, relire=relire_secret,
                  rotate: bool = False, dry_run: bool = False) -> dict:
     """Émet le secret s'il manque. Rend {'created': bool, 'present': bool}.
 
@@ -195,7 +209,12 @@ def provisionner(lire=lire_au_coffre, ecrire=ecrire_au_coffre,
         return {"created": False, "present": True}
     if dry_run:
         return {"created": False, "present": bool(existant), "would_write": True}
-    ecrire(secrets.token_urlsafe(SECRET_BYTES))
+    nouveau = secrets.token_urlsafe(SECRET_BYTES)
+    ecrire(nouveau)
+    # Une rotation perdue laisse l'ancien secret, peut-être fuité, en service.
+    if not hmac.compare_digest(relire().encode("utf-8"), nouveau.encode("utf-8")):
+        raise ErreurCoffre(f"{VAULT_PATH} relu différent du secret écrit : écrasé par un autre "
+                           f"écrivain du coffre, l'ancien secret est toujours en service, relancer")
     return {"created": True, "present": True, "rotated": bool(existant)}
 
 
