@@ -35,6 +35,7 @@ saison, ou prévoir côté corpus l'acceptation transitoire de deux secrets.
 
 import argparse
 import hashlib
+import hmac
 import logging
 import secrets
 import sys
@@ -86,6 +87,34 @@ def _lire_champ(cle: str) -> str:
     return (_vault().get_section(VAULT_SECTION) or {}).get(cle, "")
 
 
+def _relire_champ(cle: str) -> str:
+    """Relit depuis le disque, pas depuis la copie en mémoire.
+
+    `automation.vault` réécrit tout le fichier depuis sa copie, sans verrou : un autre
+    processus qui écrit juste après nous efface notre valeur sans erreur. Relire la
+    copie en mémoire retrouverait toujours notre propre écriture.
+    """
+    v = _vault()
+    v.reload()
+    return (v.get_section(VAULT_SECTION) or {}).get(cle, "")
+
+
+def relire_secret() -> str:
+    return _relire_champ(VAULT_KEY)
+
+
+def relire_hotes() -> str:
+    return _relire_champ(HOSTS_KEY)
+
+
+def relire_cles() -> str:
+    return _relire_champ(KEYS_KEY)
+
+
+def relire_saison() -> str:
+    return _relire_champ(OPEN_KEY)
+
+
 def lire_cles() -> str:
     return _lire_champ(KEYS_KEY)
 
@@ -108,7 +137,7 @@ def _trouver_cle(ref: str):
 
 
 def autoriser_cle(ref: str, lire=lire_cles, ecrire=ecrire_cles, trouver=_trouver_cle,
-                  dry_run: bool = False) -> dict:
+                  relire=relire_cles, dry_run: bool = False) -> dict:
     """Ajoute l'empreinte de la clé active de `ref` à la liste d'avant ouverture.
 
     Seule l'empreinte va au coffre et au compte rendu, jamais la clé.
@@ -122,12 +151,17 @@ def autoriser_cle(ref: str, lire=lire_cles, ecrire=ecrire_cles, trouver=_trouver
         return {"changed": False, "ref": ref, "count": len(actuelles)}
     if dry_run:
         return {"changed": False, "ref": ref, "count": len(actuelles), "would_write": True}
-    ecrire(",".join(actuelles + [empreinte]))
+    voulu = ",".join(actuelles + [empreinte])
+    ecrire(voulu)
+    # Égalité stricte : un autre écrivain peut garder notre empreinte et en perdre une autre.
+    if relire() != voulu:
+        raise ErreurCoffre(f"{KEYS_PATH} relu différent de ce qui vient d'être écrit pour « {ref} » : "
+                           f"écrasé par un autre écrivain du coffre, relancer")
     return {"changed": True, "ref": ref, "count": len(actuelles) + 1}
 
 
 def declarer_saison(ouverte: bool, lire=lire_saison, ecrire=ecrire_saison,
-                    dry_run: bool = False) -> dict:
+                    relire=relire_saison, dry_run: bool = False) -> dict:
     """Écrit l'état de saison. Toujours explicite : « true » ou « false »."""
     voulu = "true" if ouverte else "false"
     actuel = lire()
@@ -136,11 +170,15 @@ def declarer_saison(ouverte: bool, lire=lire_saison, ecrire=ecrire_saison,
     if dry_run:
         return {"changed": False, "value": actuel, "would_write": voulu}
     ecrire(voulu)
+    relu = relire()
+    if relu != voulu:
+        raise ErreurCoffre(f"{OPEN_PATH} relu à « {relu or 'vide'} » au lieu de « {voulu} » : "
+                           f"écrasé par un autre écrivain du coffre, relancer")
     return {"changed": True, "value": voulu, "previous": actuel}
 
 
 def declarer_hotes(hotes: str, lire=lire_hotes, ecrire=ecrire_hotes,
-                   dry_run: bool = False) -> dict:
+                   relire=relire_hotes, dry_run: bool = False) -> dict:
     """Déclare l'allowlist des hôtes du corpus. Sans elle le secret est inerte.
 
     Laisser ce geste à un humain sur l'hôte, c'est la main sur settings.env que la
@@ -153,10 +191,13 @@ def declarer_hotes(hotes: str, lire=lire_hotes, ecrire=ecrire_hotes,
     if dry_run:
         return {"changed": False, "value": actuel, "would_write": hotes}
     ecrire(hotes)
+    if relire() != hotes:
+        raise ErreurCoffre(f"{HOSTS_PATH} relu différent de « {hotes} » : écrasé par un autre "
+                           f"écrivain du coffre, relancer")
     return {"changed": True, "value": hotes, "previous": actuel}
 
 
-def provisionner(lire=lire_au_coffre, ecrire=ecrire_au_coffre,
+def provisionner(lire=lire_au_coffre, ecrire=ecrire_au_coffre, relire=relire_secret,
                  rotate: bool = False, dry_run: bool = False) -> dict:
     """Émet le secret s'il manque. Rend {'created': bool, 'present': bool}.
 
@@ -168,7 +209,12 @@ def provisionner(lire=lire_au_coffre, ecrire=ecrire_au_coffre,
         return {"created": False, "present": True}
     if dry_run:
         return {"created": False, "present": bool(existant), "would_write": True}
-    ecrire(secrets.token_urlsafe(SECRET_BYTES))
+    nouveau = secrets.token_urlsafe(SECRET_BYTES)
+    ecrire(nouveau)
+    # Une rotation perdue laisse l'ancien secret, peut-être fuité, en service.
+    if not hmac.compare_digest(relire().encode("utf-8"), nouveau.encode("utf-8")):
+        raise ErreurCoffre(f"{VAULT_PATH} relu différent du secret écrit : écrasé par un autre "
+                           f"écrivain du coffre, l'ancien secret est toujours en service, relancer")
     return {"created": True, "present": True, "rotated": bool(existant)}
 
 
@@ -212,6 +258,7 @@ def _rapporter_acces(args) -> None:
 
 def _rapporter_acces_ou_echouer(args) -> int:
     try:
+        _rapporter_hotes(args)
         _rapporter_acces(args)
     except ErreurCoffre as exc:
         print(f"ÉCHEC : {exc}", file=sys.stderr)
@@ -256,7 +303,6 @@ def main() -> int:
             print(f"secret déjà présent dans {VAULT_PATH} : rien à faire")
         # surtout pas de return ici : un dry-run qui tait la moitié de ce qu'il
         # ferait est pire qu'absent, il fait valider une action non annoncée.
-        _rapporter_hotes(args)
         return _rapporter_acces_ou_echouer(args)
 
     if r["created"]:
@@ -267,7 +313,6 @@ def main() -> int:
     else:
         print(f"secret déjà présent dans {VAULT_PATH}, rien à faire")
 
-    _rapporter_hotes(args)
     return _rapporter_acces_ou_echouer(args)
 
 
