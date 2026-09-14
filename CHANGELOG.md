@@ -6,6 +6,30 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.9.1] — 2026-09-14
+
+### Security
+- corpus PROVE IT : `X-Challenge-Secret` n'était filtré que sur l'hôte cible. Toute clé, y compris
+  une clé obtenue par `/v1/keys/free-signup`, l'aurait reçu : le corpus privé était lisible par
+  tous dès son DNS posé. Tant que la saison est fermée, le secret ne part plus qu'aux clés listées
+  par empreinte sha256 dans `proveit.challenge_keys`. Seul `proveit.challenge_open = true` ouvre
+  la saison ; un coffre illisible la laisse fermée. Empreinte et non ref : la ref d'une clé free
+  (`free_signup_<email>`) se recrée par un tiers dès que la clé d'origine est désactivée
+- cache d'idempotence : il était indexé sur `X-Idempotency-Key` seule. Une autre clé qui rejouait
+  la même valeur recevait la réponse du premier appelant, sans aucun contrôle par appelant. Le
+  cache est désormais propre à chaque clé. Effet du déploiement : les entrées en cache (24 h)
+  ne sont plus retrouvées, un rejeu juste après ré-exécute l'appel une fois
+- configuration : quand le coffre est lu, il fait foi pour `challenge_open` et `challenge_keys`,
+  valeur vide comprise ; une variable d'environnement préexistante ne peut plus ouvrir la saison
+
+### Added
+- `scripts/provision_challenge_secret.py` : `--allow-key-ref <ref>` (ajoute l'empreinte de la
+  clé active, jamais la clé), `--open` / `--close`
+- `scripts/provision_challenge_key.py --profil validation` : clé `free` de l'agent de
+  validation, ref `proveit_validation`, sans email
+
+---
+
 ## [1.9.0] — 2026-09-14
 
 ### Security

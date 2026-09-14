@@ -31,6 +31,8 @@ from .config import (
     TRUSTED_INTERNAL_HOSTS,
     CHALLENGE_SECRET,
     CHALLENGE_HOSTS,
+    CHALLENGE_OPEN,
+    CHALLENGE_KEYS,
     get_signing_key,
 )
 from .keys import validate_api_key, get_key_plan, _KEYS_LOCK
@@ -131,7 +133,23 @@ async def _post_proof_background(proof_id: str, proof_record: dict, chain_hash: 
             _log_background_task(proof_id, "email", "failure", str(e))
 
 
-def _service_secret_headers(target_domain: str) -> dict:
+def _caller_may_reach_challenge(api_key: str) -> bool:
+    """Before the season opens, only listed keys (by fingerprint) reach the corpus.
+
+    Fail closed: an unreadable vault gives CHALLENGE_OPEN=False and no keys.
+    """
+    if globals().get("CHALLENGE_OPEN"):
+        return True
+    return sha256_hex(api_key) in (globals().get("CHALLENGE_KEYS") or set())
+
+
+# Caller gates on top of the host allowlist, per secret header.
+_SECRET_CALLER_GATES = {
+    "X-Challenge-Secret": _caller_may_reach_challenge,
+}
+
+
+def _service_secret_headers(target_domain: str, api_key: str) -> dict:
     """Secrets to forward to this target, one allowlist per secret.
 
     validate_target_url() only blocks private IPs, not attacker-controlled public
@@ -139,6 +157,9 @@ def _service_secret_headers(target_domain: str) -> dict:
     caller chooses (found 2026-09-11). Each secret is therefore forwarded only to
     hostnames explicitly listed for it, and the allowlists are independent: a host
     trusted for the challenge corpus never receives INTERNAL_SECRET.
+
+    The challenge secret also depends on the caller: anyone can get a free key,
+    so a host allowlist alone would open the private corpus before the season.
 
     Read from the module globals so that tests patching trust_layer.proxy.<NAME>
     are honoured.
@@ -148,7 +169,8 @@ def _service_secret_headers(target_domain: str) -> dict:
     for header, secret_name, hosts_name in _SERVICE_SECRETS:
         secret = globals().get(secret_name) or ""
         hosts = globals().get(hosts_name) or set()
-        if secret and host in hosts:
+        gate = _SECRET_CALLER_GATES.get(header)
+        if secret and host in hosts and (gate is None or gate(api_key)):
             headers[header] = secret
     return headers
 
@@ -335,17 +357,22 @@ def validate_amount(amount: float) -> float:
     return amount
 
 
-def _idempotency_path(key: str):
-    """Get idempotency cache file path."""
-    hashed = hashlib.sha256(key.encode()).hexdigest()[:16]
+def _idempotency_path(api_key: str, key: str):
+    """Get idempotency cache file path, scoped to the caller.
+
+    A hit returns a stored result before any per-caller check runs. Keyed on the
+    idempotency key alone, anyone replaying it would receive another caller's
+    response, including a private corpus body (found by the §4.2 review, 2026-09-14).
+    """
+    hashed = hashlib.sha256(f"{sha256_hex(api_key)}:{key}".encode()).hexdigest()[:16]
     return IDEMPOTENCY_DIR / f"{hashed}.json"
 
 
-def _check_idempotency(key: Optional[str]) -> Optional[dict]:
+def _check_idempotency(api_key: str, key: Optional[str]) -> Optional[dict]:
     """Check idempotency cache. Returns cached response or None."""
     if not key:
         return None
-    path = _idempotency_path(key)
+    path = _idempotency_path(api_key, key)
     if not path.exists():
         return None
     data = load_json(path)
@@ -366,7 +393,7 @@ def _check_idempotency(key: Optional[str]) -> Optional[dict]:
 _MAX_IDEMPOTENCY_BYTES = 512 * 1024  # 512 KB
 
 
-def _cache_idempotency(key: Optional[str], response: dict):
+def _cache_idempotency(api_key: str, key: Optional[str], response: dict):
     """Cache response for idempotency key. Skipped if response exceeds 512 KB."""
     if not key:
         return
@@ -378,7 +405,7 @@ def _cache_idempotency(key: Optional[str], response: dict):
     if len(encoded) > _MAX_IDEMPOTENCY_BYTES:
         logger.debug("Idempotency cache skipped: response too large (%d bytes)", len(encoded))
         return
-    path = _idempotency_path(key)
+    path = _idempotency_path(api_key, key)
     save_json(path, {
         "created_at": datetime.now(timezone.utc).isoformat(),
         "response": response,
@@ -600,7 +627,7 @@ async def execute_proxy(
             raise ProxyError("rate_limited", "Daily rate limit reached", 429)
 
     # 4. Check idempotency
-    cached = _check_idempotency(idempotency_key)
+    cached = _check_idempotency(api_key, idempotency_key)
     if cached is not None:
         return cached
 
@@ -722,7 +749,7 @@ async def execute_proxy(
     upstream_timestamp = None
 
     try:
-        fwd_headers = _service_secret_headers(target_domain)
+        fwd_headers = _service_secret_headers(target_domain, api_key)
         # Merge extra_headers with hardening: blocklist, type/size validation
         if extra_headers and isinstance(extra_headers, dict):
             if len(extra_headers) > 10:
@@ -878,6 +905,6 @@ async def execute_proxy(
     )
 
     # 15. Cache idempotency
-    _cache_idempotency(idempotency_key, result)
+    _cache_idempotency(api_key, idempotency_key, result)
 
     return result

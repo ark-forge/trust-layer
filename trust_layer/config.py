@@ -2,6 +2,7 @@
 
 import logging as _logging
 import os
+import re
 from pathlib import Path
 
 # --- Paths ---
@@ -36,6 +37,20 @@ ASSESSMENTS_DIR = DATA_DIR / "assessments"
 PROOF_INDEX_FILE = DATA_DIR / "proof_index.jsonl"
 for _d in (IDEMPOTENCY_DIR, AGENTS_DIR, SERVICES_DIR, MCP_BASELINES_DIR, ASSESSMENTS_DIR):
     _d.mkdir(exist_ok=True)
+
+# Access posture, not secret values: when the vault is read, it decides these,
+# empty included. With setdefault, a stray TRUST_LAYER_CHALLENGE_OPEN=true in the
+# unit file or settings.env would open the corpus whatever the vault says.
+_VAULT_AUTHORITATIVE = {"TRUST_LAYER_CHALLENGE_OPEN", "TRUST_LAYER_CHALLENGE_KEYS"}
+
+
+def _apply_vault_values(mapping: dict, environ) -> None:
+    for k, v in mapping.items():
+        if k in _VAULT_AUTHORITATIVE:
+            environ[k] = v
+        elif v:
+            environ.setdefault(k, v)
+
 
 # --- Load secrets: vault first, settings.env fallback ---
 def _load_secrets() -> None:
@@ -73,10 +88,10 @@ def _load_secrets() -> None:
             # never set by hand on a host — see that script's docstring.
             "TRUST_LAYER_CHALLENGE_SECRET":   _proveit.get("challenge_secret", ""),
             "TRUST_LAYER_CHALLENGE_HOSTS":    _proveit.get("challenge_hosts", ""),
+            "TRUST_LAYER_CHALLENGE_OPEN":     _proveit.get("challenge_open", ""),
+            "TRUST_LAYER_CHALLENGE_KEYS":     _proveit.get("challenge_keys", ""),
         }
-        for _k, _v in _mapping.items():
-            if _v:
-                os.environ.setdefault(_k, _v)
+        _apply_vault_values(_mapping, os.environ)
         _vault_loaded = True
     except Exception:
         pass  # vault unavailable → fall through to settings.env
@@ -205,7 +220,45 @@ CHALLENGE_HOSTS = {
     if h.strip()
 }
 
-def challenge_config_problems(secret: str, hosts: set) -> list:
+_FINGERPRINT_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def parse_challenge_open(raw: str) -> bool:
+    """Season state. Only an explicit "true" opens it: an unreadable vault
+    yields "", and must keep the corpus closed rather than open it to everyone."""
+    return raw.strip().lower() == "true"
+
+
+def parse_challenge_keys(raw: str) -> tuple:
+    """Fingerprints (sha256 of the API key) allowed to reach the corpus before
+    the season opens. Returns (fingerprints, rejected entry descriptions).
+
+    Rejected entries are described by position, never by value: a raw API key
+    pasted by mistake must not end up in a log line.
+    """
+    keys, rejected = set(), []
+    for i, entry in enumerate((e.strip().lower() for e in raw.split(",")), start=1):
+        if not entry:
+            continue
+        if _FINGERPRINT_RE.match(entry):
+            keys.add(entry)
+        else:
+            rejected.append(f"entry #{i} of challenge_keys is not a sha256 fingerprint, ignored")
+    return keys, rejected
+
+
+# Before the season opens, the corpus is reserved to our own keys. Anyone gets a
+# key from /v1/keys/free-signup, so an allowlist on the host alone would expose
+# the private corpus. Keys are named by fingerprint, not by ref: a free key's ref
+# is free_signup_<email>, which anyone can recreate once the original is inactive.
+# Written by scripts/provision_challenge_secret.py (--allow-key-ref, --open).
+CHALLENGE_OPEN = parse_challenge_open(os.environ.get("TRUST_LAYER_CHALLENGE_OPEN", ""))
+CHALLENGE_KEYS, _challenge_keys_rejected = parse_challenge_keys(
+    os.environ.get("TRUST_LAYER_CHALLENGE_KEYS", "")
+)
+
+
+def challenge_config_problems(secret: str, hosts: set, *, open_: bool, keys: set) -> list:
     """Incoherences between the challenge secret and its allowlist.
 
     Both come from the vault, and the vault loader swallows every exception. If
@@ -227,10 +280,16 @@ def challenge_config_problems(secret: str, hosts: set) -> list:
             "TRUST_LAYER_CHALLENGE_SECRET is set but no challenge host is allowlisted: "
             "the secret is inert and the corpus is unreachable through the proxy."
         )
+    if secret and hosts and not open_ and not keys:
+        problems.append(
+            "the challenge season is closed and challenge_keys is empty: no key, ours "
+            "included, can reach the corpus. Check the vault section 'proveit'."
+        )
     return problems
 
 
-for _problem in challenge_config_problems(CHALLENGE_SECRET, CHALLENGE_HOSTS):
+for _problem in _challenge_keys_rejected + challenge_config_problems(
+        CHALLENGE_SECRET, CHALLENGE_HOSTS, open_=CHALLENGE_OPEN, keys=CHALLENGE_KEYS):
     _logging.getLogger("trust_layer.config").error("Challenge config: %s", _problem)
 
 

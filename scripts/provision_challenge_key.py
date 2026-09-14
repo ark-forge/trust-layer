@@ -1,15 +1,23 @@
 #!/usr/bin/env python3
-"""Émet (ou confirme) la clé d'API du challenge PROVE IT.
+"""Émet (ou confirme) une clé d'API de PROVE IT.
 
 Rejouable sans effet de bord : si la clé existe déjà, le script le dit et sort
 en succès. La clé n'est jamais affichée ni journalisée, elle va au coffre.
 
-    python3 scripts/provision_challenge_key.py            # émet ou confirme
-    python3 scripts/provision_challenge_key.py --dry-run  # dit ce qu'il ferait
+    python3 scripts/provision_challenge_key.py                        # clé de l'opérateur
+    python3 scripts/provision_challenge_key.py --profil validation    # clé de l'agent de validation
+    python3 scripts/provision_challenge_key.py --dry-run              # dit ce qu'il ferait
 
-Le plan `internal` ne consomme pas de crédits prépayés : les preuves du challenge
-n'empruntent donc pas le chemin de facturation d'un client (ni débit, ni 402, ni
-webhook Stripe). C'est assumé, et §6 de la charte doit le publier.
+Profil `challenge` : plan `internal`, qui ne consomme pas de crédits prépayés.
+Les preuves du challenge n'empruntent donc pas le chemin de facturation d'un
+client (ni débit, ni 402, ni webhook Stripe). C'est assumé, et §6 de la charte
+doit le publier.
+
+Profil `validation` : plan `free`, pour passer le challenge comme un participant
+(quota compris). Sans email : un email ferait partir un mail par preuve.
+
+Avant l'ouverture, une clé émise ici n'atteint le corpus qu'une fois autorisée :
+`provision_challenge_secret.py --allow-key-ref <ref>`.
 """
 
 import argparse
@@ -22,48 +30,57 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from trust_layer.keys import find_key_info_by_ref  # noqa: E402
 from trust_layer.provisioning import ProvisioningError, provision_key  # noqa: E402
 
-REF_ID = "proveit_challenge"
-PLAN = "internal"
-EMAIL = "proveit@arkforge.fr"
-VAULT_PATH = "proveit.challenge_api_key"
+PROFILS = {
+    "challenge": {"ref_id": "proveit_challenge", "plan": "internal",
+                  "email": "proveit@arkforge.fr", "vault_path": "proveit.challenge_api_key"},
+    "validation": {"ref_id": "proveit_validation", "plan": "free",
+                   "email": "", "vault_path": "proveit.validation_api_key"},
+}
 CEO_ROOT = "/opt/claude-ceo"
 
 
-def ecrire_au_coffre(secret: str) -> None:
+def ecrivain_coffre(vault_path: str):
     """Dépose la clé dans le vault du CEO. Seul endroit où elle atterrit."""
-    sys.path.insert(0, CEO_ROOT)
-    from automation.vault import vault  # noqa: PLC0415 - dépendance d'hôte, pas du paquet
+    def ecrire(secret: str) -> None:
+        sys.path.insert(0, CEO_ROOT)
+        from automation.vault import vault  # noqa: PLC0415 - dépendance d'hôte, pas du paquet
 
-    vault.set(VAULT_PATH, secret)
+        vault.set(vault_path, secret)
+    return ecrire
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--profil", choices=sorted(PROFILS), default="challenge",
+                        help="quelle clé émettre (défaut : challenge)")
     parser.add_argument("--dry-run", action="store_true",
                         help="n'écrit rien, dit seulement ce qui serait fait")
     args = parser.parse_args()
+    p = PROFILS[args.profil]
+    ref_id, plan, vault_path = p["ref_id"], p["plan"], p["vault_path"]
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     if args.dry_run:
-        existant = find_key_info_by_ref(REF_ID)
+        existant = find_key_info_by_ref(ref_id)
         if existant is None:
-            print(f"créerait une clé « {PLAN} » pour {REF_ID}, déposée dans {VAULT_PATH}")
+            print(f"créerait une clé « {plan} » pour {ref_id}, déposée dans {vault_path}")
         else:
             etat = "active" if existant.get("active") else "DÉSACTIVÉE"
-            print(f"clé déjà présente pour {REF_ID} ({etat}) : rien à créer")
+            print(f"clé déjà présente pour {ref_id} ({etat}) : rien à créer")
         return 0
 
     try:
-        r = provision_key(REF_ID, plan=PLAN, email=EMAIL, writer=ecrire_au_coffre)
+        r = provision_key(ref_id, plan=plan, email=p["email"], writer=ecrivain_coffre(vault_path))
     except ProvisioningError as exc:
         print(f"ÉCHEC : {exc}", file=sys.stderr)
         return 1
 
     if r["created"]:
-        print(f"clé « {PLAN} » créée pour {REF_ID}, déposée dans {VAULT_PATH}")
+        print(f"clé « {plan} » créée pour {ref_id}, déposée dans {vault_path}")
     else:
-        print(f"clé déjà en place pour {REF_ID} (plan {r['plan']}), rien à faire")
+        print(f"clé déjà en place pour {ref_id} (plan {r['plan']}), rien à faire")
     return 0
 
 

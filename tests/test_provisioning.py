@@ -48,6 +48,18 @@ def test_le_rejeu_ne_cree_pas_une_seconde_cle():
     assert second.contenu == {}
 
 
+def test_cle_free_sans_email_pour_l_agent_de_validation():
+    """L'agent de validation passe comme un participant (plan free), mais sans
+    email : un email ferait partir un mail par preuve."""
+    coffre = Coffre()
+    r = provision_key("proveit_validation", plan="free", email="", writer=coffre)
+
+    assert r["created"] is True and r["plan"] == "free"
+    assert get_key_plan(coffre.contenu["key"]) == "free"
+    from trust_layer.keys import find_key_info_by_ref
+    assert find_key_info_by_ref("proveit_validation")["email"] == ""
+
+
 def test_la_cle_n_est_jamais_dans_le_compte_rendu():
     """Le compte rendu est journalisé ; la clé n'a rien à y faire."""
     coffre = Coffre()
