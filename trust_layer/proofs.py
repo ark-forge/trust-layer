@@ -10,14 +10,40 @@ from typing import Optional
 from .config import PROOFS_DIR
 from .persistence import save_json, load_json
 
-SPEC_VERSION = "3.0"          # per-field commitments, chain hash = their Merkle root
+SPEC_VERSION = "3.1"          # 3.0 + the identity triple committed and publicly opened
+SPEC_VERSION_COMMITMENTS = "3.0"  # per-field commitments, chain hash = their Merkle root
 SPEC_VERSION_VALUES = "1.2"   # canonical_json over the values themselves (pre-3.0)
 SPEC_VERSION_RECEIPT = "2.1"  # same, with receipt evidence
 
 # Legacy spec versions that used concatenation — still verified for backward compat
 _LEGACY_SPEC_VERSIONS = {"1.0", "1.1", "2.0", None}
 # Spec versions whose chain hash is the Merkle root of per-field commitments.
-_COMMITMENT_SPEC_VERSIONS = {"3.0"}
+_COMMITMENT_SPEC_VERSIONS = {"3.0", "3.1"}
+
+# Spec 3.1: the identity triple joins the chain fields, so the anchors cover it.
+# Up to 3.0 it was served publicly but committed nowhere, which left the issuer
+# free to rewrite it after anchoring with every external witness still verifying.
+# ``identity_consistent`` sits here too: it is a judgment ON the identity, computed by
+# the proxy and served publicly. Anchoring its three neighbours and leaving it out would
+# rebuild the same hole one field to the left.
+IDENTITY_FIELDS = ("agent_identity", "agent_identity_verified", "did_resolution_status",
+                   "identity_consistent")
+_IDENTITY_SPEC_VERSIONS = {"3.1"}
+
+# These three are the only fields whose nonce is published. A commitment hides its
+# value; these values must stay readable by a third party, so 3.1 trades hiding for
+# openability on this triple and on nothing else.
+_PUBLIC_NONCE_FIELDS = IDENTITY_FIELDS
+
+
+def normalize_identity_verified(value) -> Optional[bool]:
+    """``True`` or ``None`` — never ``False``.
+
+    Called once, at the source, so ``parties`` and ``chain_data`` cannot disagree.
+    A ``False`` stored on one side and a ``None`` on the other would make every
+    unverified proof fail its own integrity check.
+    """
+    return True if value else None
 
 
 def canonical_json(data: dict) -> str:
@@ -49,6 +75,7 @@ def generate_proof(
     agent_version: Optional[str] = None,
     agent_identity_verified: Optional[bool] = None,
     did_resolution_status: Optional[str] = None,
+    identity_consistent: Optional[bool] = None,
     upstream_timestamp: Optional[str] = None,
     receipt_content_hash: Optional[str] = None,
     provider_payment: Optional[dict] = None,
@@ -72,6 +99,14 @@ def generate_proof(
         chain_data["upstream_timestamp"] = upstream_timestamp
     if receipt_content_hash:
         chain_data["receipt_content_hash"] = receipt_content_hash
+    # Spec 3.1: the identity triple is always committed, including when it is absent.
+    # Committing it only when present would let an issuer simply omit the fields and
+    # leave the scorer with no commitment to refuse.
+    identity_verified = normalize_identity_verified(agent_identity_verified)
+    chain_data["agent_identity"] = agent_identity
+    chain_data["agent_identity_verified"] = identity_verified
+    chain_data["did_resolution_status"] = did_resolution_status
+    chain_data["identity_consistent"] = identity_consistent
     # Spec 3.0: hashes.chain BECOMES the Merkle root of the per-field commitments.
     # Nothing that was public stops being public; what is public becomes sufficient.
     from .commitments import build_commitments
@@ -92,11 +127,12 @@ def generate_proof(
             "buyer_fingerprint": buyer_fingerprint,
             "seller": seller,
             "agent_identity": agent_identity,
-            "agent_identity_verified": agent_identity_verified if agent_identity_verified else None,
+            "agent_identity_verified": identity_verified,
             "did_resolution_status": did_resolution_status,
             "agent_version": agent_version,
         },
         "certification_fee": payment_data,
+        "identity_consistent": identity_consistent,
         "timestamp": timestamp,
         "_raw_request_hash": request_hash,
         "_raw_response_hash": response_hash,
@@ -162,6 +198,10 @@ def verify_proof_integrity(proof: dict) -> bool:
         commitments = proof.get("commitments") or {}
         if not commitments:
             return False
+        # A 3.1 proof that drops an identity commitment is not a 3.1 proof.
+        if spec_version in _IDENTITY_SPEC_VERSIONS:
+            if not set(IDENTITY_FIELDS) <= set(commitments):
+                return False
         try:
             if commitments_root(commitments) != expected_chain:
                 return False
@@ -256,6 +296,23 @@ def get_public_proof(proof: dict) -> dict:
         "did_resolution_status": proof.get("parties", {}).get("did_resolution_status"),
         "seller": proof.get("parties", {}).get("seller"),
     }
+    # Spec 3.1: open the identity triple to everyone. The third party checks each
+    # (field, nonce, value) against the commitment the anchors cover, instead of
+    # taking the issuer's word for the flat fields above — which is exactly what
+    # the DID binding existed to remove.
+    if proof.get("spec_version") in _IDENTITY_SPEC_VERSIONS:
+        nonces = proof.get("_commitment_nonces") or {}
+        chain_data = proof.get("_chain_data") or {}
+        disclosed = {}
+        for field in _PUBLIC_NONCE_FIELDS:
+            if field in nonces and field in chain_data:
+                disclosed[field] = {"nonce": nonces[field], "value": chain_data[field]}
+        if disclosed:
+            result["disclosed"] = disclosed
+            # Single source: a flat field can never show something other than the
+            # value that actually opens the anchored commitment.
+            for field, item in disclosed.items():
+                result[field] = item["value"]
     if is_demo:
         result["demo_notice"] = (
             "This is a demo proof generated without a real upstream call. "

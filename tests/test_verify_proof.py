@@ -463,3 +463,117 @@ def test_a_malformed_commitment_fails_without_crashing(client, monkeypatch, valu
     public["commitments"]["seller"] = value
     rep = _run(public, offline=True)      # must not raise
     assert _status(rep, "chain hash") == vp.FAIL
+
+
+# --- spec 3.1: the identity triple, and what the verifier says when it is unanchored ---
+
+def _proof_3_1(**kw):
+    from trust_layer.proofs import generate_proof, get_public_proof
+    base = dict(
+        request_data={"entity_id": "ENT-4417"}, response_data={"agrement": "valide"},
+        payment_data={"transaction_id": "free_tier"}, timestamp="2026-09-13T12:00:00Z",
+        buyer_fingerprint="f" * 64, seller="corpus.arkforge.tech",
+        agent_identity="did:web:agent.example", agent_identity_verified=True,
+        did_resolution_status="bound",
+    )
+    base.update(kw)
+    public = get_public_proof(generate_proof(**base))
+    public["proof_id"] = "prf_test_3_1"
+    return public
+
+
+def _identity_row(proof):
+    rep = vp.Report()
+    vp.check_chain_hash(proof, rep)
+    rows = [r for r in rep.rows if r[0] == "agent identity"]
+    return rows[0] if rows else None
+
+
+def test_the_identity_triple_opens_for_a_third_party():
+    row = _identity_row(_proof_3_1())
+    assert row is not None and row[1] == vp.OK
+    assert "did:web:agent.example" in row[2]
+
+
+def test_a_restated_identity_is_refused():
+    proof = _proof_3_1(agent_identity_verified=None, did_resolution_status="unverified")
+    proof["disclosed"]["agent_identity_verified"]["value"] = True
+    proof["agent_identity_verified"] = True
+    row = _identity_row(proof)
+    assert row[1] == vp.FAIL and "anchored commitment" in row[2]
+
+
+def test_a_3_1_proof_stripped_of_its_disclosure_is_refused():
+    """Serving the flat fields without the nonces must not read as verified."""
+    proof = _proof_3_1()
+    del proof["disclosed"]
+    row = _identity_row(proof)
+    assert row[1] == vp.FAIL and "not opened" in row[2]
+
+
+def test_an_unverified_identity_is_reported_as_such_not_as_a_failure():
+    proof = _proof_3_1(agent_identity="self-declared-agent", agent_identity_verified=None,
+                       did_resolution_status="unverified")
+    row = _identity_row(proof)
+    assert row[1] == vp.OK
+    assert "NOT a verified DID" in row[2]
+
+
+def test_a_pre_3_1_identity_claim_is_flagged_as_unanchored():
+    """Found by running the published procedure, not by reading it.
+
+    A spec 2.0 proof serving an identity used to print no identity line at all: the
+    reader saw the flat field and nothing said it was covered by no anchor. Silence
+    on an unbacked claim reads as assent.
+    """
+    proof = _load("proof_rekor.json")
+    assert proof["spec_version"] not in vp.IDENTITY_SPEC_VERSIONS
+    assert proof.get("agent_identity")
+    row = _identity_row(proof)
+    assert row is not None, "an unanchored identity claim must not pass in silence"
+    assert row[1] == vp.SKIP and "NOT evidence" in row[2]
+
+
+def test_a_pre_3_1_proof_without_identity_says_nothing():
+    proof = dict(_load("proof_rekor.json"), agent_identity=None, agent_identity_verified=None)
+    assert _identity_row(proof) is None
+
+
+# --- la procédure publiée rend un verdict, jamais une trace d'exception ---
+#
+# Trouvé par la relecture §4.2. Ce script est deux choses à la fois : la procédure
+# qu'un tiers exécute, et un gate bloquant du déploiement. Dans les deux rôles, une
+# trace d'exception est pire qu'un échec : le tiers n'obtient aucun verdict, et le
+# pipeline casse au lieu de refuser proprement.
+
+@pytest.mark.parametrize("garbage", ["une chaine", ["a", "b"], 42, 3.5, True])
+def test_a_malformed_disclosed_block_yields_a_verdict_not_a_traceback(garbage):
+    proof = dict(_proof_3_1(), disclosed=garbage)
+    rep = vp.Report()
+    vp.check_chain_hash(proof, rep)          # ne doit pas lever
+    assert rep.rows, "aucun témoin rendu"
+
+
+@pytest.mark.parametrize("garbage", [42, None, ["a"], {"x": 1}, 3.5])
+def test_a_malformed_identity_commitment_yields_a_verdict_not_a_traceback(garbage):
+    """Le test générique existant mute `seller`, qui ne traverse jamais check_identity."""
+    proof = _proof_3_1()
+    proof["commitments"]["agent_identity"] = garbage
+    rep = vp.Report()
+    vp.check_chain_hash(proof, rep)
+    row = [r for r in rep.rows if r[0] == "agent identity"]
+    assert row and row[0][1] == vp.FAIL
+
+
+def test_no_check_can_kill_the_run_with_an_exception(monkeypatch):
+    """La classe, pas les deux cas trouvés : un témoin qui lève doit devenir un échec.
+
+    Sinon chaque nouveau témoin réintroduit la même panne, et elle ne se voit qu'au
+    premier artefact malformé rencontré en vrai.
+    """
+    def boom(*a, **kw):
+        raise RuntimeError("témoin cassé")
+    monkeypatch.setattr(vp, "check_identity", boom)
+    rep = vp.Report()
+    vp.check_chain_hash(_proof_3_1(), rep)
+    assert rep.failed, "une exception d'un témoin doit se lire comme un échec"

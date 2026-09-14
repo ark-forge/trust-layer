@@ -15,7 +15,7 @@ import pytest
 
 from trust_layer.commitments import commit, commitments_root
 from trust_layer.merkle import inclusion_root, leaf_hash, merkle_root
-from trust_layer.proofs import canonical_json, sha256_hex
+from trust_layer.proofs import IDENTITY_FIELDS, canonical_json, sha256_hex
 
 # Local proof-spec repo (preferred — always in sync)
 VECTORS_LOCAL = Path(__file__).parent.parent.parent / "proof-spec" / "test-vectors.json"
@@ -123,6 +123,10 @@ def test_chain_hash(vector):
             chain_data["upstream_timestamp"] = inp["upstream_timestamp"]
         if inp.get("receipt_content_hash"):
             chain_data["receipt_content_hash"] = inp["receipt_content_hash"]
+        if vector.get("spec_version") == "3.1":
+            # The identity triple is always committed, a missing identity as null.
+            for field in IDENTITY_FIELDS:
+                chain_data[field] = inp[field]
         assert chain_data == expected["chain_data"], f"Committed field set drifted for {vector['name']}"
 
         commitments = {f: commit(f, bytes.fromhex(inp["nonces"][f]), v).hex()
@@ -182,3 +186,46 @@ def test_batch_anchor_tree(vector):
         root, consumed = inclusion_root(leaves[i], i, expected["tree_size"], path)
         assert root.hex() == expected["root"], f"Inclusion path for leaf {i} misses the root"
         assert consumed == len(path), f"Inclusion path for leaf {i} carries unused siblings"
+
+
+_IDENTITY_VECTORS = [v for v in _vectors_data["vectors"] if v.get("spec_version") == "3.1"]
+
+
+@pytest.mark.parametrize(
+    "vector", _IDENTITY_VECTORS, ids=[v["name"] for v in _IDENTITY_VECTORS],
+)
+def test_identity_block_opens_from_published_nonces(vector):
+    """Spec 3.1 section: the three identity nonces are public, so anyone opens them.
+
+    This is the whole point of the version bump. If the published nonces stopped
+    opening their commitments, an Index built on agent_identity_verified would be
+    back to trusting the issuer, and nothing else in the suite would notice.
+    """
+    from trust_layer.commitments import verify_disclosure
+    expected = vector["expected"]
+    published = expected["published_nonces"]
+    assert set(published) == set(IDENTITY_FIELDS)
+    for field, nonce in published.items():
+        assert verify_disclosure(field, nonce, expected["chain_data"][field],
+                                 expected["commitments"][field]), field
+
+
+@pytest.mark.parametrize(
+    "vector", _IDENTITY_VECTORS, ids=[v["name"] for v in _IDENTITY_VECTORS],
+)
+def test_a_forged_identity_value_does_not_open(vector):
+    """The negative witness: without it the test above measures nothing."""
+    from trust_layer.commitments import verify_disclosure
+    expected = vector["expected"]
+    assert not verify_disclosure(
+        "agent_identity_verified",
+        expected["published_nonces"]["agent_identity_verified"],
+        not expected["chain_data"]["agent_identity_verified"],
+        expected["commitments"]["agent_identity_verified"],
+    )
+
+
+def test_the_vector_file_covers_spec_3_1():
+    """A vector file that never reached 3.1 would let the suite pass on 3.0 alone."""
+    assert _vectors_data["spec_version"].startswith("3.1"), _vectors_data["spec_version"]
+    assert _IDENTITY_VECTORS, "no spec 3.1 vector: the conformance suite measures nothing new"

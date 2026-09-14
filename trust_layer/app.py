@@ -286,6 +286,9 @@ logging.getLogger().addFilter(_sensitive_filter)
 # --- Proof access tracking (Redis-backed, in-memory fallback) ---
 _proof_access_counts: dict[str, list[float]] = defaultdict(list)  # fallback only
 _ABUSE_THRESHOLD = 100  # max requests per hour per IP
+# agent_identity is committed and publicly disclosed from spec 3.1 on: once anchored it
+# cannot be edited or removed. A DID fits far below this; production carries 27 chars.
+_MAX_AGENT_IDENTITY_LEN = 256
 _ABUSE_WINDOW = 3600
 
 # --- Failed auth rate limiting (brute-force protection on API key endpoints) ---
@@ -697,6 +700,21 @@ async def proxy_endpoint(
     amount = 0.0
 
     try:
+        # Spec 3.1 commits agent_identity and publishes it in `disclosed`: the value is
+        # engraved and served forever. Bound it here, before it reaches the commitments.
+        # Measured on production before choosing 256: 2 distinct identities, 27 chars max.
+        if x_agent_identity is not None:
+            if len(x_agent_identity) > _MAX_AGENT_IDENTITY_LEN or any(
+                ord(c) < 32 or ord(c) == 127 for c in x_agent_identity
+            ):
+                return JSONResponse(status_code=400, content={
+                    "error": "invalid_agent_identity",
+                    "message": (
+                        f"agent_identity must be at most {_MAX_AGENT_IDENTITY_LEN} "
+                        "characters and carry no control character"
+                    ),
+                })
+
         result = await execute_proxy(
             target=target,
             method=method,

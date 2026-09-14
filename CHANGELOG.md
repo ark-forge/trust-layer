@@ -6,6 +6,43 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.9.0] — 2026-09-13
+
+### Added
+- spec 3.1 : le bloc d'identité entre dans les champs engagés, toujours, un agent sans
+  identité l'engageant à `null`. Jusqu'à 3.0 il était servi publiquement et engagé nulle
+  part : hors racine Merkle, donc hors `hashes.chain`, hors signature Ed25519, donc hors
+  jeton RFC 3161 et hors Rekor. L'émetteur pouvait le réécrire après ancrage sans qu'aucun
+  témoin externe ne bouge
+- `identity_consistent` engagé avec eux : c'est un jugement sur l'identité, l'ancrer à
+  côté de ses trois voisins évite de reconstruire le même trou un champ plus à gauche
+- `disclosed` dans la vue publique : les nonces du bloc, publiés, pour que n'importe qui
+  ouvre l'identité et la recoupe avec l'engagement ancré
+- `verify_proof.py` : témoin « agent identity » distinct, et une ligne explicite sur une
+  preuve antérieure à 3.1 qui déclare une identité — le silence sur une affirmation non
+  adossée se lit comme un accord
+- vecteurs de conformité 13 et 14 de proof-spec 3.1
+
+### Fixed
+- les champs plats d'identité de la vue publique sont lus depuis la donnée engagée, plus
+  depuis `parties` : éditer `parties` ne change plus rien de ce qu'un lecteur voit
+
+### Changed
+- `agent_identity_verified` vaut `True` ou `None`, jamais `False`, normalisé une seule
+  fois à la source pour que la valeur engagée et la valeur servie ne puissent pas diverger
+- `X-Agent-Identity` borné à 256 caractères, caractères de contrôle refusés (400). Depuis
+  3.1 la valeur est engagée et publiée : elle est gravée, alors qu'elle était jusque-là
+  nettoyable côté serveur. Borne choisie après mesure de la prod (2 identités, 27 car. max)
+
+### Fixed (relecture §4.2)
+- `verify_proof.py` rendait une trace d'exception au lieu d'un verdict sur un `disclosed`
+  ou un engagement malformé. C'est à la fois la procédure qu'un tiers exécute et un gate
+  bloquant du déploiement : dans les deux rôles une trace est pire qu'un échec. `strip_sha256`
+  devient totale, `disclosed` est lu défensivement, et **tout témoin qui lève devient un
+  échec** — la classe, pas les deux cas trouvés
+
+---
+
 ## [1.8.2] — 2026-09-13
 
 ### Internal

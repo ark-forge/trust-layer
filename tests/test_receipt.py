@@ -335,7 +335,7 @@ class TestChainHashWithReceipt:
         """
         args = self._make_proof_args()
         proof = generate_proof(**args, receipt_content_hash="deadbeef" * 8)
-        assert proof["spec_version"] == SPEC_VERSION == "3.0"
+        assert proof["spec_version"] == SPEC_VERSION == "3.1"
         assert "receipt_content_hash" in proof["_chain_data"]
         assert "receipt_content_hash" in proof["commitments"]
 
@@ -343,7 +343,7 @@ class TestChainHashWithReceipt:
         """One spec version now: the committed field set is what differs."""
         args = self._make_proof_args()
         proof = generate_proof(**args)
-        assert proof["spec_version"] == SPEC_VERSION == "3.0"
+        assert proof["spec_version"] == SPEC_VERSION == "3.1"
         assert "receipt_content_hash" not in proof["_chain_data"]
 
     def test_chain_hash_differs_with_receipt(self):
@@ -354,7 +354,11 @@ class TestChainHashWithReceipt:
         assert proof_without["hashes"]["chain"] != proof_with["hashes"]["chain"]
 
     def test_chain_hash_without_receipt_commits_to_exactly_these_fields(self):
-        """The committed field set is the spec 3.0 equivalent of the old formula."""
+        """The committed field set, pinned. Spec 3.1 added the identity triple.
+
+        This assertion is the wire format: anything that changes it changes what the
+        anchors cover, so it must be a deliberate spec bump, never a side effect.
+        """
         from trust_layer.commitments import commitments_root
         args = self._make_proof_args()
         proof = generate_proof(**args)
@@ -369,6 +373,10 @@ class TestChainHashWithReceipt:
             "timestamp": "2026-02-28T12:00:00Z",
             "buyer_fingerprint": "abc123",
             "seller": "api.example.com",
+            "agent_identity": None,
+            "agent_identity_verified": None,
+            "did_resolution_status": None,
+            "identity_consistent": None,
         }
         assert proof["_raw_chain_hash"] == commitments_root(proof["commitments"])
 
@@ -539,7 +547,7 @@ class TestProxyIntegration:
         assert pe["receipt_content_hash"] is not None
         assert pe["receipt_content_hash"].startswith("sha256:")
         assert pe["verification_status"] == "fetched"
-        assert proof["spec_version"] == "3.0"
+        assert proof["spec_version"] == "3.1"
 
     def test_proxy_without_provider_payment_unchanged(self, client):
         api_key = self._setup_free_key(client)
@@ -569,7 +577,7 @@ class TestProxyIntegration:
         data = resp.json()
         proof = data.get("proof", {})
         assert proof.get("provider_payment") is None
-        assert proof["spec_version"] == "3.0"
+        assert proof["spec_version"] == "3.1"
 
     def test_public_proof_endpoint_includes_provider_payment(self, client):
         """Verify that GET /v1/proof/{proof_id} returns provider_payment."""

@@ -172,12 +172,14 @@ def test_no_header_preserves_identity(tmp_path):
 
 # --- 7. Chain hash unchanged with/without identity (backward compat) ---
 
-def test_identity_is_not_part_of_the_chain_commitment():
-    """Identity stays out of the chain preimage, with or without it.
+def test_identity_is_part_of_the_chain_commitment():
+    """Spec 3.1 inverts the 3.0 invariant: the identity triple IS committed.
 
-    Since spec 3.0 two proofs over the same data never share a chain hash — each
-    field is committed under a fresh nonce — so the invariant is checked on the
-    committed field set, not on the hash.
+    Up to 3.0 this test asserted the opposite, and that was the defect written down
+    as an invariant: identity served publicly, committed nowhere, therefore rewritable
+    by the issuer after anchoring. The committed field set is the same either way —
+    an absent identity is a committed ``None`` — but the committed VALUES differ, so
+    two proofs that differ only by identity no longer share a chain preimage.
     """
     common = dict(
         request_data={"target": "https://example.com"},
@@ -190,10 +192,15 @@ def test_identity_is_not_part_of_the_chain_commitment():
     proof_without = generate_proof(**common)
     proof_with = generate_proof(**common, agent_identity="my-agent", agent_version="1.0")
 
+    # Same field set: the triple is always committed, present or not.
     assert set(proof_without["_chain_data"]) == set(proof_with["_chain_data"])
-    assert proof_without["_chain_data"] == proof_with["_chain_data"]
-    assert "agent_identity" not in proof_with["_chain_data"]
+    # Different values: identity now lands inside what the anchors cover.
+    assert proof_without["_chain_data"] != proof_with["_chain_data"]
+    assert proof_with["_chain_data"]["agent_identity"] == "my-agent"
+    assert proof_without["_chain_data"]["agent_identity"] is None
     assert proof_with["parties"]["agent_identity"] == "my-agent"
+    # agent_version stays out: it carries no claim the Index scores.
+    assert "agent_version" not in proof_with["_chain_data"]
 
 
 # --- 8. Integration: POST /v1/proxy with identity headers ---
@@ -251,3 +258,43 @@ def test_proof_endpoint_shows_identity(client, api_key):
     # identity_consistent is still publicly visible
     assert proof_data["identity_consistent"] is True
     assert proof_data["integrity_verified"] is True
+
+
+# --- 10. X-Agent-Identity est borné depuis la spec 3.1 ---
+#
+# Avant 3.1 la valeur était servie en clair mais restait modifiable côté serveur.
+# Depuis 3.1 elle est engagée et publiée dans `disclosed` : elle est gravée. Ce qui
+# était un champ sale devient un stockage arbitraire permanent, et c'est ce lot qui
+# change sa nature. Mesuré sur la prod avant de choisir la borne : 2 identités
+# distinctes, 27 caractères au plus, aucun caractère de contrôle.
+
+@pytest.mark.parametrize("mauvais", [
+    "x" * 257,
+    "did:web:a\x00b",
+    "did:web:a\nInjected: header",
+    "\x1b[31mrouge",
+])
+def test_une_identite_hors_bornes_est_refusee(client, api_key, mauvais):
+    r = client.post(
+        "/v1/proxy",
+        json={"target": "https://example.com/api", "payload": {}},
+        headers={"Authorization": f"Bearer {api_key}", "X-Agent-Identity": mauvais},
+    )
+    assert r.status_code == 400, r.text
+    assert "agent_identity" in r.text
+
+
+@pytest.mark.parametrize("bon", ["did:web:trust.arkforge.tech", "arkforge-agent-client",
+                                 "x" * 256, "did:key:z6Mk" + "A" * 40])
+def test_les_identites_reelles_passent(client, api_key, bon):
+    """La borne ne doit refuser aucune valeur que la production porte aujourd'hui."""
+    mock_http = _mock_http_client()
+    with patch("httpx.AsyncClient", return_value=mock_http), \
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
+        r = client.post(
+            "/v1/proxy",
+            json={"target": "https://example.com/api", "payload": {}},
+            headers={"Authorization": f"Bearer {api_key}", "X-Agent-Identity": bon},
+        )
+    assert r.status_code == 200, r.text
+    assert r.json()["proof"]["parties"]["agent_identity"] == bon
