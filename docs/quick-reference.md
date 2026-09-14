@@ -324,11 +324,15 @@ Rekor entry on the batch root — see the user guide for doing those by hand.
 
 ```bash
 curl -s -H "X-Api-Key: $KEY" https://trust.arkforge.tech/v1/proof/prf_xxx/full \
-  | jq '{disclosed: {seller: {nonce: .commitment_nonces.seller, value: .chain_data.seller}}}' \
+  | jq '{disclosed: {transaction_id: {nonce: .commitment_nonces.transaction_id, value: .chain_data.transaction_id}}}' \
   > fields.json
 ```
 
-Send `fields.json`. Every field left out stays hidden behind its own nonce.
+Send `fields.json`. Opening one field reveals nothing about the others, but only
+`transaction_id` and `buyer_fingerprint` are hidden to begin with: the public proof serves the
+other chain fields in clear, and `hashes.request` / `hashes.response` can be confirmed by
+anyone who guesses the call. Those clear values are also not tied to the anchor for a third
+party until you disclose them. Details: user guide, "What the public proof hides".
 
 ---
 
