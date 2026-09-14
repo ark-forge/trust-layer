@@ -334,10 +334,25 @@ Each field gets its own fresh 32-byte nonce, drawn per proof. Canonical JSON is
 `json.dumps(value, sort_keys=True, separators=(",", ":"))`.
 
 This is what makes the chain hash verifiable by a third party: the public proof publishes
-every commitment and no value, so the anchored hash is recomputable without the transaction
-id or the buyer fingerprint ever being exposed. The proof owner can open any single field to
-a counterparty by handing over that field's `(nonce, value)` pair — see
-[selective disclosure](docs/user-guide.md#selective-disclosure).
+every commitment, so the anchored hash is recomputable without the transaction id or the
+buyer fingerprint ever being exposed.
+
+Those two are the only chain fields the public proof hides. The others are served in clear
+next to their commitment: `hashes.request`, `hashes.response`, `timestamp`, `seller`,
+`upstream_timestamp`, `receipt_content_hash`, and the identity block, which spec 3.1 opens
+publicly. Two consequences:
+
+- **`hashes.request` and `hashes.response` hide nothing from someone who can guess the
+  input.** Each is the SHA-256 of the canonical JSON of the request (target, method, payload)
+  or of the response body. When that input is predictable, such as a GET on a known URL or a
+  yes/no answer, anyone can confirm it by hashing candidates, and two proofs of the same call
+  carry the same value.
+- **A third party cannot tie those clear values to the anchor.** Only the identity block's
+  nonces are public, so a reader of the public proof cannot check that the `hashes.request`
+  shown is the one that was committed. The proof owner can, and can prove it to anyone.
+
+The proof owner can open any single field to a counterparty by handing over that field's
+`(nonce, value)` pair. See [selective disclosure](docs/user-guide.md#selective-disclosure).
 
 Proofs issued before spec 3.0 keep their own algorithm (concatenation up to 1.1, canonical
 JSON of the values for 1.2 and 2.1); `spec_version` says which applies.

@@ -797,8 +797,7 @@ hashes.chain = RFC 6962 Merkle root of those commitments, fields in sorted order
 ```
 
 Each field gets its own fresh 32-byte nonce, drawn per proof. So the public proof can
-publish every commitment without publishing a single value, and you recompute the anchored
-chain hash from public data alone:
+publish every commitment, and you recompute the anchored chain hash from public data alone:
 
 ```bash
 curl -s https://trust.arkforge.tech/v1/proof/prf_xxx > proof.json
@@ -809,6 +808,34 @@ jq -r '.hashes.chain' proof.json       # their Merkle root
 Before spec 3.0 the chain hash was computed over the values themselves, and the public proof
 redacts the transaction id and the buyer fingerprint — so a third party could not recompute
 it at all. That gap is closed, and closing it published nothing new.
+
+### What the public proof hides, and what it does not
+
+Of the chain fields, the public proof hides exactly two: `transaction_id` and
+`buyer_fingerprint`. The others are served in clear next to their commitment:
+
+| Chain field | In the public proof |
+|---|---|
+| `transaction_id`, `buyer_fingerprint` | Hidden. Only the commitment is published. |
+| `request_hash`, `response_hash` | In clear, as `hashes.request` and `hashes.response`. |
+| `timestamp`, `seller`, `upstream_timestamp`, `receipt_content_hash` | In clear. |
+| `agent_identity`, `agent_identity_verified`, `did_resolution_status`, `identity_consistent` | In clear **and** opened: their nonces are published under `disclosed` (spec 3.1). |
+
+Two things follow, and both matter if the calls you certify are confidential.
+
+**A hash is not a secret when its input can be guessed.** `hashes.request` is the SHA-256 of
+the canonical JSON of `{target, method, payload, amount, currency}` (plus the names of any
+extra headers), and `hashes.response`
+of the response body. For a predictable call, such as a GET on a known URL, a fixed payload
+or a yes/no answer, anyone holding the public proof can confirm what was sent or received by
+hashing candidates. Two proofs of the same call also carry the same `hashes.request`, which
+links them even though the buyer fingerprint is hidden.
+
+**A clear value is not an anchored value.** For every field outside the identity block, the
+public proof shows the value but not the nonce. A third party recomputes the anchored root
+from the commitments, but cannot check that the `hashes.request` displayed is the one that
+was committed: the issuer could restate it and every witness would still pass. You, the
+owner, can close that gap for any counterparty by disclosing the field (below).
 
 Proofs issued before spec 3.0 keep their own algorithm: raw concatenation up to spec 1.1,
 SHA-256 of canonical JSON for 1.2 and 2.1. `spec_version` says which applies and
@@ -832,23 +859,28 @@ There is no disclosure endpoint and no signed bundle: the commitment is already 
 the pair alone is the proof.
 
 ```json
-{"disclosed": {"seller": {"nonce": "d5908a0c…", "value": "api.example.com"}}}
+{"disclosed": {"transaction_id": {"nonce": "7b31…", "value": "pi_3Pxxxx"}}}
 ```
 
 ```bash
 python3 verify_proof.py prf_xxx --disclose disclosure.json
-[  OK  ] selective disclosure: 1 disclosed field(s) match their anchored commitment: seller
+[  OK  ] selective disclosure: 1 disclosed field(s) match their anchored commitment: transaction_id
 ```
 
 A forged value is refused, and so is a nonce moved to another field — the field name is part
 of the preimage:
 
 ```
-[ FAIL ] selective disclosure: seller: value does not match its commitment
+[ FAIL ] selective disclosure: transaction_id: value does not match its commitment
 ```
 
 Every field you do not disclose stays behind its own independent nonce: opening one tells a
-third party nothing about the others, not even about a low-entropy one such as an amount.
+third party nothing about the others. That protects only what the public proof does not
+already show, which today is `transaction_id` and `buyer_fingerprint` (see the table above).
+
+Disclosing a field that is already in clear is still useful. Handing over the
+`request_hash` or `response_hash` pair is what ties the value displayed in `hashes.request`
+or `hashes.response` to the anchored commitment, which the public proof alone does not do.
 
 ### Anchoring is per batch, not per proof
 
