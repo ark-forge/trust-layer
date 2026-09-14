@@ -2376,6 +2376,35 @@ async def bind_did_confirm(
     return JSONResponse({"verified_did": payload["did"], "bound_at": bound_at, "method": "challenge_response"})
 
 
+# --- GET /v1/keys/identity ---
+
+@app.get("/v1/keys/identity")
+async def keys_identity(
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None),
+):
+    """The key holder reads the DID bound to their key and its binding history.
+
+    Identity only: no email, plan or payment reference. A season service uses it to enforce one
+    DID per key and to group DIDs bound to the same key into one participant.
+    """
+    api_key = _get_api_key(authorization, x_api_key)
+    if not api_key:
+        return _error_response("invalid_api_key", "API key required", 401)
+    key_info = validate_api_key(api_key)
+    if not key_info:
+        return _error_response("invalid_api_key", "Invalid or inactive API key", 401)
+    return JSONResponse({
+        "verified_did": key_info.get("verified_did"),
+        "verified_did_method": key_info.get("verified_did_method"),
+        "verified_did_bound_at": key_info.get("verified_did_bound_at"),
+        "verified_did_history": [
+            {k: h.get(k) for k in ("did", "bound_at", "method", "unbound_at")}
+            for h in key_info.get("verified_did_history") or []
+        ],
+    })
+
+
 # --- POST /v1/credits/buy ---
 
 @app.post("/v1/credits/buy")
