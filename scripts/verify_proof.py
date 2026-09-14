@@ -335,6 +335,11 @@ def check_chain_hash(proof, rep, disclosure=None):
              commitments if isinstance(commitments, dict) else {})
     if proof.get("spec_version") in COMMITMENT_SPEC_VERSIONS:
         return check_commitments(proof, rep, disclosure)
+    if disclosed:
+        # Pairs for a proof that commits no field open nothing; silence would read as success.
+        rep.add("selective disclosure", FAIL,
+                f"spec {proof.get('spec_version')} proof has no commitments — "
+                f"{len(disclosed)} disclosed field(s) cannot be checked: " + ", ".join(sorted(disclosed)))
 
     expected = strip_sha256(proof.get("hashes", {}).get("chain"))
     parties = proof.get("parties") or {}
