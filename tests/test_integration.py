@@ -98,6 +98,14 @@ def test_pricing(client):
     assert "QTSP" not in ent["witnesses"]
     assert "QTSP" not in data["plans"]["platform"]["witnesses"]
 
+    # The Ed25519 signature is ArkForge's own key: only the RFC 3161 timestamp and
+    # the Rekor entry are independent. No plan may count three independent witnesses.
+    for name, plan in data["plans"].items():
+        w = plan["witnesses"]
+        assert "Ed25519 (ArkForge)" in w, name
+        assert "Sigstore Rekor (independent of ArkForge)" in w, name
+        assert not w.lstrip().startswith("3"), name
+
 
 def test_pricing_all_three_plans_present(client):
     r = client.get("/v1/pricing")

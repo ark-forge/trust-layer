@@ -180,3 +180,29 @@ def test_proof_page_describes_the_commitment_algorithm_for_spec_3(client):
     html = render_proof_page(proof, integrity_verified=True)
     assert "Merkle root" in html
     assert "payment_id" not in html
+
+
+def test_anchored_proof_page_does_not_call_the_record_immutable(client):
+    """Rekor makes later changes detectable; it does not make anything immutable."""
+    from trust_layer.templates import render_proof_page
+    proof = {"proof_id": "prf_20260913_120000_aaaaaa", "spec_version": "3.1",
+             "hashes": {"chain": "sha256:" + "ab" * 32},
+             "parties": {"seller": "api.example.com"},
+             "certification_fee": {"method": "none", "status": "free_tier"},
+             "timestamp": "2026-09-13T12:00:00+00:00",
+             "timestamp_authority": {"status": "verified"},
+             "transparency_log": {"status": "verified", "log_index": 2834496977},
+             "batch_anchor": {"status": "anchored"}}
+    html = render_proof_page(proof, integrity_verified=True)
+    assert "immutabl" not in html.lower()
+    assert "cannot be altered" not in html.lower()
+
+
+def test_agent_card_does_not_overstate_witnesses(client):
+    """The agent card is read by other agents: it must not count ArkForge's own
+    signature as an independent witness, nor call proofs immutable."""
+    r = client.get("/.well-known/agent.json")
+    assert r.status_code == 200
+    text = r.text.lower()
+    assert "3 independent" not in text
+    assert "immutable" not in text

@@ -146,7 +146,7 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
 
     ots_color = "#22c55e" if ots_status == "verified" else "#f59e0b"
     if ots_status == "verified":
-        ots_label = "certified timestamp confirms date cannot be altered"
+        ots_label = "RFC 3161 timestamp shows the proof existed at this date"
     elif awaiting_batch:
         ots_label = "anchoring in progress \u2014 proofs are anchored in batches, within 10 minutes"
     else:
@@ -158,10 +158,10 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
     rekor_log_index = transparency_log.get("log_index")
     rekor_verify_url = _esc(transparency_log.get("verify_url", ""))
     if rekor_status == "verified" and rekor_log_index is not None:
-        rekor_label = f"immutably anchored in Sigstore public log (index {rekor_log_index})"
+        rekor_label = f"anchored in Sigstore public log (index {rekor_log_index})"
         rekor_witness_desc = f"anchored \u2014 logIndex={rekor_log_index}"
     elif rekor_status == "verified":
-        rekor_label = "immutably anchored in Sigstore public log"
+        rekor_label = "anchored in Sigstore public log"
         rekor_witness_desc = "anchored in public log"
     elif awaiting_batch:
         rekor_label = "anchoring in progress \u2014 one public log entry covers the whole batch"
