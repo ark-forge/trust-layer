@@ -6,6 +6,18 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.11.1] — 2026-09-15
+
+### Fixed
+- Page preuve (`GET /v1/proof/{id}` en HTML) : la vue publique ne porte aucun frais de certification, et la page
+  affichait pourtant « Payment verified independently by Stripe » pour toute preuve. Sans frais dans la preuve, plus
+  de ligne paiement, de point de confiance Stripe ni de témoin Stripe
+- La signature Ed25519 n'est plus rangée parmi les sources indépendantes (« Verification sources », clé d'ArkForge)
+- « You do not need to trust ArkForge to verify this proof » remplacé par ce qui se vérifie sans ArkForge :
+  l'horodatage RFC 3161 et l'entrée Sigstore Rekor
+- « Service » et « Initiated by » lus aussi à la racine de la vue publique, où `seller` et `agent_identity` sont
+  aplatis : la ligne Service était vide. Lignes techniques Payment ID et Buyer masquées quand elles sont vides
+
 ## [1.11.0] — 2026-09-15
 
 ### Added
