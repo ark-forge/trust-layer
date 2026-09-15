@@ -6,6 +6,21 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.11.0] — 2026-09-15
+
+### Added
+- `POST /v1/proofs` (`{"proof_ids": [...]}`, 1 à 50 identifiants) : vues publiques groupées des preuves
+  PROVE IT, comptées pour une seule lecture sur le seuil anti-abus de l'IP (100 par heure, partagé avec
+  `GET /v1/proof/{id}`). Rejouer un score lit une trentaine de preuves : une par une, trois scores par heure
+  bloquaient l'IP, pour ArkForge à la clôture comme pour un tiers qui vérifie
+- Réservé aux preuves dont le `seller` est `corpus.arkforge.tech` ou `proveit.arkforge.tech`
+  (`PROVEIT_PROOF_SELLERS`). Toute autre preuve, ou une preuve absente, vaut `null` : le lot ne dit pas si
+  une preuve client existe. Pas d'incrément de `views_count`, pas de rendu HTML. Non documenté pour les clients
+
+### Changed
+- Journal d'accès aux preuves : une ligne par preuve lue, lot compris ; le compteur anti-abus avance d'une
+  unité par requête
+
 ## [1.10.2] — 2026-09-15
 
 ### Fixed

@@ -175,6 +175,7 @@ from .config import (
     ENTERPRISE_OVERAGE_PRICE,
     PLATFORM_OVERAGE_PRICE,
     PROOF_ACCESS_LOG,
+    PROVEIT_PROOF_SELLERS,
     ARKFORGE_PUBLIC_KEY,
     WEBHOOK_IDEMPOTENCY_FILE,
     CONVERSION_EVENTS_LOG,
@@ -371,19 +372,36 @@ def _restore_abuse_counters():
         logger.info("Restored %d abuse counter entries for %d IPs from JSONL", restored, len(_proof_access_counts))
 
 
-def _log_proof_access(proof_id: str, ip: str, user_agent: str):
-    """Log proof access to JSONL and check for abuse."""
+def _proof_access_blocked(ip: str) -> bool:
+    """True when the IP is over the proof read threshold. Checked before serving."""
+    try:
+        r = get_redis()
+        if r is not None:
+            count = r.get(f"proof_abuse:{ip}")
+            if count and int(count) > _ABUSE_THRESHOLD:
+                logger.warning("ABUSE BLOCKED: IP %s blocked on proof access (%s req/h)", ip, count)
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _log_proof_access(proof_ids, ip: str, user_agent: str):
+    """Log one JSONL line per proof, then count the request once for abuse.
+
+    A batch read of N proofs is one request: every proof stays in the access log,
+    the abuse counter moves by one.
+    """
     import time
     now = time.time()
-    entry = {
-        "ts": datetime.now(timezone.utc).isoformat(),
-        "proof_id": proof_id,
-        "ip": ip,
-        "ua": (user_agent or "")[:200],
-    }
+    if isinstance(proof_ids, str):
+        proof_ids = [proof_ids]
+    ts = datetime.now(timezone.utc).isoformat()
     try:
         with open(PROOF_ACCESS_LOG, "a") as f:
-            f.write(json.dumps(entry) + "\n")
+            for proof_id in proof_ids:
+                f.write(json.dumps({"ts": ts, "proof_id": proof_id, "ip": ip,
+                                    "ua": (user_agent or "")[:200]}) + "\n")
     except OSError as e:
         logger.debug("Proof access log write failed: %s", e)
 
@@ -873,17 +891,9 @@ async def get_proof(proof_id: str, request: Request):
     if not _PROOF_ID_RE.match(proof_id):
         return _error_response("invalid_request", "Invalid proof ID format", 400)
 
-    # Abuse check — block before serving if IP exceeded threshold
     client_ip = request.headers.get("x-real-ip") or (request.client.host if request.client else "unknown")
-    try:
-        r = get_redis()
-        if r is not None:
-            count = r.get(f"proof_abuse:{client_ip}")
-            if count and int(count) > _ABUSE_THRESHOLD:
-                logger.warning("ABUSE BLOCKED: IP %s blocked on proof access (%s req/h)", client_ip, count)
-                return _error_response("rate_limited", "Too many proof requests. Try again later.", 429)
-    except Exception:
-        pass
+    if _proof_access_blocked(client_ip):
+        return _error_response("rate_limited", "Too many proof requests. Try again later.", 429)
 
     user_agent = request.headers.get("user-agent", "")
     _log_proof_access(proof_id, client_ip, user_agent)
@@ -912,6 +922,49 @@ async def get_proof(proof_id: str, request: Request):
         return HTMLResponse(content=html_content)
 
     return public
+
+
+# --- POST /v1/proofs — batch read of PROVE IT public views ---
+
+_PROOF_BATCH_MAX = 50
+
+
+@app.post("/v1/proofs")
+async def get_proofs_batch(request: Request):
+    """Public views of up to 50 PROVE IT proofs, counted as one proof read.
+
+    Replaying a PROVE IT score reads about 30 proofs; one by one, three scores
+    exhaust an IP's hourly threshold, for ArkForge at closing as for a third party.
+    Only proofs whose seller is a PROVE IT host are served. Any other proof, or a
+    missing one, is null: the batch does not reveal whether a client proof exists.
+    No views_count increment, and no HTML: this is a replay path, not a visit.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _error_response("invalid_request", "Body must be JSON", 400)
+    ids = body.get("proof_ids") if isinstance(body, dict) else None
+    if (not isinstance(ids, list) or not ids or len(ids) > _PROOF_BATCH_MAX
+            or not all(isinstance(pid, str) and _PROOF_ID_RE.match(pid) for pid in ids)):
+        return _error_response(
+            "invalid_request", f"'proof_ids' must list 1 to {_PROOF_BATCH_MAX} valid proof IDs", 400)
+    ids = list(dict.fromkeys(ids))
+
+    client_ip = request.headers.get("x-real-ip") or (request.client.host if request.client else "unknown")
+    if _proof_access_blocked(client_ip):
+        return _error_response("rate_limited", "Too many proof requests. Try again later.", 429)
+    _log_proof_access(ids, client_ip, request.headers.get("user-agent", ""))
+
+    views = {}
+    for pid in ids:
+        proof = load_proof(pid)
+        if not proof or proof.get("parties", {}).get("seller") not in PROVEIT_PROOF_SELLERS:
+            views[pid] = None
+            continue
+        public = get_public_proof(proof)
+        public["integrity_verified"] = verify_proof_integrity(proof)
+        views[pid] = public
+    return {"proofs": views}
 
 
 # --- GET /v1/proof/{proof_id}/verify — Lightweight verification ---

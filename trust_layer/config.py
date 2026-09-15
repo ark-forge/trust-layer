@@ -220,6 +220,11 @@ CHALLENGE_HOSTS = {
     if h.strip()
 }
 
+# Sellers whose proofs POST /v1/proofs serves in batch: the PROVE IT corpus and the
+# season service (freeze proofs). Not CHALLENGE_HOSTS: that list decides where the
+# challenge secret is forwarded, and the season service never receives it.
+PROVEIT_PROOF_SELLERS = frozenset({"corpus.arkforge.tech", "proveit.arkforge.tech"})
+
 _FINGERPRINT_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
