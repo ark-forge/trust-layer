@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.11.2] — 2026-09-15
+
+### Fixed
+- Liens scanner vers la nouvelle page tarifs du site (`/{lang}/scanner-pricing.html`), `pricing.html` ne portant plus
+  que le Trust Layer : `cancel_url` du checkout (`/v1/keys/setup`) et de l'essai (`/v1/keys/trial`), `upgrade_url`
+  de repli de l'essai, et lien de reprise du mail de checkout abandonné selon `metadata.product`
+
 ## [1.11.1] — 2026-09-15
 
 ### Fixed
