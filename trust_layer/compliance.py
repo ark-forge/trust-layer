@@ -424,7 +424,7 @@ class ISO42001Framework(BaseComplianceFramework):
         integrity_ok = verify_proof_integrity(proof)
         if integrity_ok:
             r82_status = "covered"
-            r82_evidence = "Proof chain hash integrity verified — AI risk evidence is tamper-proof"
+            r82_evidence = "Proof chain hash integrity verified — AI risk evidence is tamper-evident"
         elif chain_ok:
             r82_status = "partial"
             r82_evidence = "Chain hash present but integrity check failed — evidence may be compromised"
@@ -696,7 +696,7 @@ class NISTAIRMFFramework(BaseComplianceFramework):
         integrity_ok = verify_proof_integrity(proof)
         if integrity_ok:
             ms11_status = "covered"
-            ms11_evidence = "Proof chain hash integrity verified — risk measurement is tamper-proof"
+            ms11_evidence = "Proof chain hash integrity verified — risk measurement is tamper-evident"
         elif chain_ok:
             ms11_status = "partial"
             ms11_evidence = "Chain hash present but integrity check failed — measurement reliability compromised"

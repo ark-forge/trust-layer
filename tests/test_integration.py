@@ -94,7 +94,17 @@ def test_pricing(client):
     ent = data["plans"]["enterprise"]
     assert ent["monthly_quota"] == ENTERPRISE_MONTHLY_LIMIT
     assert ent["overage"] == f"{ENTERPRISE_OVERAGE_PRICE} EUR/proof (opt-in)"
-    assert "QTSP" in ent["witnesses"]
+    # No plan includes a qualified eIDAS timestamp: it is only offered on request.
+    assert "QTSP" not in ent["witnesses"]
+    assert "QTSP" not in data["plans"]["platform"]["witnesses"]
+
+    # The Ed25519 signature is ArkForge's own key: only the RFC 3161 timestamp and
+    # the Rekor entry are independent. No plan may count three independent witnesses.
+    for name, plan in data["plans"].items():
+        w = plan["witnesses"]
+        assert "Ed25519 (ArkForge)" in w, name
+        assert "Sigstore Rekor (independent of ArkForge)" in w, name
+        assert not w.lstrip().startswith("3"), name
 
 
 def test_pricing_all_three_plans_present(client):

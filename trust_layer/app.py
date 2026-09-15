@@ -1285,7 +1285,7 @@ button:disabled{{background:#333;color:#888;cursor:wait}}
 </form>
 <div id="result" style="display:none"></div>
 <ul class="features">
-<li>5,000 tamper-proof certifications/month</li>
+<li>5,000 tamper-evident certifications/month</li>
 <li>EU AI Act + GDPR compliance evidence</li>
 <li>CI/CD pipeline integration</li>
 <li>Compliance trend dashboard</li>
@@ -3076,7 +3076,7 @@ async def pricing():
                 "monthly_quota": FREE_TIER_MONTHLY_LIMIT,
                 "daily_cap": DAILY_LIMITS_PER_PLAN["free"],
                 "overage": None,
-                "witnesses": "3 (Ed25519, RFC 3161 TSA, Sigstore Rekor)",
+                "witnesses": "Ed25519 (ArkForge), RFC 3161 timestamp and Sigstore Rekor (independent of ArkForge)",
                 "setup": f"{TRUST_LAYER_BASE_URL}/v1/keys/free-signup",
                 "credit_card_required": False,
             },
@@ -3085,7 +3085,7 @@ async def pricing():
                 "monthly_quota": PRO_MONTHLY_LIMIT,
                 "daily_cap": DAILY_LIMITS_PER_PLAN["pro"],
                 "overage": f"{PRO_OVERAGE_PRICE} EUR/proof (opt-in)",
-                "witnesses": "3 (Ed25519, RFC 3161 TSA, Sigstore Rekor)",
+                "witnesses": "Ed25519 (ArkForge), RFC 3161 timestamp and Sigstore Rekor (independent of ArkForge)",
                 "setup": f"{TRUST_LAYER_BASE_URL}/v1/keys/setup",
                 "buy_credits": f"{TRUST_LAYER_BASE_URL}/v1/credits/buy",
                 "overage_config": {
@@ -3101,7 +3101,7 @@ async def pricing():
                 "monthly_quota": ENTERPRISE_MONTHLY_LIMIT,
                 "daily_cap": DAILY_LIMITS_PER_PLAN["enterprise"],
                 "overage": f"{ENTERPRISE_OVERAGE_PRICE} EUR/proof (opt-in)",
-                "witnesses": "3 (Ed25519, RFC 3161 QTSP eIDAS, Sigstore Rekor)",
+                "witnesses": "Ed25519 (ArkForge), RFC 3161 timestamp and Sigstore Rekor (independent of ArkForge)",
                 "setup": f"{TRUST_LAYER_BASE_URL}/v1/keys/enterprise-setup",
                 "credit_card_required": True,
                 "overage_config": {
@@ -3117,7 +3117,7 @@ async def pricing():
                 "monthly_quota": PLATFORM_MONTHLY_LIMIT,
                 "daily_cap": DAILY_LIMITS_PER_PLAN["platform"],
                 "overage": f"{PLATFORM_OVERAGE_PRICE} EUR/proof (opt-in)",
-                "witnesses": "3 (Ed25519, RFC 3161 QTSP eIDAS, Sigstore Rekor)",
+                "witnesses": "Ed25519 (ArkForge), RFC 3161 timestamp and Sigstore Rekor (independent of ArkForge)",
                 "setup": f"{TRUST_LAYER_BASE_URL}/v1/keys/setup?plan=platform",
                 "credit_card_required": True,
                 "target": "platforms & AI integrators",
@@ -3328,12 +3328,12 @@ async def get_agent_json():
                 },
                 {
                     "type": "audit_immutability",
-                    "constraint": "Proofs are immutable post-creation; chain hash is deterministic and independently recomputable without ArkForge infrastructure",
+                    "constraint": "Any change to a proof after its batch is anchored is detectable; chain hash is deterministic and independently recomputable without ArkForge infrastructure",
                     "verifiable": True,
                 },
                 {
                     "type": "witness_count",
-                    "constraint": "All proofs carry minimum 3 independent witnesses: Ed25519 signature, RFC 3161 TSA, Sigstore Rekor",
+                    "constraint": "All proofs carry an Ed25519 signature by ArkForge; once the batch is anchored, an RFC 3161 timestamp and a Sigstore Rekor entry, both independent of ArkForge",
                     "verifiable": True,
                 },
             ],
