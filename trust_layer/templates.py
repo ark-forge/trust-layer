@@ -72,8 +72,9 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
     # page says what it is and when it ends.
     batch_anchor = proof.get("batch_anchor") or {}
     awaiting_batch = batch_anchor.get("status") == "pending"
-    seller = _esc(parties.get("seller", ""))
-    agent_identity = parties.get("agent_identity")
+    # The public view flattens parties: seller and agent_identity sit at the top level.
+    seller = _esc(parties.get("seller") or proof.get("seller", ""))
+    agent_identity = parties.get("agent_identity") or proof.get("agent_identity")
     initiated_by = _esc(agent_identity) if agent_identity else "Software agent"
     amount_display = _esc(_format_amount(payment))
     execution_status = "Successful" if integrity_verified else "Integrity check failed"
@@ -144,6 +145,24 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
         payment_desc = "confirms payment occurred"
         payment_line = "Payment verified independently by Stripe"
 
+    # The public view carries no certification fee: without one, the page says nothing about payment.
+    has_payment = bool(payment)
+    payment_row = (
+        f'<div class="row"><span class="label">{"Certification fee" if provider_payment and provider_payment.get("receipt_url") else "Payment"}</span><span class="val">{amount_display}</span></div>'
+        if has_payment else ""
+    )
+    payment_point_html = f"""
+        <div class="trust-point">
+            <div class="dot" style="background:{payment_color}"></div>
+            <p>{payment_line}</p>
+        </div>""" if has_payment else ""
+    payment_witness_html = f"""
+        <div class="witness">
+            <div class="dot" style="background:{payment_color}"></div>
+            <span class="name">{payment_witness}</span>
+            <span class="desc">— {payment_desc}</span>
+        </div>""" if has_payment else ""
+
     ots_color = "#22c55e" if ots_status == "verified" else "#f59e0b"
     if ots_status == "verified":
         ots_label = "RFC 3161 timestamp shows the proof existed at this date"
@@ -178,7 +197,7 @@ def render_proof_page(proof: dict, integrity_verified: bool) -> str:
     # --- Signature ---
     has_signature = bool(arkforge_signature)
     sig_color = "#22c55e" if has_signature else "#475569"
-    sig_label = "origin authenticated by Ed25519 digital signature" if has_signature else "signature not available"
+    sig_label = "ArkForge’s key, not independent of ArkForge" if has_signature else "signature not available"
 
     # --- Payment evidence section (conditional) ---
     provider_payment_html = ""
@@ -301,7 +320,7 @@ details[open] summary::before{{content:"\u25bc "}}
         <h2>Transaction receipt</h2>
         <div class="row"><span class="label">Service</span><span class="val">{seller}</span></div>
 {identity_row}
-        <div class="row"><span class="label">{"Certification fee" if provider_payment and provider_payment.get("receipt_url") else "Payment"}</span><span class="val">{amount_display}</span></div>
+        {payment_row}
         <div class="row"><span class="label">Execution</span><span class="val">{_esc(execution_status)}</span></div>
         {"" if transaction_success is None else f'<div class="row"><span class="label">Upstream</span><span class="val" style="color:{"#22c55e" if transaction_success else "#ef4444"}">{"Success" if transaction_success else "Failed"}{f" (HTTP {upstream_status_code})" if upstream_status_code else ""}</span></div>'}
         <div class="row"><span class="label">Date</span><span class="val">{human_date}</span></div>
@@ -311,11 +330,7 @@ details[open] summary::before{{content:"\u25bc "}}
 
     <!-- 3. WHY TRUSTWORTHY -->
     <div class="card">
-        <h2>Why this proof can be trusted</h2>
-        <div class="trust-point">
-            <div class="dot" style="background:{payment_color}"></div>
-            <p>{payment_line}</p>
-        </div>
+        <h2>Why this proof can be trusted</h2>{payment_point_html}
         <div class="trust-point">
             <div class="dot" style="background:#22c55e"></div>
             <p>Execution integrity secured using cryptographic hashing</p>
@@ -334,14 +349,9 @@ details[open] summary::before{{content:"\u25bc "}}
         </div>
     </div>
 
-    <!-- 4. INDEPENDENT WITNESSES -->
+    <!-- 4. VERIFICATION SOURCES -->
     <div class="card">
-        <h2>Independent verification sources</h2>
-        <div class="witness">
-            <div class="dot" style="background:{payment_color}"></div>
-            <span class="name">{payment_witness}</span>
-            <span class="desc">\u2014 {payment_desc}</span>
-        </div>
+        <h2>Verification sources</h2>{payment_witness_html}
         <div class="witness">
             <div class="dot" style="background:{ots_color}"></div>
             <span class="name">RFC 3161 Timestamp</span>
@@ -366,7 +376,7 @@ details[open] summary::before{{content:"\u25bc "}}
 {provider_payment_html}
 
     <!-- 6. STANDALONE TRUST STATEMENT -->
-    <p class="standalone">You do not need to trust ArkForge to verify this proof.</p>
+    <p class="standalone">The RFC 3161 timestamp and the Sigstore Rekor entry can be checked without ArkForge. The signature relies on ArkForge’s key.</p>
 
     <!-- 7. VERIFY BUTTON -->
     <div class="verify-link">
@@ -381,8 +391,8 @@ details[open] summary::before{{content:"\u25bc "}}
             <div class="tech-row"><span class="tech-label">Chain hash</span><span class="tech-val">{_esc(hashes.get("chain", ""))}</span></div>
             <div class="tech-row"><span class="tech-label">Request hash</span><span class="tech-val">{_esc(hashes.get("request", ""))}</span></div>
             <div class="tech-row"><span class="tech-label">Response hash</span><span class="tech-val">{_esc(hashes.get("response", ""))}</span></div>
-            <div class="tech-row"><span class="tech-label">Payment ID</span><span class="tech-val">{_esc(payment.get("transaction_id", ""))}</span></div>
-            <div class="tech-row"><span class="tech-label">Buyer</span><span class="tech-val">{_esc(parties.get("buyer_fingerprint", ""))}</span></div>
+            {"" if not has_payment else f'<div class="tech-row"><span class="tech-label">Payment ID</span><span class="tech-val">{_esc(payment.get("transaction_id", ""))}</span></div>'}
+            {"" if not parties.get("buyer_fingerprint") else f'<div class="tech-row"><span class="tech-label">Buyer</span><span class="tech-val">{_esc(parties.get("buyer_fingerprint", ""))}</span></div>'}
             <div class="tech-row"><span class="tech-label">Seller</span><span class="tech-val">{seller}</span></div>
             <div class="tech-row"><span class="tech-label">Timestamp</span><span class="tech-val">{_esc(timestamp)}</span></div>
             {"" if not upstream_timestamp else f'<div class="tech-row"><span class="tech-label">Upstream time</span><span class="tech-val">{_esc(upstream_timestamp)}</span></div>'}
