@@ -6,6 +6,16 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.10.2] — 2026-09-15
+
+### Fixed
+- Page preuve (`GET /v1/proof/{id}` en HTML) : plus de « paid » ni « dispute-proof » pour toute preuve vérifiée,
+  verdict « PROOF VERIFIED » ou « CHAIN HASH VERIFIED » selon l'horodatage, algorithme Merkle affiché pour les
+  specs 3.0 et 3.1, plus de « date cannot be altered »
+- `GET /v1/pricing` et `/.well-known/agent.json` : la signature Ed25519 est celle d'ArkForge, seuls l'horodatage
+  RFC 3161 et Rekor sont indépendants. Plus de « 3 independent witnesses » ni « immutable », plus de QTSP inclus
+- Page d'essai et preuves des rapports de conformité : « tamper-evident » au lieu de « tamper-proof »
+
 ## [1.10.1] — 2026-09-14
 
 ### Added
