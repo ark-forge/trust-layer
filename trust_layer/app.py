@@ -1207,7 +1207,8 @@ async def setup_key(request: Request):
             product_tag = f"trust_layer_{plan_name}_subscription"
 
         checkout_meta["product"] = product_tag
-        cancel_tab = "scanner" if product == "scanner" else "trust"
+        # Le scanner a sa propre page tarifs ; pricing.html ne porte que le Trust Layer.
+        cancel_page, cancel_anchor = ("scanner-pricing.html", "") if product == "scanner" else ("pricing.html", "#trust")
         session = stripe.checkout.Session.create(
             mode="subscription",
             payment_method_types=["card", "link"],
@@ -1215,7 +1216,7 @@ async def setup_key(request: Request):
             client_reference_id=f"signup_{product}_{plan_name}",
             line_items=[{"price": price_id, "quantity": 1}],
             success_url=success_page,
-            cancel_url=f"https://arkforge.tech/{lang}/pricing.html?intent={plan_name}&utm_source=stripe_checkout&utm_medium=cancel#{cancel_tab}",
+            cancel_url=f"https://arkforge.tech/{lang}/{cancel_page}?intent={plan_name}&utm_source=stripe_checkout&utm_medium=cancel{cancel_anchor}",
             metadata=checkout_meta,
             subscription_data={
                 "trial_period_days": 14,
@@ -1460,12 +1461,12 @@ async def create_trial(request: Request):
     if product == "scanner":
         product_tag = "scanner_pro_subscription"
         success_html = "scanner-pro-success.html"
-        cancel_anchor = "scanner"
+        pricing_page, cancel_anchor = "scanner-pricing.html", ""
         trial_price_id = STRIPE_SCANNER_PRO_PRICE_ID_TEST if req_mode == "test" else STRIPE_SCANNER_PRO_PRICE_ID
     else:
         product_tag = "trust_layer_pro_subscription"
         success_html = "tl-pro-success.html"
-        cancel_anchor = "trust"
+        pricing_page, cancel_anchor = "pricing.html", "#trust"
         trial_price_id = STRIPE_PRO_PRICE_ID_TEST if req_mode == "test" else STRIPE_PRO_PRICE_ID
 
     if not trial_price_id:
@@ -1479,7 +1480,7 @@ async def create_trial(request: Request):
     existing = find_active_trial_by_email(email)
     if existing:
         trial_ends = existing.get("trial_ends", "")
-        upgrade_url = f"https://arkforge.tech/{lang}/pricing.html?utm_source=email&utm_medium=trial_existing#{cancel_anchor}"
+        upgrade_url = f"https://arkforge.tech/{lang}/{pricing_page}?utm_source=email&utm_medium=trial_existing{cancel_anchor}"
         try:
             sk = STRIPE_TEST_KEY if req_mode == "test" else STRIPE_LIVE_KEY
             if sk:
@@ -1495,7 +1496,7 @@ async def create_trial(request: Request):
                     client_reference_id=f"trial_upgrade_{product}",
                     line_items=[{"price": trial_price_id, "quantity": 1}],
                     success_url=f"https://arkforge.tech/{lang}/{success_html}?session_id={{CHECKOUT_SESSION_ID}}",
-                    cancel_url=f"https://arkforge.tech/{lang}/pricing.html?utm_source=trial_cancel#{cancel_anchor}",
+                    cancel_url=f"https://arkforge.tech/{lang}/{pricing_page}?utm_source=trial_cancel{cancel_anchor}",
                     metadata={
                         "product": product_tag,
                         "email": email, "plan": "pro", "lang": lang,
@@ -1528,7 +1529,7 @@ async def create_trial(request: Request):
     trial_ends = trial_info.get("trial_ends", "")
 
     # Create Stripe checkout session (upgrade path — optional for user)
-    upgrade_url = f"https://arkforge.tech/{lang}/pricing.html?utm_source=trial_key&utm_medium=email#{cancel_anchor}"
+    upgrade_url = f"https://arkforge.tech/{lang}/{pricing_page}?utm_source=trial_key&utm_medium=email{cancel_anchor}"
     try:
         sk = STRIPE_TEST_KEY if req_mode == "test" else STRIPE_LIVE_KEY
         if sk:
@@ -1546,7 +1547,7 @@ async def create_trial(request: Request):
                 client_reference_id=f"trial_upgrade_{product}",
                 line_items=[{"price": trial_price_id, "quantity": 1}],
                 success_url=f"https://arkforge.tech/{lang}/{success_html}?session_id={{CHECKOUT_SESSION_ID}}",
-                cancel_url=f"https://arkforge.tech/{lang}/pricing.html?utm_source=trial_cancel#{cancel_anchor}",
+                cancel_url=f"https://arkforge.tech/{lang}/{pricing_page}?utm_source=trial_cancel{cancel_anchor}",
                 metadata={
                     "product": product_tag,
                     "email": email,
@@ -2865,7 +2866,7 @@ def _process_stripe_event(event_type: str, data: dict, is_test: bool, event_id: 
         _is_fake, _fake_reason = _is_test_email(customer_email) if customer_email else (True, "no_email")
         if customer_email and not _is_fake:
             try:
-                send_checkout_abandoned_email(customer_email, plan=plan, lang=lang)
+                send_checkout_abandoned_email(customer_email, plan=plan, lang=lang, product=metadata.get("product", ""))
             except Exception as _e:
                 logger.warning("Checkout abandoned email failed: %s", _e)
         elif _is_fake and customer_email:

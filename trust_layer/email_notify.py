@@ -649,10 +649,15 @@ ArkForge Trust Layer — https://arkforge.tech/trust
         logger.warning("Credits exhausted email failed: %s", e)
 
 
-def send_checkout_abandoned_email(email: str, plan: str = "pro", lang: str = "en"):
-    """Send recovery email when a checkout session expires without payment."""
+def send_checkout_abandoned_email(email: str, plan: str = "pro", lang: str = "en", product: str = ""):
+    """Send recovery email when a checkout session expires without payment.
+
+    `product` is the checkout metadata tag (e.g. "scanner_pro_subscription"): the scanner
+    has its own pricing page.
+    """
     plan_label = plan.capitalize()
-    checkout_url = f"https://arkforge.tech/{lang}/pricing.html?intent={plan}&utm_source=email&utm_medium=abandoned_checkout"
+    pricing_page = "scanner-pricing.html" if product.startswith("scanner") else "pricing.html"
+    checkout_url = f"https://arkforge.tech/{lang}/{pricing_page}?intent={plan}&utm_source=email&utm_medium=abandoned_checkout"
 
     subject = f"Your {plan_label} checkout didn't complete"
     body = f"""ArkForge Trust Layer — Checkout Not Completed
