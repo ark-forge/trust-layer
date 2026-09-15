@@ -147,3 +147,36 @@ def test_proof_page_still_says_failed_when_integrity_is_broken(client):
              "batch_anchor": {"status": "pending"}}
     html = render_proof_page(proof, integrity_verified=False)
     assert "INTEGRITY CHECK FAILED" in html
+
+
+def test_verified_free_tier_proof_page_claims_no_payment(client):
+    """A free-tier proof records no payment by anyone. Its page must not say the
+    action was paid, nor sell the proof as dispute-proof."""
+    from trust_layer.templates import render_proof_page
+    proof = {"proof_id": "prf_20260913_120000_aaaaaa", "spec_version": "3.1",
+             "hashes": {"chain": "sha256:" + "ab" * 32},
+             "parties": {"seller": "api.example.com"},
+             "certification_fee": {"method": "none", "status": "free_tier"},
+             "timestamp": "2026-09-13T12:00:00+00:00",
+             "timestamp_authority": {"status": "verified"},
+             "batch_anchor": {"status": "anchored"}}
+    html = render_proof_page(proof, integrity_verified=True)
+    assert "paid" not in html.lower()
+    assert "dispute-proof" not in html.lower()
+
+
+def test_proof_page_describes_the_commitment_algorithm_for_spec_3(client):
+    """From spec 3.0 the chain hash is a Merkle root of per-field commitments
+    (proof-spec section 2). Showing the legacy concatenation formula would send a
+    verifier to the wrong algorithm."""
+    from trust_layer.templates import render_proof_page
+    proof = {"proof_id": "prf_20260913_120000_aaaaaa", "spec_version": "3.1",
+             "hashes": {"chain": "sha256:" + "ab" * 32},
+             "parties": {"seller": "api.example.com"},
+             "certification_fee": {"method": "none", "status": "free_tier"},
+             "timestamp": "2026-09-13T12:00:00+00:00",
+             "timestamp_authority": {"status": "verified"},
+             "batch_anchor": {"status": "anchored"}}
+    html = render_proof_page(proof, integrity_verified=True)
+    assert "Merkle root" in html
+    assert "payment_id" not in html

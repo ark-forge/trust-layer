@@ -94,7 +94,9 @@ def test_pricing(client):
     ent = data["plans"]["enterprise"]
     assert ent["monthly_quota"] == ENTERPRISE_MONTHLY_LIMIT
     assert ent["overage"] == f"{ENTERPRISE_OVERAGE_PRICE} EUR/proof (opt-in)"
-    assert "QTSP" in ent["witnesses"]
+    # No plan includes a qualified eIDAS timestamp: it is only offered on request.
+    assert "QTSP" not in ent["witnesses"]
+    assert "QTSP" not in data["plans"]["platform"]["witnesses"]
 
 
 def test_pricing_all_three_plans_present(client):
