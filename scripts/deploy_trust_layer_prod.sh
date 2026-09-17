@@ -168,6 +168,18 @@ done
 NEW_COMMIT=$(git rev-parse HEAD)
 log "Deploy commit: $NEW_COMMIT | proof-spec: $(git -C "$PROOF_SPEC_DIR" rev-parse --short HEAD)"
 
+# The security and smoke gates are checked HERE, before anything is deployed: a missing script used to
+# produce a WARN in Phase 2.5 and let the deploy through ungated. Checked after the pull, because the gates
+# must be those of the commit about to be deployed. Skipping stays possible, but only on purpose (--skip-smoke).
+if [ "$SKIP_SMOKE" = false ]; then
+    for gate in "$SECURITY_TEST_SCRIPT" "$SMOKE_TEST_SCRIPT"; do
+        if [ ! -f "$gate" ]; then
+            rollback_local_tree
+            fail "Gate script missing at $NEW_COMMIT: $gate — refusing to deploy ungated (use --skip-smoke to decide otherwise)"
+        fi
+    done
+fi
+
 STANDBY_PREV_COMMIT=$($SSH "$STANDBY_HOST" "git -C ${STANDBY_REPO} rev-parse HEAD" 2>/dev/null || echo "unknown")
 log "Standby commit: $STANDBY_PREV_COMMIT"
 if [ "$NEW_COMMIT" = "$PREV_COMMIT" ] && [ "$STANDBY_PREV_COMMIT" = "$NEW_COMMIT" ]; then
@@ -356,8 +368,14 @@ if [ "$SKIP_SMOKE" = true ]; then
     log "--- Phase 2.5: Smoke test SKIPPED (--skip-smoke) ---"
 else
     log "--- Phase 2.5: Smoke test ---"
+    # Phase 0 already refused a missing gate before deploying. Kept as a second lock, and it fails closed:
+    # a script that disappeared between Phase 0 and here rolls back instead of letting the deploy through.
     if [ ! -f "$SMOKE_TEST_SCRIPT" ] || [ ! -f "$SECURITY_TEST_SCRIPT" ]; then
-        log "WARN: smoke or security test script missing — skipping"
+        log "Phase 2.5: gate script missing after deploy — rolling back"
+        rollback_primary
+        rollback_standby
+        check_public_after_rollback
+        fail "Gate script missing ($SECURITY_TEST_SCRIPT / $SMOKE_TEST_SCRIPT) — rolled back primary to $PREV_COMMIT and standby to $STANDBY_PREV_COMMIT"
     else
         SMOKE_LOG="$LOG_FILE.smoke"
         SMOKE_BASE_URL="${HEALTH_URL%/v1/health}"  # strip /v1/health → https://trust.arkforge.tech
