@@ -39,6 +39,15 @@ SMOKE_TEST_SCRIPT="$REPO_DIR/scripts/smoke_test_prod.py"
 SECURITY_TEST_SCRIPT="$REPO_DIR/scripts/security_smoke_test.py"
 SSH="ssh -o ConnectTimeout=10"
 
+# --- Dépendances ---
+# Rien d'autre n'installe requirements.txt : sans cette commande, une montée de dépendance est taguée
+# mais n'atteint jamais la prod (constaté le 21/09 : cryptography 50 « déployé » le 11/09, absent).
+# Exécutée dans le dépôt d'un nœud : venv = celui de l'ExecStart effectif (drop-ins compris), puis
+# contrôle des épingles, sauté seulement si le commit (rollback) ne porte pas encore le contrôleur.
+DEPS_CMD='bin=$(dirname "$(systemctl show -p ExecStart --value '"$SERVICE"' | sed -n "s/.*path=\([^ ;]*\).*/\1/p" | tail -1)") \
+  && "$bin/pip" install -q --disable-pip-version-check -r requirements.txt \
+  && { [ ! -f scripts/check_requirements_installed.py ] || "$bin/python" scripts/check_requirements_installed.py requirements.txt; }'
+
 # --- Logging ---
 mkdir -p "$(dirname "$LOG_FILE")"
 log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" | tee -a "$LOG_FILE"; }
@@ -109,12 +118,13 @@ rollback_local_tree() {
 rollback_primary() {
     log "Rollback primary: git reset --hard $PREV_COMMIT"
     rollback_local_tree
+    bash -c "$DEPS_CMD" >> "$LOG_FILE" 2>&1 || log "CRITICAL: dépendances du rollback primary non réinstallées"
     sudo systemctl restart "$SERVICE"
 }
 rollback_standby() {
     log "Rollback standby: git reset --hard $STANDBY_PREV_COMMIT"
     if $SSH "$STANDBY_HOST" \
-        "git -C ${STANDBY_REPO} reset --hard $STANDBY_PREV_COMMIT && sudo systemctl restart $SERVICE" \
+        "cd ${STANDBY_REPO} && git reset --hard $STANDBY_PREV_COMMIT && { $DEPS_CMD; } && sudo systemctl restart $SERVICE" \
         >> "$LOG_FILE" 2>&1; then
         log "Rollback standby OK"
     else
@@ -257,8 +267,12 @@ if ! python3 -m pytest "$AGENT_CLIENT_DIR/tests/" -q --tb=short >> "$LOG_FILE" 2
 fi
 log "Gate 3/4: agent-client tests OK"
 
-# Gate 4 — Trust Layer tests
+# Gate 4 — Trust Layer tests, sur les dépendances du commit à déployer
 log "Gate 4/4: trust-layer pytest..."
+if ! "$REPO_DIR/venv/bin/pip" install -q --disable-pip-version-check -r requirements-dev.txt >> "$LOG_FILE" 2>&1; then
+    rollback_local_tree
+    fail "pip install requirements-dev.txt FAILED (venv des tests)"
+fi
 if ! "$REPO_DIR/venv/bin/python3" -m pytest tests/ -q --tb=short >> "$LOG_FILE" 2>&1; then
     rollback_local_tree
     fail "trust-layer tests FAILED"
@@ -284,7 +298,7 @@ rsync -az --no-group -e "$SSH" "$VAULT_FILE" "${STANDBY_HOST}:${VAULT_FILE}" >> 
 
 STANDBY_OK=true
 if ! $SSH "$STANDBY_HOST" \
-    "git -C ${STANDBY_REPO} pull --ff-only origin main 2>&1 && sudo systemctl restart $SERVICE 2>&1" \
+    "cd ${STANDBY_REPO} && git pull --ff-only origin main 2>&1 && { $DEPS_CMD; } 2>&1 && sudo systemctl restart $SERVICE 2>&1" \
     >> "$LOG_FILE" 2>&1; then
     log "Phase 2a: git pull / restart failed on standby"
     STANDBY_OK=false
@@ -322,6 +336,12 @@ log "Phase 2a OK — standby runs $NEW_VERSION"
 # Phase 2b — Deploy to PRIMARY (short outage: nothing falls back)
 # ----------------------------------------------------------------
 log "--- Phase 2b: Deploy to primary (local) ---"
+if ! bash -c "$DEPS_CMD" >> "$LOG_FILE" 2>&1; then
+    rollback_primary
+    rollback_standby
+    fail "Phase 2b: dépendances non installées sur le primary — primary et standby remis à leur commit précédent"
+fi
+log "Phase 2b: dépendances installées et vérifiées"
 sudo systemctl restart "$SERVICE"
 
 PRIMARY_OK=false
