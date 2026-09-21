@@ -25,7 +25,8 @@ def get_redis():
         )
         r.ping()
         _redis_client = r
-        logger.info("Redis connected: %s", REDIS_URL)
+        # L'URL porte le mot de passe : ne journaliser que l'hôte et la base.
+        logger.info("Redis connected: %s", REDIS_URL.rpartition("@")[2])
     except Exception as e:
         logger.info("Redis unavailable — fallback to JSON: %s", e)
         _redis_client = None
