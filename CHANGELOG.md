@@ -13,6 +13,8 @@ Versions follow [Semantic Versioning](https://semver.org/).
   Seuls l'hôte, le port et la base sont écrits. Le filtre de données sensibles, posé sur les loggers et non sur
   les handlers, ne voit pas les loggers enfants comme `trust_layer.redis_client`.
 - Script de déploiement : un déploiement dont les gates de sécurité manquent est refusé, au lieu d'un WARN (#43).
+- `anyio` 4.13.0 → 4.14.2 (GHSA-5p39-cfhj-2xmp, critique : encodage IDNA 2003 dans `TLSStream`, usurpation de
+  certificat possible sur les appels sortants ; GHSA-82r6-8w77-94w6).
 
 ## [1.11.2] — 2026-09-15
 
