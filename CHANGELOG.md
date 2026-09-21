@@ -6,6 +6,16 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.11.4] — 2026-09-21
+
+### Fixed
+- Le script de déploiement n'installait jamais `requirements.txt` : les montées de dépendances étaient taguées sans
+  atteindre la prod (`cryptography` 49.0.0, `setuptools` 82.0.1 et `anyio` 4.13.0 tournaient encore sur les deux
+  nœuds). Chaque nœud installe désormais les dépendances dans le venv de son `ExecStart` avant le redémarrage, puis
+  `scripts/check_requirements_installed.py` compare les épingles au venv ; un écart annule le déploiement. Les
+  rollbacks réinstallent les dépendances du commit précédent. Le gate 4 teste sur les dépendances du commit à déployer.
+- Ce déploiement applique enfin `cryptography` 50.0.0, `setuptools` 83.0.0 et `anyio` 4.14.2.
+
 ## [1.11.3] — 2026-09-21
 
 ### Security
