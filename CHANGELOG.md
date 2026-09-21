@@ -6,6 +6,14 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.11.3] — 2026-09-21
+
+### Security
+- Le client Redis journalisait l'URL de connexion complète, mot de passe compris, à chaque démarrage du service.
+  Seuls l'hôte, le port et la base sont écrits. Le filtre de données sensibles, posé sur les loggers et non sur
+  les handlers, ne voit pas les loggers enfants comme `trust_layer.redis_client`.
+- Script de déploiement : un déploiement dont les gates de sécurité manquent est refusé, au lieu d'un WARN (#43).
+
 ## [1.11.2] — 2026-09-15
 
 ### Fixed
