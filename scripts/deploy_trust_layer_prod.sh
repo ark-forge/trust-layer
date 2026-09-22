@@ -119,12 +119,12 @@ rollback_primary() {
     log "Rollback primary: git reset --hard $PREV_COMMIT"
     rollback_local_tree
     bash -c "$DEPS_CMD" >> "$LOG_FILE" 2>&1 || log "CRITICAL: dépendances du rollback primary non réinstallées"
-    sudo systemctl restart "$SERVICE"
+    sudo -n /usr/local/sbin/arkforge-run relance "$SERVICE"
 }
 rollback_standby() {
     log "Rollback standby: git reset --hard $STANDBY_PREV_COMMIT"
     if $SSH "$STANDBY_HOST" \
-        "cd ${STANDBY_REPO} && git reset --hard $STANDBY_PREV_COMMIT && { $DEPS_CMD; } && sudo systemctl restart $SERVICE" \
+        "cd ${STANDBY_REPO} && git reset --hard $STANDBY_PREV_COMMIT && { $DEPS_CMD; } && sudo -n /usr/local/sbin/arkforge-run relance $SERVICE" \
         >> "$LOG_FILE" 2>&1; then
         log "Rollback standby OK"
     else
@@ -298,7 +298,7 @@ rsync -az --no-group -e "$SSH" "$VAULT_FILE" "${STANDBY_HOST}:${VAULT_FILE}" >> 
 
 STANDBY_OK=true
 if ! $SSH "$STANDBY_HOST" \
-    "cd ${STANDBY_REPO} && git pull --ff-only origin main 2>&1 && { $DEPS_CMD; } 2>&1 && sudo systemctl restart $SERVICE 2>&1" \
+    "cd ${STANDBY_REPO} && git pull --ff-only origin main 2>&1 && { $DEPS_CMD; } 2>&1 && sudo -n /usr/local/sbin/arkforge-run relance $SERVICE 2>&1" \
     >> "$LOG_FILE" 2>&1; then
     log "Phase 2a: git pull / restart failed on standby"
     STANDBY_OK=false
@@ -342,7 +342,7 @@ if ! bash -c "$DEPS_CMD" >> "$LOG_FILE" 2>&1; then
     fail "Phase 2b: dépendances non installées sur le primary — primary et standby remis à leur commit précédent"
 fi
 log "Phase 2b: dépendances installées et vérifiées"
-sudo systemctl restart "$SERVICE"
+sudo -n /usr/local/sbin/arkforge-run relance "$SERVICE"
 
 PRIMARY_OK=false
 for i in $(seq 1 6); do
