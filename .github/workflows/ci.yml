@@ -27,11 +27,46 @@ jobs:
       - name: Run tests
         run: pytest tests/ -v
 
-      - name: Audit dependencies
+      - name: Audit dependencies (hash-locked set, OSV + PyPI advisories)
         run: |
-          # setuptools comes from the runner image, not from our pins: pip-audit
-          # audits the environment, so a stale runner setuptools fails the job even
-          # when requirements.txt already pins a fixed version.
-          pip install --upgrade pip setuptools
           pip install pip-audit
-          pip-audit --skip-editable
+          pip-audit --require-hashes --disable-pip -r requirements-dev.txt
+          pip-audit --require-hashes --disable-pip -r requirements-dev.txt --vulnerability-service osv
+
+  lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Locks match their inputs (uv, hashes)
+        run: |
+          pip install uv
+          for f in requirements requirements-dev; do
+            uv pip compile $f.in --python-platform linux --python-version 3.14 --generate-hashes -q -o /tmp/$f.txt
+            diff <(grep -v '^#' $f.txt) <(grep -v '^#' /tmp/$f.txt) || { echo "$f.txt is stale: run uv pip compile"; exit 1; }
+          done
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Secrets in the whole history (reviewed findings in .gitleaksignore)
+        run: |
+          curl -sSfL -o /tmp/gl.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  /tmp/gl.tgz" | sha256sum -c -
+          tar -xzf /tmp/gl.tgz -C /tmp gitleaks
+          /tmp/gitleaks git --no-banner --redact .
+
+  sbom:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: CycloneDX SBOM of the locked runtime set
+        run: |
+          pip install cyclonedx-bom
+          cyclonedx-py requirements requirements.txt --of JSON -o sbom.cdx.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.cdx.json

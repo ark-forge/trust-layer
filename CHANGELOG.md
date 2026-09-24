@@ -6,6 +6,16 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.12.1] — 2026-09-24
+
+### Security
+- Dependencies are locked with hashes (`requirements.in` → `requirements.txt`, `requirements-dev.in` →
+  `requirements-dev.txt`, `uv pip compile --generate-hashes`, Linux / Python 3.14): the deploy installs in pip's
+  hash-checking mode. CI fails if a lock is stale.
+- CI: `pip-audit` on the locked set against PyPI and OSV advisories, gitleaks on the whole history (reviewed findings
+  in `.gitleaksignore`), CycloneDX SBOM of the runtime set; the SBOM is attached to each release. Renovate config.
+- `scripts/check_requirements_installed.py` reads hash-locked requirement files.
+
 ## [1.12.0] — 2026-09-24
 
 ### Added
