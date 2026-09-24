@@ -15,10 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-
 from .config import ATTESTATIONS_DIR
-from .crypto import sign_proof
 from .persistence import save_json, load_json
 from .proofs import canonical_json, sha256_hex
 
@@ -39,7 +36,7 @@ def build_attestation(
     occurred_at_utc: str,
     content_hash: str,
     attester_fingerprint: str,
-    signing_key: Ed25519PrivateKey,
+    signer,
 ) -> dict:
     """Build and sign an attestation record.
 
@@ -74,7 +71,7 @@ def build_attestation(
         "record_type": record_type,
     }
     chain_hash = sha256_hex(canonical_json(chain_data))
-    signature = sign_proof(signing_key, chain_hash)
+    signature = signer.sign_chain_hash(chain_hash)
 
     return {
         "attestation_id": attestation_id,
@@ -89,6 +86,7 @@ def build_attestation(
             "chain": f"sha256:{chain_hash}",
         },
         "signature": signature,
+        "signature_kid": signer.kid,
     }
 
 
@@ -137,5 +135,6 @@ def attestation_to_encina_response(attestation: dict) -> dict:
             "specVersion": attestation["spec_version"],
             "chainHash": chain_hash,
             "attesterFingerprint": attestation["attester_fingerprint"],
+            "signatureKid": attestation.get("signature_kid"),
         },
     }

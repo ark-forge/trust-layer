@@ -9,8 +9,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 
 from .proofs import generate_proof_id, generate_proof, store_proof
-from .crypto import sign_proof
-from .config import get_signing_key, ARKFORGE_PUBLIC_KEY, TRUST_LAYER_BASE_URL
+from .config import get_signer, TRUST_LAYER_BASE_URL
 
 _DEMO_RATE_LIMIT = 10      # max demos per IP per window
 _DEMO_WINDOW_S = 3600      # 1-hour fixed window
@@ -122,10 +121,12 @@ def build_demo_proof(target: str, payload: dict) -> dict:
         "_raw_chain_hash": chain_hash,
     }
 
-    signing_key = get_signing_key()
-    if signing_key:
-        proof_record["arkforge_signature"] = sign_proof(signing_key, chain_hash)
-        proof_record["arkforge_pubkey"] = ARKFORGE_PUBLIC_KEY
+    signer = get_signer()
+    if signer:
+        # Added after the chain hash: the kid, like the pubkey, is not hashed (D46).
+        proof_record["arkforge_signature"] = signer.sign_chain_hash(chain_hash)
+        proof_record["arkforge_pubkey"] = signer.public
+        proof_record["arkforge_kid"] = signer.kid
 
     store_proof(proof_id, proof_record)
     # Full record on purpose: the caller needs _raw_chain_hash to queue the anchor.

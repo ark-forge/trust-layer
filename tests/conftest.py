@@ -54,7 +54,6 @@ def _isolate_data(tmp_path, monkeypatch):
     monkeypatch.setattr(proxy_mod, "AGENTS_DIR", tmp_path / "data" / "agents")
     monkeypatch.setattr(proxy_mod, "SERVICES_DIR", tmp_path / "data" / "services")
     monkeypatch.setattr(proxy_mod, "TRUST_LAYER_BASE_URL", "https://test.arkforge.fr")
-    monkeypatch.setattr(proxy_mod, "ARKFORGE_PUBLIC_KEY", test_pubkey)
     monkeypatch.setattr(proxy_mod, "BACKGROUND_TASKS_LOG", tmp_path / "data" / "background_tasks_log.jsonl")
 
     # Batch anchoring — isolate the pending batch state and the batch records
@@ -71,7 +70,6 @@ def _isolate_data(tmp_path, monkeypatch):
 
     import trust_layer.app as app_mod
     monkeypatch.setattr(app_mod, "TRUST_LAYER_BASE_URL", "https://test.arkforge.fr")
-    monkeypatch.setattr(app_mod, "ARKFORGE_PUBLIC_KEY", test_pubkey)
     monkeypatch.setattr(app_mod, "PROOF_ACCESS_LOG", tmp_path / "data" / "proof_access_log.jsonl")
     monkeypatch.setattr(app_mod, "WEBHOOK_IDEMPOTENCY_FILE", tmp_path / "data" / "webhook_idempotency.jsonl")
     monkeypatch.setattr(app_mod, "FUNNEL_EVENTS_LOG", tmp_path / "data" / "funnel_events.jsonl")

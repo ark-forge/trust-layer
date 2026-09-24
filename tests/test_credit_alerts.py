@@ -208,8 +208,7 @@ async def test_proxy_triggers_low_credits_after_debit(real_pro_key):
          upatch("trust_layer.proxy.add_proof_to_batch"), \
          upatch("trust_layer.proxy.send_proof_email"), \
          upatch("trust_layer.proxy._update_agent_profile"), \
-         upatch("trust_layer.proxy._update_service_profile"), \
-         upatch("trust_layer.proxy.sign_proof", return_value="ed25519:testsig"):
+         upatch("trust_layer.proxy._update_service_profile"):
         await execute_proxy(
             target="https://httpbin.org/get",
             method="GET",

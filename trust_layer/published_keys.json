@@ -1,0 +1,23 @@
+{
+  "_doc": "Published key history (proof-spec, key history). Public keys only. One Ed25519 key and one Rekor key per node, born in tl-signer (P5a). A key is valid for proofs dated before retired_at. Append only: a retired key stays listed forever.",
+  "keys": [
+    {
+      "kid": "key-1",
+      "type": "Ed25519",
+      "public": "ed25519:ZLlGE0eN0eTNUE9vaK1tStf6AuoFUWqJBvqx7QgxfEY",
+      "node": "vps1, vps2 (shared, before P5a)",
+      "valid_from": "2026-02-26T00:00:00Z",
+      "retired_at": null
+    }
+  ],
+  "rekor_keys": [
+    {
+      "kid": "rekor-1",
+      "type": "ECDSA-P256-SHA256",
+      "public_pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEZCQKftNdG+Yb8NRMldmdsJELOGAD\n75BNH9+IhSEB4tT69sXaUYkDIUncGyjxY0ZdrVB/el5y3UW5xVM8Cmaq9A==\n-----END PUBLIC KEY-----\n",
+      "node": "vps1, vps2 (shared, before P5a)",
+      "valid_from": "2026-03-03T00:00:00Z",
+      "retired_at": null
+    }
+  ]
+}

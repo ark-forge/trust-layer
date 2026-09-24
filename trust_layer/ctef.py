@@ -4,12 +4,7 @@ import hashlib
 import json
 from datetime import datetime, timezone, timedelta
 
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-
-from .crypto import sign_jws
-
 GATEWAY_DID = "did:web:trust.arkforge.tech"
-KEY_ID = f"{GATEWAY_DID}#key-1"
 
 
 def _jcs(obj: dict) -> bytes:
@@ -17,7 +12,7 @@ def _jcs(obj: dict) -> bytes:
 
 
 def build_tier_upgrade_verdict(
-    private_key: Ed25519PrivateKey,
+    signer,
     requester_did: str,
     current_tier: str,
     requested_tier: str,
@@ -31,7 +26,7 @@ def build_tier_upgrade_verdict(
     """Build and sign a CTEF tier_upgrade_proof envelope.
 
     Returns: ctef_envelope, envelope_sha256, envelope_jcs_bytes, verdict_jws.
-    The verdict_jws is a compact EdDSA/Ed25519 JWS verifiable against GATEWAY_DID#key-1.
+    The verdict_jws is a compact EdDSA/Ed25519 JWS verifiable against the key its header names (GATEWAY_DID#<kid>).
     """
     now = datetime.now(timezone.utc)
     issued_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -52,11 +47,8 @@ def build_tier_upgrade_verdict(
         "policy_ref": policy_ref,
     }
 
-    verdict_jws = sign_jws(
-        private_key,
-        {"alg": "EdDSA", "kid": KEY_ID},
-        jws_payload,
-    )
+    # The signer sets the header itself, kid included (D45).
+    verdict_jws = signer.sign_jws(jws_payload)
 
     ctef_envelope = {
         "claim_type": "authority",

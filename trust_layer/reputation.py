@@ -14,8 +14,7 @@ import math
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .config import AGENTS_DIR, get_signing_key, ARKFORGE_PUBLIC_KEY
-from .crypto import sign_proof
+from .config import AGENTS_DIR, get_signer
 from .persistence import load_json, save_json
 
 REPUTATION_CONFIG = {
@@ -124,8 +123,8 @@ def compute_reputation(agent_id: str, profile: dict) -> dict:
     # Sign: "{agent_id}:{score}:{computed_at}" with Ed25519
     canonical_id = agent_id if agent_id.startswith("sha256:") else f"sha256:{agent_id}"
     sign_payload = f"{canonical_id}:{score}:{computed_at}"
-    signing_key = get_signing_key()
-    signature = sign_proof(signing_key, sign_payload) if signing_key else None
+    signer = get_signer()
+    signature = signer.sign_reputation(sign_payload) if signer else None
 
     return {
         "agent_id": canonical_id,
@@ -145,6 +144,7 @@ def compute_reputation(agent_id: str, profile: dict) -> dict:
         },
         "reputation_score": score,
         "signature": signature,
+        "signature_kid": signer.kid if signer else None,
         "computed_at": computed_at,
     }
 
@@ -210,5 +210,6 @@ def get_public_reputation(rep: dict) -> dict:
         "last_proof_at": rep.get("last_proof_at"),
         "unique_services_count": len(rep.get("unique_services", [])),
         "signature": rep.get("signature"),
+        "signature_kid": rep.get("signature_kid"),
         "computed_at": rep["computed_at"],
     }

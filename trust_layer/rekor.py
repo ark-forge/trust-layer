@@ -1,9 +1,9 @@
 """Sigstore Rekor transparency log — submit proof chain hash for public auditability.
 
 Uses ECDSA P-256 + SHA-256 (hashedrekord v0.0.1), the format natively supported
-by Rekor without Sigstore/Fulcio certificates. A dedicated EC key is generated
-once and stored at REKOR_EC_KEY_PATH; it is separate from the Ed25519 signing key
-used for arkforge_signature.
+by Rekor without Sigstore/Fulcio certificates. The EC key is separate from the
+Ed25519 signing key used for arkforge_signature. It lives in tl-signer in signer
+mode (P5a); in legacy mode it is generated once and stored at REKOR_EC_KEY_PATH.
 """
 
 import base64
@@ -69,12 +69,9 @@ def get_rekor_public_key_pem() -> Optional[str]:
     log proves that *some* key attested a hash at time T, never that ArkForge did —
     which is precisely the witness the anchoring is supposed to provide.
     """
+    from .config import get_signer
     try:
-        key = _get_or_create_rekor_ec_key()
-        return key.public_key().public_bytes(
-            serialization.Encoding.PEM,
-            serialization.PublicFormat.SubjectPublicKeyInfo,
-        ).decode("ascii")
+        return get_signer().rekor_public_pem
     except Exception as e:
         logger.warning("Rekor public key unavailable: %s", e)
         return None
@@ -92,21 +89,24 @@ def _build_entry(chain_hash_hex: str, ec_key=None) -> dict:
         chain_hash_hex: SHA-256 chain hash as hex string (our proof integrity anchor).
         ec_key: ECDSA P-256 private key (optional — uses managed key if None).
     """
-    if ec_key is None:
-        ec_key = _get_or_create_rekor_ec_key()
-
     artifact_bytes = chain_hash_hex.encode("utf-8")
     sha256_hex = hashlib.sha256(artifact_bytes).hexdigest()
 
     # ECDSA signature over the artifact (SHA-256 hashing done internally by ECDSA)
-    sig_der = ec_key.sign(artifact_bytes, ec.ECDSA(hashes.SHA256()))
-    sig_b64 = base64.b64encode(sig_der).decode("ascii")
+    if ec_key is None:
+        from .config import get_signer
+        signer = get_signer()
+        sig_b64 = signer.sign_rekor(chain_hash_hex)
+        pub_pem = signer.rekor_public_pem.encode("ascii")
+    else:
+        sig_der = ec_key.sign(artifact_bytes, ec.ECDSA(hashes.SHA256()))
+        sig_b64 = base64.b64encode(sig_der).decode("ascii")
+        pub_pem = ec_key.public_key().public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
 
     # Public key as base64-encoded PEM SPKI
-    pub_pem = ec_key.public_key().public_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PublicFormat.SubjectPublicKeyInfo,
-    )
     pub_b64 = base64.b64encode(pub_pem).decode("ascii")
 
     return {

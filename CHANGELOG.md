@@ -6,6 +6,26 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.12.0] — 2026-09-24
+
+### Added
+- `tl-signer` (`signer/tl_signer.py`): a separate service that holds the private keys and signs over a Unix
+  socket. Closed operations only (chain hash, reputation statement, JWS built by the signer, Rekor artifact),
+  bounded inputs, no operation returns key material. Keys are born in the signer, one per node.
+- Signer mode: with `TL_SIGNER_SOCKET` set, the Trust Layer reads and creates no key file, takes its public keys
+  from the socket at startup, and refuses to start if its key is missing from the published history. Unset, the
+  legacy `.pem` keys are used as before.
+- Key history (`trust_layer/published_keys.json`): `/v1/pubkey` adds `kid`, `rekor_kid`, `keys` and `rekor_keys`;
+  `/.well-known/did.json` lists every key, the node key first, and only keys not retired may assert.
+- Proofs carry `arkforge_kid`, attestations and reputation scores `signature_kid`. The kid is added after the
+  chain hash, like `arkforge_pubkey`.
+- `scripts/verify_proof.py` picks the key a proof names (or, for older proofs, the key it carries) from the
+  history, and refuses a key retired before the proof's date. Rekor entries are attributed to any published
+  Rekor key of the history.
+
+### Changed
+- CTEF verdicts: the JWS header (`alg`, `kid`) is set by the signer, no longer a hardcoded `#key-1`.
+
 ## [1.11.4] — 2026-09-21
 
 ### Fixed

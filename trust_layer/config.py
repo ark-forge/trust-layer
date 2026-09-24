@@ -380,19 +380,40 @@ SIGNING_KEY_PATH = Path(os.environ.get(
     str(BASE_DIR / "trust_layer" / ".signing_key.pem"),
 ))
 
-# Fail-fast: load signing key at import time.
-# If absent, the server refuses to start — unsigned proofs are not allowed.
-try:
-    from .crypto import load_signing_key, get_public_key_b64url
-    _SIGNING_KEY = load_signing_key(SIGNING_KEY_PATH)
-    ARKFORGE_PUBLIC_KEY = get_public_key_b64url(_SIGNING_KEY)
-except Exception as _e:
-    raise RuntimeError(
-        f"Signing key unavailable at {SIGNING_KEY_PATH}: {_e}. "
-        "Generate it with: python3 -m trust_layer.crypto"
-    ) from _e
+# Published key history (kid, public key, node, validity), identical on every node.
+PUBLISHED_KEYS_FILE = BASE_DIR / "trust_layer" / "published_keys.json"
+
+# Signer mode (P5a): TL_SIGNER_SOCKET names the tl-signer socket. The private keys
+# then live in tl-signer only; nothing here reads or creates a key file. Unset, the
+# legacy .pem next to the package is used (default until the switch).
+SIGNER_SOCKET = os.environ.get("TL_SIGNER_SOCKET", "")
+
+# Fail-fast: the server refuses to start without a way to sign (unsigned proofs are
+# not allowed) and, in signer mode, with a key missing from the published history.
+if SIGNER_SOCKET:
+    from .signing import SocketSigner, check_registered
+    _SIGNING_KEY = None
+    _SIGNER = SocketSigner(SIGNER_SOCKET)
+    check_registered(_SIGNER, PUBLISHED_KEYS_FILE)
+    ARKFORGE_PUBLIC_KEY = _SIGNER.public
+else:
+    _SIGNER = None
+    try:
+        from .crypto import load_signing_key, get_public_key_b64url
+        _SIGNING_KEY = load_signing_key(SIGNING_KEY_PATH)
+        ARKFORGE_PUBLIC_KEY = get_public_key_b64url(_SIGNING_KEY)
+    except Exception as _e:
+        raise RuntimeError(
+            f"Signing key unavailable at {SIGNING_KEY_PATH}: {_e}. "
+            "Generate it with: python3 -m trust_layer.crypto"
+        ) from _e
 
 
-def get_signing_key():
-    """Return the Ed25519 private key, or None if not configured."""
-    return _SIGNING_KEY
+def get_signer():
+    """The node's signer (trust_layer.signing), or None if not configured."""
+    if _SIGNER is not None:
+        return _SIGNER
+    if _SIGNING_KEY is None:
+        return None
+    from .signing import LocalSigner
+    return LocalSigner(_SIGNING_KEY)

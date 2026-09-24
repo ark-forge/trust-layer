@@ -26,14 +26,13 @@ from .config import (
     AGENTS_DIR,
     SERVICES_DIR,
     BACKGROUND_TASKS_LOG,
-    ARKFORGE_PUBLIC_KEY,
     INTERNAL_SECRET,
     TRUSTED_INTERNAL_HOSTS,
     CHALLENGE_SECRET,
     CHALLENGE_HOSTS,
     CHALLENGE_OPEN,
     CHALLENGE_KEYS,
-    get_signing_key,
+    get_signer,
 )
 from .keys import validate_api_key, get_key_plan, _KEYS_LOCK
 from .payments.base import ChargeResult
@@ -45,7 +44,6 @@ from .persistence import load_json, save_json
 from .rate_limit import check_rate_limit
 from .batch_anchor import add_proof as add_proof_to_batch
 from .email_notify import send_proof_email, send_low_credits_email, send_credits_exhausted_email
-from .crypto import sign_proof
 
 logger = logging.getLogger("trust_layer.proxy")
 
@@ -847,10 +845,12 @@ async def execute_proxy(
 
     # Ed25519 signature: sign the chain hash to prove ArkForge origin
     chain_hash = proof["_raw_chain_hash"]
-    signing_key = get_signing_key()
-    if signing_key:
-        proof_record["arkforge_signature"] = sign_proof(signing_key, chain_hash)
-        proof_record["arkforge_pubkey"] = ARKFORGE_PUBLIC_KEY
+    signer = get_signer()
+    if signer:
+        # Added after the chain hash: the kid, like the pubkey, is not hashed (D46).
+        proof_record["arkforge_signature"] = signer.sign_chain_hash(chain_hash)
+        proof_record["arkforge_pubkey"] = signer.public
+        proof_record["arkforge_kid"] = signer.kid
 
     # 10. Store proof
     store_proof(proof_id, proof_record)

@@ -16,7 +16,8 @@ What it checks, witness by witness:
                          internal consistency. On its own it is NOT evidence:
                          whoever fabricates a proof produces coherent hashes.
   2. Ed25519 signature — ArkForge's own signature over the chain hash, checked
-                         against the key published at /.well-known/did.json.
+                         against ArkForge's published key history (/v1/pubkey):
+                         the key the proof names, not retired at the proof's date.
                          Proves ArkForge issued it. Still not independent.
   3. Batch anchor      — the chain hash is a leaf of the batch Merkle tree whose
                          root was anchored. Self-consistency again, but it is what
@@ -57,6 +58,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 
 # Overridable so the procedure can be run verbatim against another instance —
@@ -410,25 +412,64 @@ def _b64url_decode(s):
     return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
 
+def _utc(ts):
+    """Seconds precision is enough to order a proof and a key retirement (UTC)."""
+    return datetime.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S")
+
+
+def published_ed25519_keys():
+    """ArkForge's key history (/v1/pubkey `keys`). A server that predates key
+    rotation publishes a single key, the first verification method of did.json."""
+    pub = json.loads(fetch(f"{TRUST_LAYER_BASE}/v1/pubkey"))
+    if pub.get("keys"):
+        return pub["keys"]
+    did = json.loads(fetch(f"{TRUST_LAYER_BASE}/.well-known/did.json"))
+    x = did["verificationMethod"][0]["publicKeyJwk"]["x"]
+    return [{"kid": "key-1", "public": "ed25519:" + x, "retired_at": None}]
+
+
+def _published_key_for(proof, keys):
+    """(public key, None) for the proof, or (None, reason). The proof names its key
+    by `arkforge_kid`; proofs issued before rotation carry only `arkforge_pubkey`.
+    A key is valid for proofs dated before its retirement, never after."""
+    kid = proof.get("arkforge_kid")
+    embedded = proof.get("arkforge_pubkey") or ""
+    if kid:
+        entry = next((k for k in keys if k.get("kid") == kid), None)
+        if entry is None:
+            return None, f"key {kid} named by the proof is not published"
+    else:
+        entry = next((k for k in keys if k.get("public") == embedded), None)
+        if entry is None:
+            return None, "key in proof does not match any key published (/v1/pubkey, did.json)"
+    if embedded and embedded != entry.get("public"):
+        return None, f"key in proof is not the key published as {entry.get('kid')}"
+    retired = entry.get("retired_at")
+    if retired:
+        ts = proof.get("timestamp")
+        if not ts or _utc(ts) >= _utc(retired):
+            return None, f"key {entry.get('kid')} was retired at {retired}, proof dated {ts}"
+    return entry["public"], None
+
+
 def check_ed25519(proof, chain_hex, rep, offline):
     sig_str = proof.get("arkforge_signature")
     if not sig_str:
         rep.add("Ed25519 (ArkForge)", SKIP, "proof carries no signature")
         return
-    published = None
-    if not offline:
+    if offline:
+        pub = proof.get("arkforge_pubkey") or ""
+    else:
         try:
-            did = json.loads(fetch(f"{TRUST_LAYER_BASE}/.well-known/did.json"))
-            published = did["verificationMethod"][0]["publicKeyJwk"]["x"]
+            keys = published_ed25519_keys()
         except Exception as e:
-            rep.add("Ed25519 (ArkForge)", FAIL, f"cannot fetch published key: {e}")
+            rep.add("Ed25519 (ArkForge)", FAIL, f"cannot fetch published keys: {e}")
             return
-    embedded = (proof.get("arkforge_pubkey") or "").replace("ed25519:", "")
-    if published and embedded and published != embedded:
-        rep.add("Ed25519 (ArkForge)", FAIL,
-                "key in proof does not match the key published at did.json")
-        return
-    pub_b64 = published or embedded
+        pub, reason = _published_key_for(proof, keys)
+        if reason:
+            rep.add("Ed25519 (ArkForge)", FAIL, reason)
+            return
+    pub_b64 = pub.replace("ed25519:", "")
     if not pub_b64:
         rep.add("Ed25519 (ArkForge)", SKIP, "no public key available")
         return
@@ -712,13 +753,19 @@ def _check_rekor(proof, chain_hex, rep, offline):
         rep.add("Sigstore Rekor", FAIL, "entry signature does not verify")
         return
 
-    # 4c. Attribution: is the submitting key the one ArkForge publishes?
+    # 4c. Attribution: is the submitting key one ArkForge publishes? Any Rekor key of
+    # the history counts, provided it was not retired before the proof's date.
     attributed = None
     try:
         published = json.loads(fetch(f"{TRUST_LAYER_BASE}/v1/pubkey"))
-        pub_rekor = published.get("rekor_pubkey")
-        if pub_rekor:
-            attributed = _normalise_pem(pub_rekor) == _normalise_pem(submitter_pem.decode())
+        ts = proof.get("timestamp")
+        candidates = [published.get("rekor_pubkey")] + [
+            k.get("public_pem") for k in published.get("rekor_keys") or []
+            if not k.get("retired_at") or (ts and _utc(ts) < _utc(k["retired_at"]))
+        ]
+        candidates = [_normalise_pem(c) for c in candidates if c]
+        if candidates:
+            attributed = _normalise_pem(submitter_pem.decode()) in candidates
     except Exception:
         attributed = None
 
