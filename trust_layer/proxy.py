@@ -26,18 +26,18 @@ from .config import (
     AGENTS_DIR,
     SERVICES_DIR,
     BACKGROUND_TASKS_LOG,
-    ARKFORGE_PUBLIC_KEY,
     INTERNAL_SECRET,
     TRUSTED_INTERNAL_HOSTS,
     CHALLENGE_SECRET,
     CHALLENGE_HOSTS,
     CHALLENGE_OPEN,
     CHALLENGE_KEYS,
-    get_signing_key,
+    get_signer,
 )
 from .keys import validate_api_key, get_key_plan, _KEYS_LOCK
 from .payments.base import ChargeResult
-from .credits import debit_credits, InsufficientCredits
+from .credits import debit_credits, refund_credits, InsufficientCredits
+from .signing import SignerError
 from .rate_limit import rollback_overage
 from .proofs import sha256_hex, generate_proof_id, generate_proof, store_proof, strip_private
 from .receipt import fetch_receipt
@@ -45,7 +45,6 @@ from .persistence import load_json, save_json
 from .rate_limit import check_rate_limit
 from .batch_anchor import add_proof as add_proof_to_batch
 from .email_notify import send_proof_email, send_low_credits_email, send_credits_exhausted_email
-from .crypto import sign_proof
 
 logger = logging.getLogger("trust_layer.proxy")
 
@@ -608,6 +607,16 @@ async def execute_proxy(
     is_free = plan == "free"
     is_internal = plan == "internal"
 
+    # 2c. Signer reachable before anything is counted or charged (signer mode: a
+    # separate process). A signer lost later in the request is handled at signing.
+    signer = get_signer()
+    if signer is not None:
+        try:
+            signer.ping()
+        except SignerError:
+            logger.error("tl-signer unreachable, request refused before charge")
+            raise ProxyError("signing_unavailable", "Proof signing is temporarily unavailable. Nothing was charged.", 503)
+
     # 3. Check rate limit (must be before amount calculation: overage status affects price)
     allowed, remaining, is_overage, block_reason = check_rate_limit(api_key)
     if not allowed:
@@ -658,6 +667,7 @@ async def execute_proxy(
     target_domain = urlparse(target).hostname or "unknown"
 
     proof_id_for_debit = generate_proof_id()
+    debit_id = None
 
     if is_free or is_test or is_internal:
         charge_result = ChargeResult(
@@ -847,10 +857,21 @@ async def execute_proxy(
 
     # Ed25519 signature: sign the chain hash to prove ArkForge origin
     chain_hash = proof["_raw_chain_hash"]
-    signing_key = get_signing_key()
-    if signing_key:
-        proof_record["arkforge_signature"] = sign_proof(signing_key, chain_hash)
-        proof_record["arkforge_pubkey"] = ARKFORGE_PUBLIC_KEY
+    if signer:
+        try:
+            signature = signer.sign_chain_hash(chain_hash)
+        except SignerError:
+            # Charged, but no signed proof: give the money back, never keep it.
+            logger.error("tl-signer lost during request, refunding proof %s", proof_id_for_debit)
+            if debit_id:
+                refund_credits(api_key, charge_result.amount, debit_id, proof_id_for_debit)
+            if is_overage:
+                rollback_overage(api_key)
+            raise ProxyError("signing_unavailable", "Proof signing is temporarily unavailable. The charge was refunded.", 503)
+        # Added after the chain hash: the kid, like the pubkey, is not hashed.
+        proof_record["arkforge_signature"] = signature
+        proof_record["arkforge_pubkey"] = signer.public
+        proof_record["arkforge_kid"] = signer.kid
 
     # 10. Store proof
     store_proof(proof_id, proof_record)

@@ -107,6 +107,15 @@ except Exception: print('')
 }
 
 # --- Health of a node: "status version role" ---
+# Signing on a node, from /v1/health (1.12.0+): "self_test kid mode".
+signing_of() {
+    python3 -c "
+import sys, json
+try:
+    s = json.load(sys.stdin).get('signing') or {}
+    print(s.get('self_test', ''), s.get('kid', ''), s.get('mode', ''))
+except Exception: print('')"
+}
 local_health() { curl -s --max-time 5 "$LOCAL_URL/v1/health" 2>/dev/null || true; }
 standby_health() { $SSH "$STANDBY_HOST" "curl -s --max-time 5 $LOCAL_URL/v1/health" 2>/dev/null || true; }
 standby_http_code() { $SSH "$STANDBY_HOST" "curl -s -o /dev/null -w '%{http_code}' --max-time 5 $LOCAL_URL$1" 2>/dev/null || echo "000"; }
@@ -325,6 +334,14 @@ if [ "$STANDBY_OK" = true ]; then
     done
 fi
 
+# The standby signs with its own key after a failover: its startup
+# self-test must have signed and verified with the key it publishes.
+if [ "$STANDBY_OK" = true ]; then
+    SIG=$(standby_health | signing_of)
+    log "Phase 2a canary: standby signing = $SIG"
+    case "$SIG" in ok\ *) ;; *) STANDBY_OK=false ;; esac
+fi
+
 if [ "$STANDBY_OK" = false ]; then
     rollback_standby
     rollback_local_tree
@@ -350,7 +367,9 @@ for i in $(seq 1 6); do
     H=$(local_health)
     log "Phase 2b attempt $i/6: status=$(echo "$H" | json_field status) version=$(echo "$H" | json_field version) role=$(echo "$H" | json_field role)"
     if [ "$(echo "$H" | json_field status)" = "ok" ] && [ "$(echo "$H" | json_field version)" = "$NEW_VERSION" ]; then
-        PRIMARY_OK=true
+        SIG=$(echo "$H" | signing_of)
+        log "Phase 2b: primary signing = $SIG"
+        case "$SIG" in ok\ *) PRIMARY_OK=true ;; esac
         break
     fi
 done

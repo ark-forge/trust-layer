@@ -9,7 +9,7 @@ from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from ..config import get_signing_key
+from ..config import get_signer
 from ..keys import validate_api_key
 from ..ctef import build_tier_upgrade_verdict, GATEWAY_DID
 
@@ -54,7 +54,7 @@ async def tier_upgrade_verdict(
     authorization: Optional[str] = Header(default=None),
     x_api_key: Optional[str] = Header(default=None),
 ) -> JSONResponse:
-    """Issue a CTEF tier_upgrade_proof verdict signed by did:web:trust.arkforge.tech#key-1."""
+    """Issue a CTEF tier_upgrade_proof verdict signed by the node key (did:web:trust.arkforge.tech#<kid>)."""
     api_key = _get_api_key(authorization, x_api_key)
     if not api_key:
         return _error("invalid_api_key", "API key required.", 401)
@@ -71,8 +71,8 @@ async def tier_upgrade_verdict(
     if body.actual > body.limit:
         return _error("constraint_violation", "actual must not exceed limit.", 422)
 
-    signing_key = get_signing_key()
-    if signing_key is None:
+    signer = get_signer()
+    if signer is None:
         logger.error("Signing key unavailable for verdict request")
         return _error("signing_unavailable", "Signing key not configured.", 503)
 
@@ -84,7 +84,7 @@ async def tier_upgrade_verdict(
 
     try:
         result = build_tier_upgrade_verdict(
-            private_key=signing_key,
+            signer=signer,
             requester_did=body.requester_did,
             current_tier=body.current_tier,
             requested_tier=body.requested_tier,

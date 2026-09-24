@@ -62,10 +62,24 @@ def _load_secrets() -> None:
         _vault_path = os.environ.get("VAULT_PATH", "/opt/claude-ceo")
         if _vault_path not in _sys.path:
             _sys.path.insert(0, _vault_path)
-        from automation.vault import vault as _vault  # type: ignore[import]
-        _stripe = _vault.get_section("stripe") or {}
-        _smtp = _vault.get_section("smtp") or {}
-        _proveit = _vault.get_section("proveit") or {}
+        from automation import vault as _vault_mod  # type: ignore[import]
+        _vault = _vault_mod.vault
+        # Under its own user, the service cannot read ubuntu's vault files:
+        # systemd hands them over (LoadCredential=vault.json.enc, vault_key). The
+        # master key goes through VAULT_MASTER_KEY, the vault's own interface, only
+        # while the sections load: openssl subprocesses must not inherit it.
+        _creds = Path(os.environ.get("CREDENTIALS_DIRECTORY", "/nonexistent"))
+        _from_creds = (_creds / "vault.json.enc").exists() and (_creds / "vault_key").exists()
+        if _from_creds:
+            _vault_mod.VAULT_FILE = _creds / "vault.json.enc"
+            os.environ["VAULT_MASTER_KEY"] = (_creds / "vault_key").read_text().strip()
+        try:
+            _stripe = _vault.get_section("stripe") or {}
+            _smtp = _vault.get_section("smtp") or {}
+            _proveit = _vault.get_section("proveit") or {}
+        finally:
+            if _from_creds:
+                os.environ.pop("VAULT_MASTER_KEY", None)
         _mapping = {
             "STRIPE_LIVE_SECRET_KEY":        _stripe.get("live_secret_key", ""),
             "STRIPE_TEST_SECRET_KEY":         _stripe.get("test_secret_key", ""),
@@ -380,19 +394,40 @@ SIGNING_KEY_PATH = Path(os.environ.get(
     str(BASE_DIR / "trust_layer" / ".signing_key.pem"),
 ))
 
-# Fail-fast: load signing key at import time.
-# If absent, the server refuses to start — unsigned proofs are not allowed.
-try:
-    from .crypto import load_signing_key, get_public_key_b64url
-    _SIGNING_KEY = load_signing_key(SIGNING_KEY_PATH)
-    ARKFORGE_PUBLIC_KEY = get_public_key_b64url(_SIGNING_KEY)
-except Exception as _e:
-    raise RuntimeError(
-        f"Signing key unavailable at {SIGNING_KEY_PATH}: {_e}. "
-        "Generate it with: python3 -m trust_layer.crypto"
-    ) from _e
+# Published key history (kid, public key, node, validity), identical on every node.
+PUBLISHED_KEYS_FILE = BASE_DIR / "trust_layer" / "published_keys.json"
+
+# Signer mode: TL_SIGNER_SOCKET names the tl-signer socket. The private keys
+# then live in tl-signer only; nothing here reads or creates a key file. Unset, the
+# legacy .pem next to the package is used (default until the switch).
+SIGNER_SOCKET = os.environ.get("TL_SIGNER_SOCKET", "")
+
+# Fail-fast: the server refuses to start without a way to sign (unsigned proofs are
+# not allowed) and, in signer mode, with a key missing from the published history.
+if SIGNER_SOCKET:
+    from .signing import SocketSigner, check_registered
+    _SIGNING_KEY = None
+    _SIGNER = SocketSigner(SIGNER_SOCKET)
+    check_registered(_SIGNER, PUBLISHED_KEYS_FILE)
+    ARKFORGE_PUBLIC_KEY = _SIGNER.public
+else:
+    _SIGNER = None
+    try:
+        from .crypto import load_signing_key, get_public_key_b64url
+        _SIGNING_KEY = load_signing_key(SIGNING_KEY_PATH)
+        ARKFORGE_PUBLIC_KEY = get_public_key_b64url(_SIGNING_KEY)
+    except Exception as _e:
+        raise RuntimeError(
+            f"Signing key unavailable at {SIGNING_KEY_PATH}: {_e}. "
+            "Generate it with: python3 -m trust_layer.crypto"
+        ) from _e
 
 
-def get_signing_key():
-    """Return the Ed25519 private key, or None if not configured."""
-    return _SIGNING_KEY
+def get_signer():
+    """The node's signer (trust_layer.signing), or None if not configured."""
+    if _SIGNER is not None:
+        return _SIGNER
+    if _SIGNING_KEY is None:
+        return None
+    from .signing import LocalSigner
+    return LocalSigner(_SIGNING_KEY)

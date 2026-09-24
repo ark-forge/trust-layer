@@ -7,7 +7,8 @@ import json
 import pytest
 
 from trust_layer.crypto import generate_keypair, load_signing_key, verify_jws
-from trust_layer.ctef import build_tier_upgrade_verdict, GATEWAY_DID, KEY_ID
+from trust_layer.ctef import build_tier_upgrade_verdict, GATEWAY_DID
+from trust_layer.signing import LocalSigner
 
 
 # ---------------------------------------------------------------------------
@@ -39,7 +40,7 @@ def _make_verdict(key, **kwargs):
         policy_ref="sha256:" + "a" * 64,
     )
     defaults.update(kwargs)
-    return build_tier_upgrade_verdict(private_key=key, **defaults)
+    return build_tier_upgrade_verdict(signer=LocalSigner(key), **defaults)
 
 
 def test_build_verdict_keys(test_key):
@@ -85,7 +86,7 @@ def test_kid_binding(test_key):
     pad = 4 - len(h_b64) % 4
     header = json.loads(base64.urlsafe_b64decode(h_b64 + ("=" * pad if pad != 4 else "")))
     assert header["alg"] == "EdDSA"
-    assert header["kid"] == KEY_ID
+    assert header["kid"] == f"{GATEWAY_DID}#key-1"
     assert header["kid"].startswith(GATEWAY_DID)
 
 

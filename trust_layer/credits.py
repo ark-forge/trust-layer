@@ -118,6 +118,31 @@ def add_credits(api_key: str, amount: float, stripe_pi: str) -> float:
     return new_balance
 
 
+def refund_credits(api_key: str, amount: float, debit_id: str, proof_id: str) -> float:
+    """Give back a debit that produced no proof. Returns the new balance."""
+    with _key_lock(api_key):
+        keys = load_api_keys()
+        info = keys.get(api_key)
+        if not info:
+            raise ValueError("API key not found")
+        new_balance = round(float(info.get("credit_balance", 0.0)) + amount, 2)
+        info["credit_balance"] = new_balance
+        save_api_keys(keys)
+
+    log_transaction({
+        "id": _generate_credit_id(),
+        "type": "refund",
+        "api_key_prefix": api_key[:8],
+        "amount": amount,
+        "debit_id": debit_id,
+        "proof_id": proof_id,
+        "balance_after": new_balance,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+    logger.warning("Credit refund %.2f EUR (debit=%s, proof=%s)", amount, debit_id, proof_id)
+    return new_balance
+
+
 def log_transaction(entry: dict):
     """Append a credit transaction to the JSONL log."""
     try:

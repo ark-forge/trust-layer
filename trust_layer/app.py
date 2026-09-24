@@ -176,7 +176,6 @@ from .config import (
     PLATFORM_OVERAGE_PRICE,
     PROOF_ACCESS_LOG,
     PROVEIT_PROOF_SELLERS,
-    ARKFORGE_PUBLIC_KEY,
     WEBHOOK_IDEMPOTENCY_FILE,
     CONVERSION_EVENTS_LOG,
     FUNNEL_EVENTS_LOG,
@@ -830,6 +829,7 @@ async def demo_endpoint(request: Request):
         "hashes": proof_record["hashes"],
         "signature": proof_record.get("arkforge_signature"),
         "pubkey": proof_record.get("arkforge_pubkey"),
+        "kid": proof_record.get("arkforge_kid"),
         "signed_at": proof_record["timestamp"],
         "tsa_status": "pending",
         "rekor_status": "pending",
@@ -2936,6 +2936,9 @@ async def health():
     resp["mode"] = "failover" if (blocked or role == "standby") else "primary"
     resp["role"] = role
     resp["write_enabled"] = not blocked
+    from . import config as _cfg
+    from .signing import signing_status
+    resp["signing"] = signing_status(_cfg.get_signer())
     from .email_notify import _email_failure_count, _email_success_count, _last_failure_time
     resp["email"] = {
         "consecutive_failures": _email_failure_count,
@@ -3242,12 +3245,31 @@ async def track_event(request: Request):
 
 # --- GET /v1/pubkey ---
 
+def _published_keys():
+    """(node signer, Ed25519 history, Rekor history), or None if signing is not configured."""
+    from . import config as _cfg
+    from .signing import key_history
+    signer = _cfg.get_signer()
+    if signer is None:
+        return None
+    ed, rekor = key_history(signer, _cfg.PUBLISHED_KEYS_FILE)
+    return signer, ed, rekor
+
+
 @app.get("/v1/pubkey")
 async def get_pubkey():
-    """Return ArkForge's Ed25519 public key for proof signature verification."""
-    if not ARKFORGE_PUBLIC_KEY:
+    """Return the node's public keys for proof verification, plus the key history.
+
+    Top-level fields describe the key of the node answering (unchanged since v1).
+    `keys` / `rekor_keys` list every key ever published: a proof names its key by
+    `arkforge_kid`, and a verifier accepts a key that was not retired at the proof's
+    date (proof-spec, key history).
+    """
+    published = _published_keys()
+    if published is None:
         return _error_response("not_configured", "Signing key not configured", 503)
-    body = {"pubkey": ARKFORGE_PUBLIC_KEY, "algorithm": "Ed25519"}
+    signer, ed, rekor = published
+    body = {"pubkey": signer.public, "algorithm": "Ed25519", "kid": signer.kid}
     # The Rekor submission key is a different key with a different job: it attributes
     # a transparency-log entry to ArkForge. Unpublished, an entry is unattributable.
     from .rekor import get_rekor_public_key_pem
@@ -3255,6 +3277,9 @@ async def get_pubkey():
     if rekor_pem:
         body["rekor_pubkey"] = rekor_pem
         body["rekor_algorithm"] = "ECDSA-P256-SHA256"
+        body["rekor_kid"] = signer.rekor_kid
+    body["keys"] = ed
+    body["rekor_keys"] = rekor
     return body
 
 
@@ -3262,37 +3287,39 @@ async def get_pubkey():
 
 @app.get("/.well-known/did.json")
 async def get_did_document():
-    """W3C DID Document for did:web:trust.arkforge.tech."""
-    if not TRUST_LAYER_BASE_URL or not ARKFORGE_PUBLIC_KEY:
+    """W3C DID Document for did:web:trust.arkforge.tech.
+
+    Every published key is a verification method, the node key first (older
+    verifiers read verificationMethod[0]); only keys not retired may assert.
+    """
+    published = _published_keys()
+    if not TRUST_LAYER_BASE_URL or published is None:
         return _error_response("not_configured", "Trust layer not fully configured", 503)
+    signer, ed, _ = published
 
     # did:web strips the https:// scheme
     did = "did:web:" + TRUST_LAYER_BASE_URL.removeprefix("https://").removeprefix("http://")
-    key_id = f"{did}#key-1"
+    ordered = sorted(ed, key=lambda k: k.get("public") != signer.public)
 
-    # ARKFORGE_PUBLIC_KEY format: "ed25519:<base64url_43chars>"
-    pubkey_b64url = ARKFORGE_PUBLIC_KEY.split(":", 1)[1] if ":" in ARKFORGE_PUBLIC_KEY else ARKFORGE_PUBLIC_KEY
+    def method(k):
+        return {
+            "id": f"{did}#{k['kid']}",
+            "type": "Ed25519VerificationKey2020",
+            "controller": did,
+            # "ed25519:<base64url_43chars>" -> JWK x
+            "publicKeyJwk": {"kty": "OKP", "crv": "Ed25519", "x": k["public"].split(":", 1)[-1]},
+        }
 
+    active = [f"{did}#{k['kid']}" for k in ordered if not k.get("retired_at")]
     return {
         "@context": [
             "https://www.w3.org/ns/did/v1",
             "https://w3id.org/security/suites/ed25519-2020/v1",
         ],
         "id": did,
-        "verificationMethod": [
-            {
-                "id": key_id,
-                "type": "Ed25519VerificationKey2020",
-                "controller": did,
-                "publicKeyJwk": {
-                    "kty": "OKP",
-                    "crv": "Ed25519",
-                    "x": pubkey_b64url,
-                },
-            }
-        ],
-        "authentication": [key_id],
-        "assertionMethod": [key_id],
+        "verificationMethod": [method(k) for k in ordered],
+        "authentication": active,
+        "assertionMethod": active,
     }
 
 
@@ -3301,12 +3328,13 @@ async def get_did_document():
 @app.get("/.well-known/agent.json")
 async def get_agent_json():
     """agent.json v1.4 capability manifest for trust.arkforge.tech."""
-    if not TRUST_LAYER_BASE_URL or not ARKFORGE_PUBLIC_KEY:
+    published = _published_keys()
+    if not TRUST_LAYER_BASE_URL or published is None:
         return _error_response("not_configured", "Trust layer not fully configured", 503)
 
     origin = TRUST_LAYER_BASE_URL.removeprefix("https://").removeprefix("http://")
     did = "did:web:" + origin
-    pubkey_b64url = ARKFORGE_PUBLIC_KEY.split(":", 1)[1] if ":" in ARKFORGE_PUBLIC_KEY else ARKFORGE_PUBLIC_KEY
+    pubkey_b64url = published[0].public.split(":", 1)[-1]
     base = f"https://{origin}"
 
     return {
@@ -3540,14 +3568,14 @@ async def attest_endpoint(
         return JSONResponse(status_code=200, content=attestation_to_encina_response(existing))
 
     try:
-        from .config import get_signing_key
+        from .config import get_signer
         attestation = build_attestation(
             record_id=record_id,
             record_type=record_type,
             occurred_at_utc=occurred_at_utc,
             content_hash=content_hash,
             attester_fingerprint=f"sha256:{attester_fingerprint}",
-            signing_key=get_signing_key(),
+            signer=get_signer(),
         )
     except ValueError as e:
         return _error_response("invalid_request", str(e), 400)
