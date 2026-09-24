@@ -20,8 +20,12 @@ def normaliser(nom: str) -> str:
 def epingles(chemin: Path) -> dict[str, str]:
     """{nom normalisé: version} ; suit les `-r`. Toute ligne sans `==` est refusée."""
     res: dict[str, str] = {}
-    for brute in Path(chemin).read_text().splitlines():
+    # Lock à empreintes (uv pip compile --generate-hashes) : les continuations `\` sont recollées,
+    # les options (`--hash=…`) et les marqueurs d'environnement (`; …`) ignorés.
+    texte = re.sub(r"\\\n", " ", Path(chemin).read_text())
+    for brute in texte.splitlines():
         ligne = brute.split("#", 1)[0].strip()
+        ligne = re.sub(r"\s--hash=\S+", "", " " + ligne).strip().split(";", 1)[0].strip()
         if not ligne:
             continue
         if ligne.startswith("-r "):

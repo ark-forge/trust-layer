@@ -1,0 +1,36 @@
+# Constats gitleaks examinés le 24/09 : exemples de doc (en-têtes curl, clés factices), vecteurs JWT de
+# conformance, clés de test factices, identifiants de preuve publique, et la fuite X-Internal-Secret
+# historique (corrigée en 1.7.1, secret tourné le 21/09). Tout nouveau constat fait échouer la CI.
+# Also reviewed with gitleaks 8.30.1: idempotency keys and Ed25519 type names in tests, a fake proof id.
+1c9596e7ed12d96f420e4364845e8bd5a6a70684:tests/test_disputes.py:generic-api-key:182
+274fb0fd8d8d554fda8daa68499993e4e2f712e7:docs/user-guide.md:curl-auth-header:236
+3b37c49d4db5e70fab8db8321694ba1df337bf56:trust_layer/proxy.py:generic-api-key:285
+4073e944916d9b7c2754df0d678ce12e242cee4c:docs/user-guide.md:curl-auth-header:632
+54fbc2c179c37319414f22d047f7cd3e2fe39a47:docs/user-guide.md:curl-auth-header:578
+54fbc2c179c37319414f22d047f7cd3e2fe39a47:docs/user-guide.md:curl-auth-header:612
+54fbc2c179c37319414f22d047f7cd3e2fe39a47:docs/user-guide.md:curl-auth-header:636
+54fbc2c179c37319414f22d047f7cd3e2fe39a47:docs/user-guide.md:generic-api-key:602
+772b29724cfe06ab41f78af127204c6aa4b022f7:conformance/row8/vectors/neg-expired-verdict-001.json:jwt:47
+772b29724cfe06ab41f78af127204c6aa4b022f7:conformance/row8/vectors/neg-kid-mismatch-001.json:jwt:47
+772b29724cfe06ab41f78af127204c6aa4b022f7:conformance/row8/vectors/neg-requester-binding-001.json:jwt:47
+772b29724cfe06ab41f78af127204c6aa4b022f7:conformance/row8/vectors/neg-rescoped-replay-001.json:jwt:47
+772b29724cfe06ab41f78af127204c6aa4b022f7:conformance/row8/vectors/neg-tampered-signature-001.json:jwt:47
+772b29724cfe06ab41f78af127204c6aa4b022f7:conformance/row8/vectors/valid-001.json:jwt:47
+861f3728d416a1ebd6498fdbf7dcae00e45d0174:README.md:curl-auth-header:19
+8cd29dec6feac6393bede0745f94482885a06db2:docs/user-guide.md:curl-auth-header:507
+8cd29dec6feac6393bede0745f94482885a06db2:docs/user-guide.md:curl-auth-header:533
+8cd29dec6feac6393bede0745f94482885a06db2:docs/user-guide.md:curl-auth-header:540
+8cd29dec6feac6393bede0745f94482885a06db2:docs/user-guide.md:curl-auth-header:563
+92e139b087cd0404fece3a177c716fc97ff69c47:docs/user-guide.md:curl-auth-header:360
+92e139b087cd0404fece3a177c716fc97ff69c47:docs/user-guide.md:curl-auth-header:381
+a25a40befe333bdd19ce48c2d7007e17364190ba:tests/test_proxy.py:generic-api-key:366
+a25a40befe333bdd19ce48c2d7007e17364190ba:tests/test_proxy.py:generic-api-key:371
+aa6ce0212a00594f0cf9f9123648e96ee49cb328:README.md:curl-auth-header:76
+e348d56d663f61bbab5843681ef12d008ae3f515:tests/test_did_binding.py:stripe-access-token:697
+e348d56d663f61bbab5843681ef12d008ae3f515:tests/test_did_binding.py:stripe-access-token:729
+f0e80225a083481ddd8ac682bf310ce86f6aea34:tests/test_proxy.py:generic-api-key:248
+f0e80225a083481ddd8ac682bf310ce86f6aea34:tests/test_proxy.py:generic-api-key:255
+f1b0a643cc386c67423a3cbb52b1f2f44e08b0b2:tests/test_did_binding.py:generic-api-key:490
+f1b0a643cc386c67423a3cbb52b1f2f44e08b0b2:tests/test_did_binding.py:generic-api-key:98
+f1b0a643cc386c67423a3cbb52b1f2f44e08b0b2:trust_layer/did_resolver.py:generic-api-key:217
+f2d7dc319d6f959ae7d4b599cfa8a103e8d7f6a9:tests/fixtures/verify_proof/proof_proveit_gel.json:generic-api-key:1
