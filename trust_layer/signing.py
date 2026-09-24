@@ -14,12 +14,14 @@ import json
 import socket
 from pathlib import Path
 
-from .crypto import get_public_key_b64url, sign_jws, sign_proof
+from .crypto import get_public_key_b64url, sign_jws, sign_proof, verify_proof_signature
 
 LEGACY_KID = "key-1"
 LEGACY_REKOR_KID = "rekor-1"
 GATEWAY_DID = "did:web:trust.arkforge.tech"
 SOCKET_TIMEOUT = 5.0
+# sha256("tl-signer self-test"): signed at startup, verified with the published key.
+SELF_TEST_HASH = "0c81932a6a92f6612e9b61f221c1af652d972f23736b6b5f8f63b233ed710234"
 
 
 class SignerError(RuntimeError):
@@ -72,6 +74,10 @@ class SocketSigner:
         self.rekor_kid = keys["rekor"]["kid"]
         self.rekor_public_pem = keys["rekor"]["public_pem"]
         self.did = keys["did"]
+        # Proves at startup that this node signs with the key it will publish (the
+        # standby canary of the deploy reads it in /v1/health).
+        if not verify_proof_signature(self.public, SELF_TEST_HASH, self.sign_chain_hash(SELF_TEST_HASH)):
+            raise SignerError("tl-signer signature does not verify with its own public key")
 
     def _call(self, request: dict) -> dict:
         try:
@@ -108,6 +114,16 @@ class SocketSigner:
 
     def sign_rekor(self, chain_hash: str) -> str:
         return self._signed({"op": "sign_rekor", "chain_hash": chain_hash})
+
+
+def signing_status(signer) -> dict:
+    """What /v1/health says about signing on this node."""
+    if signer is None:
+        return {"mode": "none", "kid": None, "self_test": "failed"}
+    if isinstance(signer, SocketSigner):
+        return {"mode": "signer", "kid": signer.kid, "self_test": "ok"}  # checked at startup
+    ok = verify_proof_signature(signer.public, SELF_TEST_HASH, signer.sign_chain_hash(SELF_TEST_HASH))
+    return {"mode": "legacy", "kid": signer.kid, "self_test": "ok" if ok else "failed"}
 
 
 def load_registry(path) -> list:

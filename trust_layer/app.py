@@ -2936,6 +2936,9 @@ async def health():
     resp["mode"] = "failover" if (blocked or role == "standby") else "primary"
     resp["role"] = role
     resp["write_enabled"] = not blocked
+    from . import config as _cfg
+    from .signing import signing_status
+    resp["signing"] = signing_status(_cfg.get_signer())
     from .email_notify import _email_failure_count, _email_success_count, _last_failure_time
     resp["email"] = {
         "consecutive_failures": _email_failure_count,

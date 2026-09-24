@@ -99,3 +99,13 @@ def test_an_absent_socket_refuses_to_start(tmp_path):
     from trust_layer.signing import SignerError, SocketSigner
     with pytest.raises(SignerError):
         SocketSigner(tmp_path / "nowhere.sock")
+
+
+def test_health_shows_which_key_signs_on_this_node(signer_mode, client):
+    signing = client.get("/v1/health").json()["signing"]
+    assert signing == {"mode": "signer", "kid": "key-9", "self_test": "ok"}
+
+
+def test_health_in_legacy_mode_names_key_1(client):
+    signing = client.get("/v1/health").json()["signing"]
+    assert signing["mode"] == "legacy" and signing["kid"] == "key-1"
