@@ -62,10 +62,24 @@ def _load_secrets() -> None:
         _vault_path = os.environ.get("VAULT_PATH", "/opt/claude-ceo")
         if _vault_path not in _sys.path:
             _sys.path.insert(0, _vault_path)
-        from automation.vault import vault as _vault  # type: ignore[import]
-        _stripe = _vault.get_section("stripe") or {}
-        _smtp = _vault.get_section("smtp") or {}
-        _proveit = _vault.get_section("proveit") or {}
+        from automation import vault as _vault_mod  # type: ignore[import]
+        _vault = _vault_mod.vault
+        # Under its own user (P5a) the service cannot read ubuntu's vault files:
+        # systemd hands them over (LoadCredential=vault.json.enc, vault_key). The
+        # master key goes through VAULT_MASTER_KEY, the vault's own interface, only
+        # while the sections load: openssl subprocesses must not inherit it.
+        _creds = Path(os.environ.get("CREDENTIALS_DIRECTORY", "/nonexistent"))
+        _from_creds = (_creds / "vault.json.enc").exists() and (_creds / "vault_key").exists()
+        if _from_creds:
+            _vault_mod.VAULT_FILE = _creds / "vault.json.enc"
+            os.environ["VAULT_MASTER_KEY"] = (_creds / "vault_key").read_text().strip()
+        try:
+            _stripe = _vault.get_section("stripe") or {}
+            _smtp = _vault.get_section("smtp") or {}
+            _proveit = _vault.get_section("proveit") or {}
+        finally:
+            if _from_creds:
+                os.environ.pop("VAULT_MASTER_KEY", None)
         _mapping = {
             "STRIPE_LIVE_SECRET_KEY":        _stripe.get("live_secret_key", ""),
             "STRIPE_TEST_SECRET_KEY":         _stripe.get("test_secret_key", ""),

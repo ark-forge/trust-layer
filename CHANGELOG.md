@@ -23,6 +23,9 @@ Versions follow [Semantic Versioning](https://semver.org/).
   history, and refuses a key retired before the proof's date. Rekor entries are attributed to any published
   Rekor key of the history.
 
+- Under its own user, the service reads the CEO vault from systemd credentials (`LoadCredential=vault.json.enc`,
+  `vault_key`); the master key is only in the environment while the vault loads.
+
 ### Changed
 - CTEF verdicts: the JWS header (`alg`, `kid`) is set by the signer, no longer a hardcoded `#key-1`.
 
