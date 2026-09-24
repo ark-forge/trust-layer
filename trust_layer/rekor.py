@@ -3,7 +3,7 @@
 Uses ECDSA P-256 + SHA-256 (hashedrekord v0.0.1), the format natively supported
 by Rekor without Sigstore/Fulcio certificates. The EC key is separate from the
 Ed25519 signing key used for arkforge_signature. It lives in tl-signer in signer
-mode (P5a); in legacy mode it is generated once and stored at REKOR_EC_KEY_PATH.
+mode; in legacy mode it is generated once and stored at REKOR_EC_KEY_PATH.
 """
 
 import base64

@@ -32,7 +32,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 MAX_REQUEST = 16 * 1024
 MAX_JWS_PAYLOAD = 8 * 1024
 CHAIN_HASH = re.compile(r"[0-9a-f]{64}")
-# reputation.py signs "{agent_id}:{score}:{computed_at}" (D44).
+# reputation.py signs "{agent_id}:{score}:{computed_at}".
 REPUTATION = re.compile(
     r"sha256:[0-9a-f]{64}:\d{1,3}:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(\+00:00|Z)"
 )
@@ -101,7 +101,7 @@ class Signer:
                 raise ValueError("payload is not a reputation statement")
             return {"kid": self.kid, "signature": self._ed_sign(payload)}
         if op == "sign_jws":
-            # The header is ours, never the caller's (D45).
+            # The header is ours, never the caller's.
             payload = req.get("payload")
             if not isinstance(payload, dict):
                 raise ValueError("payload must be a JSON object")

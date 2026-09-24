@@ -334,7 +334,7 @@ if [ "$STANDBY_OK" = true ]; then
     done
 fi
 
-# The standby signs with its own key after a failover (P5a, D33): its startup
+# The standby signs with its own key after a failover: its startup
 # self-test must have signed and verified with the key it publishes.
 if [ "$STANDBY_OK" = true ]; then
     SIG=$(standby_health | signing_of)

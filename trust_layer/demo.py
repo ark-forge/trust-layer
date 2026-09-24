@@ -123,7 +123,7 @@ def build_demo_proof(target: str, payload: dict) -> dict:
 
     signer = get_signer()
     if signer:
-        # Added after the chain hash: the kid, like the pubkey, is not hashed (D46).
+        # Added after the chain hash: the kid, like the pubkey, is not hashed.
         proof_record["arkforge_signature"] = signer.sign_chain_hash(chain_hash)
         proof_record["arkforge_pubkey"] = signer.public
         proof_record["arkforge_kid"] = signer.kid

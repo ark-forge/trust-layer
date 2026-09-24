@@ -1,4 +1,4 @@
-"""Secrets under the Trust Layer's own user (P5a): the CEO vault arrives as systemd
+"""Secrets under the Trust Layer's own user: the CEO vault arrives as systemd
 credentials (LoadCredential=), since the service can no longer read ubuntu's files."""
 
 import json

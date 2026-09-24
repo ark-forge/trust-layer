@@ -99,7 +99,7 @@ if __name__ == "__main__":
     import os
     import sys
     if os.environ.get("TL_SIGNER_SOCKET"):
-        # Signer mode: keys are born in tl-signer, never next to the package (P5a).
+        # Signer mode: keys are born in tl-signer, never next to the package.
         sys.exit("TL_SIGNER_SOCKET is set: keys live in tl-signer, refusing to write one here")
     key_path = Path(__file__).parent / ".signing_key.pem"
     if "--force" in sys.argv and key_path.exists():

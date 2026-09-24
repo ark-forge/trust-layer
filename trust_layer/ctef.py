@@ -47,7 +47,7 @@ def build_tier_upgrade_verdict(
         "policy_ref": policy_ref,
     }
 
-    # The signer sets the header itself, kid included (D45).
+    # The signer sets the header itself, kid included.
     verdict_jws = signer.sign_jws(jws_payload)
 
     ctef_envelope = {

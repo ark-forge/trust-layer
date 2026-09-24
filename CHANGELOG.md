@@ -28,6 +28,9 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - `/v1/health` adds `signing` (`mode`, `kid`, `self_test`). In signer mode the Trust Layer signs and verifies a
   fixed hash at startup and refuses to start if it fails.
 - Deploy script: the standby and primary canaries require `signing.self_test == ok` and log the signing kid.
+- A paid request never loses its money to an unavailable signer: `/v1/proxy` checks the signer before counting or
+  charging (503 `signing_unavailable`, nothing charged), and refunds the debit if the signer is lost between the
+  charge and the signature (`refund` credit transaction).
 
 ### Changed
 - CTEF verdicts: the JWS header (`alg`, `kid`) is set by the signer, no longer a hardcoded `#key-1`.

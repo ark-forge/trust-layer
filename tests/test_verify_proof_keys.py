@@ -1,4 +1,4 @@
-"""verify_proof.py against a key history (P5a rotation, D31/D33).
+"""verify_proof.py against a key history.
 
 Real proofs signed by key-1 (July 2026, and the PROVE IT corpus freeze of
 2026-09-23) must keep verifying once key-1 is retired and key-2 signs. A key

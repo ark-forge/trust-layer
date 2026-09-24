@@ -1,4 +1,4 @@
-"""Signing seam: the in-process legacy key, or the tl-signer socket (P5a).
+"""Signing seam: the in-process legacy key, or the tl-signer socket.
 
 Callers never touch a private key. They ask `config.get_signer()` for a signer and
 use its closed operations, the same ones tl-signer serves (signer/tl_signer.py):
@@ -44,6 +44,9 @@ class LocalSigner:
         return _get_or_create_rekor_ec_key().public_key().public_bytes(
             serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo,
         ).decode("ascii")
+
+    def ping(self) -> None:
+        """In-process key: always reachable."""
 
     def sign_chain_hash(self, chain_hash: str) -> str:
         return sign_proof(self._ed, chain_hash)
@@ -103,6 +106,11 @@ class SocketSigner:
             raise SignerError("tl-signer key changed since startup, restart the Trust Layer")
         return resp[field]
 
+    def ping(self) -> None:
+        """Raise SignerError unless tl-signer answers with the key this process publishes."""
+        if self._call({"op": "pubkeys"})["ed25519"]["kid"] != self.kid:
+            raise SignerError("tl-signer key changed since startup, restart the Trust Layer")
+
     def sign_chain_hash(self, chain_hash: str) -> str:
         return self._signed({"op": "sign_chain_hash", "chain_hash": chain_hash})
 
@@ -151,7 +159,7 @@ def key_history(signer, registry_path) -> tuple[list, list]:
 
 
 def check_registered(signer, registry_path) -> None:
-    """Signer mode refuses to start with a key nobody can find in the history (D43)."""
+    """Signer mode refuses to start with a key nobody can find in the history."""
     for entry in load_registry(registry_path):
         if entry.get("kid") == signer.kid:
             if entry.get("public") != signer.public:

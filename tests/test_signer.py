@@ -1,4 +1,4 @@
-"""tl-signer socket protocol (P5a): the only seam the Trust Layer has to its keys."""
+"""tl-signer socket protocol: the only seam the Trust Layer has to its keys."""
 
 import json
 import socket

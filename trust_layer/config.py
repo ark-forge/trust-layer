@@ -64,7 +64,7 @@ def _load_secrets() -> None:
             _sys.path.insert(0, _vault_path)
         from automation import vault as _vault_mod  # type: ignore[import]
         _vault = _vault_mod.vault
-        # Under its own user (P5a) the service cannot read ubuntu's vault files:
+        # Under its own user, the service cannot read ubuntu's vault files:
         # systemd hands them over (LoadCredential=vault.json.enc, vault_key). The
         # master key goes through VAULT_MASTER_KEY, the vault's own interface, only
         # while the sections load: openssl subprocesses must not inherit it.
@@ -397,7 +397,7 @@ SIGNING_KEY_PATH = Path(os.environ.get(
 # Published key history (kid, public key, node, validity), identical on every node.
 PUBLISHED_KEYS_FILE = BASE_DIR / "trust_layer" / "published_keys.json"
 
-# Signer mode (P5a): TL_SIGNER_SOCKET names the tl-signer socket. The private keys
+# Signer mode: TL_SIGNER_SOCKET names the tl-signer socket. The private keys
 # then live in tl-signer only; nothing here reads or creates a key file. Unset, the
 # legacy .pem next to the package is used (default until the switch).
 SIGNER_SOCKET = os.environ.get("TL_SIGNER_SOCKET", "")

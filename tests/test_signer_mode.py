@@ -1,4 +1,4 @@
-"""Trust Layer in signer mode (P5a): keys live in tl-signer, the API only sees a socket."""
+"""Trust Layer in signer mode: keys live in tl-signer, the API only sees a socket."""
 
 import json
 import threading
@@ -37,7 +37,7 @@ def signer_mode(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "REKOR_EC_KEY_PATH", tmp_path / "must-not-exist-rekor.pem")
     monkeypatch.setattr(cfg, "_SIGNING_KEY", None)
     monkeypatch.setattr(cfg, "_SIGNER", node)
-    yield node, tmp_path
+    yield node, tmp_path, server
     server.shutdown()
     server.server_close()
 
@@ -77,7 +77,7 @@ def test_pubkey_and_did_document_publish_the_whole_history(signer_mode, client):
 
 
 def test_signer_mode_never_creates_a_private_key_file(signer_mode, client):
-    _, tmp = signer_mode
+    _, tmp, _ = signer_mode
     _demo_proof(client)
     client.get("/v1/pubkey")
     from trust_layer.rekor import _build_entry
@@ -88,7 +88,7 @@ def test_signer_mode_never_creates_a_private_key_file(signer_mode, client):
 
 def test_a_node_key_missing_from_the_registry_refuses_to_start(signer_mode, tmp_path):
     from trust_layer.signing import SignerError, check_registered
-    node, _ = signer_mode
+    node, _, _ = signer_mode
     other = tmp_path / "other.json"
     other.write_text(json.dumps({"keys": [{"kid": "key-9", "public": KEY_1}]}))
     with pytest.raises(SignerError):
@@ -109,3 +109,67 @@ def test_health_shows_which_key_signs_on_this_node(signer_mode, client):
 def test_health_in_legacy_mode_names_key_1(client):
     signing = client.get("/v1/health").json()["signing"]
     assert signing["mode"] == "legacy" and signing["kid"] == "key-1"
+
+
+# --- a paid request never loses its money to an unavailable signer ---------------
+
+def _paid_key():
+    from trust_layer.config import PRO_OVERAGE_PRICE, PROOF_PRICE
+    from trust_layer.credits import add_credits
+    from trust_layer.keys import create_api_key, update_overage_settings
+    key = create_api_key("cus_sig", "ref_sig", "sig@test.com", test_mode=False, plan="pro")
+    update_overage_settings(key, enabled=True, cap_eur=10.0, overage_rate=PRO_OVERAGE_PRICE)
+    add_credits(key, round(PROOF_PRICE * 5, 2), "pi_sig_test")
+    return key
+
+
+async def _proxy(key, on_upstream=None):
+    from unittest.mock import MagicMock, patch as upatch
+    from trust_layer.proxy import execute_proxy
+    resp = MagicMock(status_code=200, headers={"Date": "Mon, 02 Mar 2026 13:00:00 GMT"})
+    resp.json.return_value = {"result": "ok"}
+
+    async def upstream(*a, **k):
+        if on_upstream:
+            on_upstream()
+        return resp
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.__aexit__.return_value = None
+    client.get.side_effect = upstream
+    with upatch("trust_layer.proxy.check_rate_limit", return_value=(True, 0, True, "")), \
+         upatch("trust_layer.proxy.httpx.AsyncClient", return_value=client), \
+         upatch("trust_layer.proxy.add_proof_to_batch"), \
+         upatch("trust_layer.proxy.send_proof_email"):
+        return await execute_proxy(target="https://httpbin.org/get", method="GET", payload={},
+                                   amount=0.0, currency="eur", api_key=key)
+
+
+def _stop(server):
+    server.shutdown()
+    server.server_close()
+
+
+@pytest.mark.asyncio
+async def test_signer_down_before_the_charge_costs_nothing(signer_mode):
+    from trust_layer.credits import get_balance
+    from trust_layer.proxy import ProxyError
+    key = _paid_key()
+    before = get_balance(key)
+    _stop(signer_mode[2])
+    with pytest.raises(ProxyError) as e:
+        await _proxy(key)
+    assert e.value.status == 503 and e.value.code == "signing_unavailable"
+    assert get_balance(key) == pytest.approx(before)
+
+
+@pytest.mark.asyncio
+async def test_signer_lost_after_the_charge_refunds_it(signer_mode):
+    from trust_layer.credits import get_balance
+    from trust_layer.proxy import ProxyError
+    key = _paid_key()
+    before = get_balance(key)
+    with pytest.raises(ProxyError) as e:
+        await _proxy(key, on_upstream=lambda: _stop(signer_mode[2]))
+    assert e.value.status == 503 and e.value.code == "signing_unavailable"
+    assert get_balance(key) == pytest.approx(before)
