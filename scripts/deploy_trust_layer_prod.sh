@@ -15,6 +15,8 @@
 #   PRIMARY  = this host (VPS1). Serves trust.arkforge.tech directly (nginx → 127.0.0.1:8100),
 #              no HA upstream: its restart is a short outage, nothing falls back.
 #   STANDBY  = VPS2 (OVH). Writes blocked, no traffic.
+#   Jumeau PROVE IT (VM locale, D156) : pas de standby. Le fichier d'état local le déclare
+#   ("standby": "none") ; le script ne le déduit jamais d'une variable ni d'une absence de réponse.
 #
 # Staged rollout:
 #   Phase 2a — Deploy to STANDBY first, canary on it (no traffic at risk)
@@ -131,6 +133,7 @@ rollback_primary() {
     sudo -n /usr/local/sbin/arkforge-run relance "$SERVICE"
 }
 rollback_standby() {
+    if [ "$SANS_STANDBY" = true ]; then return 0; fi
     log "Rollback standby: git reset --hard $STANDBY_PREV_COMMIT"
     if $SSH "$STANDBY_HOST" \
         "cd ${STANDBY_REPO} && git reset --hard $STANDBY_PREV_COMMIT && { $DEPS_CMD; } && sudo -n /usr/local/sbin/arkforge-run relance $SERVICE" \
@@ -166,11 +169,17 @@ log "Force CI: $FORCE_CI | Skip smoke: $SKIP_SMOKE"
 # Roles are read, never assumed: after a failover the order below would restart the node
 # serving traffic first. Refuse rather than guess.
 LOCAL_STATE=$(cat "$FAILOVER_STATE" 2>/dev/null || echo "{}")
-STANDBY_STATE=$($SSH "$STANDBY_HOST" "cat $FAILOVER_STATE" 2>/dev/null || echo "{}")
 LOCAL_ROLE="$(echo "$LOCAL_STATE" | json_field role)/$(echo "$LOCAL_STATE" | json_field writes)"
-STANDBY_ROLE="$(echo "$STANDBY_STATE" | json_field role)/$(echo "$STANDBY_STATE" | json_field writes)"
+SANS_STANDBY=false
+if [ "$(echo "$LOCAL_STATE" | json_field standby)" = "none" ]; then
+    SANS_STANDBY=true
+    STANDBY_ROLE="none"
+else
+    STANDBY_STATE=$($SSH "$STANDBY_HOST" "cat $FAILOVER_STATE" 2>/dev/null || echo "{}")
+    STANDBY_ROLE="$(echo "$STANDBY_STATE" | json_field role)/$(echo "$STANDBY_STATE" | json_field writes)"
+fi
 log "Topology: local=$LOCAL_ROLE standby($STANDBY_HOST)=$STANDBY_ROLE"
-if [ "$LOCAL_ROLE" != "primary/enabled" ] || [ "$STANDBY_ROLE" != "standby/blocked" ]; then
+if [ "$LOCAL_ROLE" != "primary/enabled" ] || { [ "$SANS_STANDBY" = false ] && [ "$STANDBY_ROLE" != "standby/blocked" ]; }; then
     fail "Topology unexpected (local=$LOCAL_ROLE, $STANDBY_HOST=$STANDBY_ROLE). This script deploys standby first then the local primary; after a failover it must not run as is."
 fi
 
@@ -199,7 +208,11 @@ if [ "$SKIP_SMOKE" = false ]; then
     done
 fi
 
-STANDBY_PREV_COMMIT=$($SSH "$STANDBY_HOST" "git -C ${STANDBY_REPO} rev-parse HEAD" 2>/dev/null || echo "unknown")
+if [ "$SANS_STANDBY" = true ]; then
+    STANDBY_PREV_COMMIT="$NEW_COMMIT"  # sans standby, « rien à déployer » ne dépend que du primary
+else
+    STANDBY_PREV_COMMIT=$($SSH "$STANDBY_HOST" "git -C ${STANDBY_REPO} rev-parse HEAD" 2>/dev/null || echo "unknown")
+fi
 log "Standby commit: $STANDBY_PREV_COMMIT"
 if [ "$NEW_COMMIT" = "$PREV_COMMIT" ] && [ "$STANDBY_PREV_COMMIT" = "$NEW_COMMIT" ]; then
     log "Rien à déployer — primary et standby sont déjà sur $NEW_COMMIT. Exiting."
@@ -298,6 +311,9 @@ log "--- Phase 2: Deploy ---"
 # ----------------------------------------------------------------
 # Phase 2a — Deploy to STANDBY + canary (no traffic at risk)
 # ----------------------------------------------------------------
+if [ "$SANS_STANDBY" = true ]; then
+log "--- Phase 2a: pas de standby (état local : standby none), sautée ---"
+else
 log "--- Phase 2a: Deploy to standby ($STANDBY_HOST) ---"
 # Sync vault secrets before deploy (ensures SMTP, Stripe keys are current on the standby)
 VAULT_FILE="/opt/claude-ceo/config/vault.json.enc"
@@ -348,6 +364,7 @@ if [ "$STANDBY_OK" = false ]; then
     fail "Phase 2a FAILED on standby — rolled back standby to $STANDBY_PREV_COMMIT (primary untouched)"
 fi
 log "Phase 2a OK — standby runs $NEW_VERSION"
+fi
 
 # ----------------------------------------------------------------
 # Phase 2b — Deploy to PRIMARY (short outage: nothing falls back)
@@ -418,7 +435,9 @@ else
     else
         SMOKE_LOG="$LOG_FILE.smoke"
         SMOKE_BASE_URL="${HEALTH_URL%/v1/health}"  # strip /v1/health → https://trust.arkforge.tech
-        SMOKE_INTERNAL_SECRET=$(grep "^TRUST_LAYER_INTERNAL_SECRET=" "$SETTINGS_ENV" | cut -d= -f2-)
+        # `|| true` : sous set -e, un grep vide tuait le script ici, nouveau code déjà en service, sans retour
+        # arrière ni tag. Absent, le secret fait échouer le smoke test, qui déclenche le retour arrière ci-dessous.
+        SMOKE_INTERNAL_SECRET=$(grep "^TRUST_LAYER_INTERNAL_SECRET=" "$SETTINGS_ENV" | cut -d= -f2-) || true
         # Stripe webhook secret: same resolution order as the server (vault, then
         # settings.env). /v1/admin/smoke/setup no longer hands it out (2026-09-12).
         SMOKE_WEBHOOK_SECRET=$(python3 -c "
@@ -432,7 +451,7 @@ except Exception:
     print('')
 " 2>/dev/null)
         if [ -z "$SMOKE_WEBHOOK_SECRET" ]; then
-            SMOKE_WEBHOOK_SECRET=$(grep "^STRIPE_TL_WEBHOOK_SECRET=" "$SETTINGS_ENV" | cut -d= -f2-)
+            SMOKE_WEBHOOK_SECRET=$(grep "^STRIPE_TL_WEBHOOK_SECRET=" "$SETTINGS_ENV" | cut -d= -f2-) || true
         fi
         # Both gates must pass. The security test runs first: its ephemeral key uses
         # a smoke.invalid email, swept by the teardown at the end of the smoke test.
