@@ -21,6 +21,9 @@ des profils LLM (prove-it, decisions-goal D5). Six runs dépassent le quota free
 de la clé de validation ; une clé à part garde son DID hors de l'historique de
 liaison de la clé de l'opérateur.
 
+Profils `reference_soigneux`, `reference_presse`, `reference_sans_verification` : comme `calibration`,
+une clé par run de référence de la saison (prove-it D153).
+
 Avant l'ouverture, une clé émise ici n'atteint le corpus qu'une fois autorisée :
 `provision_challenge_secret.py --allow-key-ref <ref>`.
 """
@@ -42,6 +45,11 @@ PROFILS = {
                    "email": "", "vault_path": "proveit.validation_api_key"},
     "calibration": {"ref_id": "proveit_calibration", "plan": "internal",
                     "email": "", "vault_path": "proveit.calibration_api_key"},
+    # Runs de référence de la saison (prove-it D153) : une clé et un DID chacun, plan internal comme la
+    # calibration, lancés une fois après l'ouverture.
+    **{f"reference_{p}": {"ref_id": f"proveit_reference_{p}", "plan": "internal",
+                          "email": "", "vault_path": f"proveit.reference_{p}_api_key"}
+       for p in ("soigneux", "presse", "sans_verification")},
 }
 CEO_ROOT = "/opt/claude-ceo"
 
