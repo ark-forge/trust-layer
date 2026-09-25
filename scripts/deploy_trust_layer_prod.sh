@@ -435,7 +435,9 @@ else
     else
         SMOKE_LOG="$LOG_FILE.smoke"
         SMOKE_BASE_URL="${HEALTH_URL%/v1/health}"  # strip /v1/health → https://trust.arkforge.tech
-        SMOKE_INTERNAL_SECRET=$(grep "^TRUST_LAYER_INTERNAL_SECRET=" "$SETTINGS_ENV" | cut -d= -f2-)
+        # `|| true` : sous set -e, un grep vide tuait le script ici, nouveau code déjà en service, sans retour
+        # arrière ni tag. Absent, le secret fait échouer le smoke test, qui déclenche le retour arrière ci-dessous.
+        SMOKE_INTERNAL_SECRET=$(grep "^TRUST_LAYER_INTERNAL_SECRET=" "$SETTINGS_ENV" | cut -d= -f2-) || true
         # Stripe webhook secret: same resolution order as the server (vault, then
         # settings.env). /v1/admin/smoke/setup no longer hands it out (2026-09-12).
         SMOKE_WEBHOOK_SECRET=$(python3 -c "
@@ -449,7 +451,7 @@ except Exception:
     print('')
 " 2>/dev/null)
         if [ -z "$SMOKE_WEBHOOK_SECRET" ]; then
-            SMOKE_WEBHOOK_SECRET=$(grep "^STRIPE_TL_WEBHOOK_SECRET=" "$SETTINGS_ENV" | cut -d= -f2-)
+            SMOKE_WEBHOOK_SECRET=$(grep "^STRIPE_TL_WEBHOOK_SECRET=" "$SETTINGS_ENV" | cut -d= -f2-) || true
         fi
         # Both gates must pass. The security test runs first: its ephemeral key uses
         # a smoke.invalid email, swept by the teardown at the end of the smoke test.

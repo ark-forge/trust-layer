@@ -6,6 +6,20 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.12.3] — 2026-09-25
+
+### Added
+- `provision_challenge_key.py`: profiles `reference_soigneux`, `reference_presse`, `reference_sans_verification`,
+  one key per PROVE IT season reference run (internal plan, no email).
+- `deploy_trust_layer_prod.sh`: a node whose local failover state says `"standby": "none"` deploys without a
+  standby (phase 2a, standby rollbacks and standby topology read are skipped). Used by the PROVE IT local twin;
+  VPS1 carries no such key, behaviour unchanged.
+
+### Fixed
+- `deploy_trust_layer_prod.sh`: a smoke-test secret missing from the settings file killed the script silently at
+  phase 2.5, under `set -e`, after the primary had restarted on the new code: no rollback, no tag. The smoke test
+  now runs and fails on it, which rolls back.
+
 ## [1.12.2] — 2026-09-25
 
 ### Removed
