@@ -6,6 +6,14 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.12.2] — 2026-09-25
+
+### Removed
+- Free signups (`/v1/keys/free-signup` from the web form, `/api/register` from the MCP client) are no longer appended to the EU AI Act MCP
+  `registration_log.jsonl`, and `MCP_REGISTRATION_LOG` is gone. The only reader was the retired funnel collector;
+  the write crossed into another service's directory, owned by another user. Signups still go to
+  `funnel_events.jsonl` and `conversion_events.jsonl`.
+
 ## [1.12.1] — 2026-09-24
 
 ### Security

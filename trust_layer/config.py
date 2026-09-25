@@ -22,12 +22,6 @@ BACKGROUND_TASKS_LOG = DATA_DIR / "background_tasks_log.jsonl"
 PROOF_ACCESS_LOG = DATA_DIR / "proof_access_log.jsonl"
 CONVERSION_EVENTS_LOG = DATA_DIR / "conversion_events.jsonl"
 FUNNEL_EVENTS_LOG = DATA_DIR / "funnel_events.jsonl"
-MCP_REGISTRATION_LOG = Path(
-    os.environ.get(
-        "MCP_REGISTRATION_LOG",
-        "/opt/claude-ceo/workspace/mcp-servers/eu-ai-act/data/registration_log.jsonl",
-    )
-)
 MCP_SCAN_PINGS_LOG = DATA_DIR / "mcp_scan_pings.jsonl"
 IDEMPOTENCY_DIR = DATA_DIR / "idempotency"
 AGENTS_DIR = DATA_DIR / "agents"
