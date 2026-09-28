@@ -2609,6 +2609,9 @@ def _mark_webhook_processed(event_id: str, *, event_type: str = "", session_id: 
 
 # --- POST /v1/webhooks/stripe ---
 
+# metadata.product prefixes of the checkout sessions this service creates (subscription checkouts).
+_OWN_CHECKOUT_PRODUCTS = ("trust_layer_", "scanner_")
+
 @app.post("/v1/webhooks/stripe")
 async def stripe_webhook(request: Request):
     """Handle Stripe webhook events — dual secrets (live + test)."""
@@ -2648,6 +2651,15 @@ async def stripe_webhook(request: Request):
     is_test = not event.livemode
 
     logger.info("Stripe webhook: %s (test=%s)", event_type, is_test)
+
+    # The Stripe account is shared with other products and this endpoint receives every checkout session
+    # of the account. Act only on sessions created here: all of them carry a trust_layer_/scanner_ product.
+    if event_type.startswith("checkout.session.") and not (
+        (data.get("metadata") or {}).get("product", "").startswith(_OWN_CHECKOUT_PRODUCTS)
+    ):
+        logger.info("Checkout session %s not created by the Trust Layer: ignored", data.get("id", ""))
+        _mark_webhook_processed(event_id, event_type=event_type, session_id="")
+        return {"received": True}
 
     try:
         _process_stripe_event(event_type, data, is_test, event_id)
