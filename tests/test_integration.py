@@ -951,3 +951,60 @@ def test_platform_proof_records_digicert_provider(client, platform_key):
     tsa_provider = proof.get("timestamp_authority", {}).get("provider", "")
     assert tsa_provider == "digicert.com", \
         f"Expected digicert.com in proof TSA provider, got: '{tsa_provider}'"
+
+
+def _webhook_session(client, event_type, event_id, inner_object):
+    mock_event = MagicMock()
+    mock_event.id = event_id
+    mock_event.type = event_type
+    mock_event.livemode = False
+    mock_event.data.object.to_dict.return_value = inner_object
+    with patch("stripe.Webhook.construct_event", return_value=mock_event):
+        return client.post("/v1/webhooks/stripe", json={"id": event_id},
+                           headers={"Content-Type": "application/json"})
+
+
+# The Stripe account is shared with other products: the Trust Layer endpoint receives every checkout
+# session of the account and must only act on the ones it created.
+@pytest.mark.parametrize("metadata", [
+    {"offre": "p10", "dossiers": "10", "email": "client_other@example.org"},  # another product
+    {"product": "mcp_pro"},
+    {},
+])
+def test_webhook_foreign_checkout_completed_is_ignored(client, monkeypatch, metadata):
+    import trust_layer.app as app_mod
+    monkeypatch.setattr(app_mod, "STRIPE_WEBHOOK_SECRET_TEST", "whsec_test_fake")
+    inner = {"id": "cs_foreign", "customer": "cus_foreign", "customer_details": {"email": "client_other@example.org"},
+             "subscription": None, "payment_intent": "pi_foreign", "metadata": metadata}
+    with patch("trust_layer.app.send_welcome_email") as welcome, \
+         patch("trust_layer.app.send_welcome_email_pro") as welcome_pro:
+        r = _webhook_session(client, "checkout.session.completed", f"evt_foreign_{len(metadata)}", inner)
+    assert r.status_code == 200
+    from trust_layer.keys import load_api_keys
+    assert not any(v.get("email") == "client_other@example.org" for v in load_api_keys().values())
+    welcome.assert_not_called()
+    welcome_pro.assert_not_called()
+
+
+def test_webhook_foreign_checkout_expired_sends_no_email(client, monkeypatch):
+    import trust_layer.app as app_mod
+    monkeypatch.setattr(app_mod, "STRIPE_WEBHOOK_SECRET_TEST", "whsec_test_fake")
+    inner = {"id": "cs_foreign_exp", "customer": None, "customer_details": {"email": "client_other@example.org"},
+             "metadata": {"offre": "p10", "email": "client_other@example.org"}}
+    with patch("trust_layer.app.send_checkout_abandoned_email") as abandoned, \
+         patch("trust_layer.app._is_test_email", return_value=(False, "")):
+        r = _webhook_session(client, "checkout.session.expired", "evt_foreign_expired", inner)
+    assert r.status_code == 200
+    abandoned.assert_not_called()
+
+
+def test_webhook_own_checkout_expired_still_sends_email(client, monkeypatch):
+    import trust_layer.app as app_mod
+    monkeypatch.setattr(app_mod, "STRIPE_WEBHOOK_SECRET_TEST", "whsec_test_fake")
+    inner = {"id": "cs_own_exp", "customer": None, "customer_details": {"email": "prospect@example.org"},
+             "metadata": {"product": "trust_layer_pro_subscription", "plan": "pro"}}
+    with patch("trust_layer.app.send_checkout_abandoned_email") as abandoned, \
+         patch("trust_layer.app._is_test_email", return_value=(False, "")):
+        r = _webhook_session(client, "checkout.session.expired", "evt_own_expired", inner)
+    assert r.status_code == 200
+    abandoned.assert_called_once()

@@ -6,6 +6,14 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.12.4] — 2026-09-28
+
+### Fixed
+- Stripe webhook: `checkout.session.completed` and `checkout.session.expired` events for sessions not created by
+  the Trust Layer (no `trust_layer_`/`scanner_` product in metadata) are acknowledged and ignored. The Stripe
+  account is shared with other products, and any foreign completed session used to create a Trust Layer API key
+  and send the welcome email; a foreign expired one sent the abandoned-checkout email.
+
 ## [1.12.3] — 2026-09-25
 
 ### Added
