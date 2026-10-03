@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.12.7] — 2026-10-03
+
+### Changed
+- Key registry: `key-1` and `rekor-1` retired at 2026-10-03T11:22:32Z (last proof signed by key-1:
+  2026-10-03T11:21:32Z, plus one minute). Both nodes sign through tl-signer since 2026-10-03T11:56Z
+  (`key-2` on vps1, `key-3` on vps2). Proofs dated before the retirement still verify with key-1.
+
 ## [1.12.6] — 2026-10-03
 
 ### Added
