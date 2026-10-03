@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.12.8] — 2026-10-06
+
+### Changed
+- No code change. Release that restarts both nodes for the opening of PROVE IT season 1: `CHALLENGE_OPEN`
+  is read from the vault at startup only, so `scripts/ouvrir_saison.sh --open` (prove-it) deploys it right
+  after setting the flag. Merge on 2026-10-06, as the first step of the opening.
+
 ## [1.12.7] — 2026-10-03
 
 ### Changed
