@@ -6,6 +6,12 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.12.5] — 2026-10-03
+
+### Security
+- urllib3 2.7.0 -> 2.8.0 (CVE-2026-97687, CVE-2026-97688, CVE-2026-97689), in both locks. The dependency audit
+  failed on `main` since 2026-10-01.
+
 ## [1.12.4] — 2026-09-28
 
 ### Fixed
