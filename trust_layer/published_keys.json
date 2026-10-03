@@ -7,7 +7,7 @@
       "public": "ed25519:ZLlGE0eN0eTNUE9vaK1tStf6AuoFUWqJBvqx7QgxfEY",
       "node": "vps1, vps2 (shared, before per-node keys)",
       "valid_from": "2026-02-26T00:00:00Z",
-      "retired_at": null
+      "retired_at": "2026-10-03T11:22:32Z"
     },
     {
       "kid": "key-2",
@@ -33,7 +33,7 @@
       "public_pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEZCQKftNdG+Yb8NRMldmdsJELOGAD\n75BNH9+IhSEB4tT69sXaUYkDIUncGyjxY0ZdrVB/el5y3UW5xVM8Cmaq9A==\n-----END PUBLIC KEY-----\n",
       "node": "vps1, vps2 (shared, before per-node keys)",
       "valid_from": "2026-03-03T00:00:00Z",
-      "retired_at": null
+      "retired_at": "2026-10-03T11:22:32Z"
     },
     {
       "kid": "rekor-2",
