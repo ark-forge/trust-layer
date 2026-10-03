@@ -8,6 +8,22 @@
       "node": "vps1, vps2 (shared, before per-node keys)",
       "valid_from": "2026-02-26T00:00:00Z",
       "retired_at": null
+    },
+    {
+      "kid": "key-2",
+      "type": "Ed25519",
+      "public": "ed25519:JDExMYvtm2iej7qeb8bXfPIB92zH0IlSL8cRNZ9KkNw",
+      "node": "vps1",
+      "valid_from": "2026-10-03T10:00:00Z",
+      "retired_at": null
+    },
+    {
+      "kid": "key-3",
+      "type": "Ed25519",
+      "public": "ed25519:iTF1dhjQEoDsx2bl4b_hbfy73w6k4ZU61xEOSWegzS8",
+      "node": "vps2",
+      "valid_from": "2026-10-03T10:00:00Z",
+      "retired_at": null
     }
   ],
   "rekor_keys": [
@@ -17,6 +33,22 @@
       "public_pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEZCQKftNdG+Yb8NRMldmdsJELOGAD\n75BNH9+IhSEB4tT69sXaUYkDIUncGyjxY0ZdrVB/el5y3UW5xVM8Cmaq9A==\n-----END PUBLIC KEY-----\n",
       "node": "vps1, vps2 (shared, before per-node keys)",
       "valid_from": "2026-03-03T00:00:00Z",
+      "retired_at": null
+    },
+    {
+      "kid": "rekor-2",
+      "type": "ECDSA-P256-SHA256",
+      "public_pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEQqptqem1rg6GP76Vgh/K66wQE1dw\nTGVOIKFSnmIs1QmweXr+3z1u+75L03w6qNXAeYUVCjgE0UrlnAdijD3uGg==\n-----END PUBLIC KEY-----\n",
+      "node": "vps1",
+      "valid_from": "2026-10-03T10:00:00Z",
+      "retired_at": null
+    },
+    {
+      "kid": "rekor-3",
+      "type": "ECDSA-P256-SHA256",
+      "public_pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEqpLSS9ldkWH3+sPBo2+K5bReoF7t\n3fNOOMLAIP2t3VAVgT8syCHSEnzTyuehBIdyggQtNp1w6Kxc81sVAM7mKg==\n-----END PUBLIC KEY-----\n",
+      "node": "vps2",
+      "valid_from": "2026-10-03T10:00:00Z",
       "retired_at": null
     }
   ]
