@@ -396,29 +396,40 @@ PUBLISHED_KEYS_FILE = BASE_DIR / "trust_layer" / "published_keys.json"
 # legacy .pem next to the package is used (default until the switch).
 SIGNER_SOCKET = os.environ.get("TL_SIGNER_SOCKET", "")
 
-# Fail-fast: the server refuses to start without a way to sign (unsigned proofs are
-# not allowed) and, in signer mode, with a key missing from the published history.
-if SIGNER_SOCKET:
-    from .signing import SocketSigner, check_registered
-    _SIGNING_KEY = None
-    _SIGNER = SocketSigner(SIGNER_SOCKET)
-    check_registered(_SIGNER, PUBLISHED_KEYS_FILE)
-    ARKFORGE_PUBLIC_KEY = _SIGNER.public
-else:
-    _SIGNER = None
+_SIGNER = None
+_SIGNING_KEY = None
+ARKFORGE_PUBLIC_KEY = None
+
+
+def init_signer() -> None:
+    """Fail-fast, called first at service startup (app.lifespan): the server refuses to start without
+    a way to sign (unsigned proofs are not allowed) and, in signer mode, with a key missing from the
+    published history. Not at import: since tl-signer only trust-layer reaches the socket, and the
+    admin scripts (provision_challenge_key.py, --allow-key-ref) import this module without signing."""
+    global _SIGNER, _SIGNING_KEY, ARKFORGE_PUBLIC_KEY
+    if _SIGNER is not None or _SIGNING_KEY is not None:
+        return
+    if SIGNER_SOCKET:
+        from .signing import SocketSigner, check_registered
+        signer = SocketSigner(SIGNER_SOCKET)
+        check_registered(signer, PUBLISHED_KEYS_FILE)
+        _SIGNER, ARKFORGE_PUBLIC_KEY = signer, signer.public
+        return
     try:
         from .crypto import load_signing_key, get_public_key_b64url
-        _SIGNING_KEY = load_signing_key(SIGNING_KEY_PATH)
-        ARKFORGE_PUBLIC_KEY = get_public_key_b64url(_SIGNING_KEY)
+        cle = load_signing_key(SIGNING_KEY_PATH)
     except Exception as _e:
         raise RuntimeError(
             f"Signing key unavailable at {SIGNING_KEY_PATH}: {_e}. "
             "Generate it with: python3 -m trust_layer.crypto"
         ) from _e
+    _SIGNING_KEY, ARKFORGE_PUBLIC_KEY = cle, get_public_key_b64url(cle)
 
 
 def get_signer():
-    """The node's signer (trust_layer.signing), or None if not configured."""
+    """The node's signer (trust_layer.signing), initialised on first use outside the service."""
+    if _SIGNER is None and _SIGNING_KEY is None:
+        init_signer()
     if _SIGNER is not None:
         return _SIGNER
     if _SIGNING_KEY is None:

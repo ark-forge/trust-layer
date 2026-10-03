@@ -581,6 +581,9 @@ async def _trial_maintenance_loop():
 @asynccontextmanager
 async def lifespan(app):
     """Startup: recover pending TSA, restore abuse counters. Shutdown: drain background tasks."""
+    # Startup — first: no way to sign, no service (moved from import time, see config.init_signer)
+    from . import config as _cfg
+    _cfg.init_signer()
     # Startup — prune stale webhook idempotency entries (>7 days old)
     _prune_webhook_idempotency()
     # Startup — restore abuse detection sliding window from JSONL
