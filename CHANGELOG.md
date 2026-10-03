@@ -6,12 +6,21 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [1.12.8] — 2026-10-06
+## [1.12.9] — 2026-10-06
 
 ### Changed
 - No code change. Release that restarts both nodes for the opening of PROVE IT season 1: `CHALLENGE_OPEN`
   is read from the vault at startup only, so `scripts/ouvrir_saison.sh --open` (prove-it) deploys it right
   after setting the flag. Merge on 2026-10-06, as the first step of the opening.
+
+## [1.12.8] — 2026-10-03
+
+### Fixed
+- Admin scripts run again as ubuntu on the nodes (`provision_challenge_key.py`, `provision_challenge_secret.py
+  --allow-key-ref`): the signer check moved from the import of `trust_layer.config` to the service startup
+  (`config.init_signer()`, first step of `app.lifespan`). Since tl-signer only `trust-layer` reaches the socket,
+  so any script importing `trust_layer.keys` failed before doing anything. The service still refuses to start
+  without a way to sign; `get_signer()` initialises on first use for scripts that do sign.
 
 ## [1.12.7] — 2026-10-03
 
