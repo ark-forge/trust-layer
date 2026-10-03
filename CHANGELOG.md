@@ -6,6 +6,12 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.12.6] — 2026-10-03
+
+### Added
+- Key registry: `key-2` (vps1), `key-3` (vps2), `rekor-2`, `rekor-3`, born in tl-signer, valid from
+  2026-10-03T10:00:00Z. `key-1`/`rekor-1` stay active until the signer switch is verified.
+
 ## [1.12.5] — 2026-10-03
 
 ### Security
