@@ -348,7 +348,8 @@ if WEBHOOK_SECRET and WEBHOOK_KEY:
     # "pending" (a gate that stops measuring the anchor is a decoy), close the batch
     # explicitly, then poll for the real anchor as before.
     try:
-        closed = admin_api("/v1/admin/batch/close")
+        # Above the server budget: Rekor alone may take 10 s + 2 s + 10 s, plus the TSA.
+        closed = admin_api("/v1/admin/batch/close", timeout=60)
         chk("POST /v1/admin/batch/close → lot ancré",
             closed.get("anchored") is True and closed.get("timestamp_authority") == "verified",
             f"anchored={closed.get('anchored')} tsa={closed.get('timestamp_authority')}")
