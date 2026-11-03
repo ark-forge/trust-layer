@@ -17,6 +17,10 @@ Versions follow [Semantic Versioning](https://semver.org/).
   locks. Dev-only `coverage`, `iniconfig` and `pluggy` refreshed: `requirements-dev.txt` had gone stale. The audit
   and lock jobs were red for any new SHA, the deploy gate needs them green.
 
+### Fixed
+- Deploy smoke test: `POST /v1/admin/batch/close` now waits 60 s instead of 15 s. The server's own Rekor budget
+  (10 s + 2 s + 10 s) exceeded the client's, so a slow Rekor rolled back a healthy deploy although the batch was anchored.
+
 ## [1.12.9] — 2026-10-06
 
 ### Changed
