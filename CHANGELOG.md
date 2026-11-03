@@ -9,9 +9,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 ## [1.12.10] — 2026-11-03
 
 ### Changed
-- No code change. Release that restarts both nodes for the close of PROVE IT season 1: `CHALLENGE_OPEN` is read
-  from the vault at startup only, so `scripts/ouvrir_saison.sh --close` (prove-it) deploys it right after setting
-  the flag.
+- Release that restarts both nodes for the close of PROVE IT season 1: `CHALLENGE_OPEN` is read from the vault at
+  startup only, so `scripts/ouvrir_saison.sh --close` (prove-it) deploys it right after setting the flag.
+
+### Security
+- certifi 2026.4.22 -> 2026.10.18 (PYSEC-2026-4320), setuptools 83.0.0 -> 84.1.0 (GHSA-xmj3-9gf7-h52w), in both
+  locks. Dev-only `coverage`, `iniconfig` and `pluggy` refreshed: `requirements-dev.txt` had gone stale. The audit
+  and lock jobs were red for any new SHA, the deploy gate needs them green.
 
 ## [1.12.9] — 2026-10-06
 
