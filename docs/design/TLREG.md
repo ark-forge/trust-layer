@@ -28,6 +28,21 @@ no credential is issued before the address is proven. We match it; nothing here 
 6. CLI `mcp-eu-ai-act`: after `/api/register`, print "check your mailbox and confirm", stop expecting `api_key` in the response;
    keep reading `already_existed` for backward compatibility during one release.
 
+## Revisions after review (Opus, 13/11)
+
+- Scope includes `POST /v1/keys/free-signup` (returns `api_key`, 409 reveals registered addresses; advertised in app.py:153, 3237,
+  3482): same pending/confirm flow, same 202 for new and known addresses. Both endpoints share one code path.
+- Pending record value holds the address in clear (Redis TTL 24h only, never logged); key is `reg_pending:{token_hash}`.
+- One function `get_or_create_free_key(email)` does check + create under `_KEYS_LOCK` (no double key with several valid tokens);
+  test: two tokens for one address confirmed in parallel, one key.
+- Fail closed: no Redis (`get_redis()` is None) or no `TL_METRICS_SALT` (`hash_identifier` returns "") = 503, no mail, no key.
+- Token travels in the URL fragment (`#token=`), page reads it and POSTs; never in a query string (nginx/uvicorn access logs).
+- 4th request per address within 24h: same 202, no mail, no address-specific 429 (no oracle). Both branches send a mail or both
+  go through a background task, so response time is not an oracle.
+- Rate limits: replace the in-process IP map by the shared Redis counters (`signup_count` pattern, INCR+EXPIRE pipeline, salted key
+  `tl:reg_addr:{hash}`), plus a global daily cap on confirmation mails. Confirm POST gets its own rate limit.
+- Logs: `email_notify._send_email` (l.66, 92, 100) and app.py:2194, 2209, 2214 stop logging the clear address (salted hash).
+
 ## Out of scope
 
 Salting `proof_abuse:{ip}` and `client_ip_hash`, `GET /trial` redirect: separate tickets.
@@ -40,6 +55,7 @@ Salting `proof_abuse:{ip}` and `client_ip_hash`, `GET /trial` redirect: separate
 - GET confirm does not consume the token; POST does.
 - 4th request for one address in 24h sends no mail.
 - no clear address or token in logs (caplog).
+- no Redis -> 503; no salt -> 503; free-signup response has no `api_key`; 4th request same 202.
 - update `tests/test_free_guard.py` and `tests/test_funnel_metrics.py` call sites.
 
 ## Risks
