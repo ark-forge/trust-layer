@@ -1,10 +1,16 @@
 """Setup for arkforge-trust-layer."""
 
-from setuptools import setup, find_packages
+import re
+from pathlib import Path
+
+from setuptools import find_packages, setup
+
+VERSION = re.search(r'__version__ = "([^"]+)"', (Path(__file__).parent / "trust_layer" / "__init__.py").read_text()).group(1)
 
 setup(
     name="arkforge-trust-layer",
-    version="0.5.0",
+    version=VERSION,
+    python_requires=">=3.11",
     packages=find_packages(),
     install_requires=[
         "fastapi>=0.104.0",

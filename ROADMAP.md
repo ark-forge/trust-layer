@@ -19,7 +19,7 @@ ArkForge works the same way for every call:
 
 ArkForge doesn't take sides. The proof serves the truth.
 
-## Current state (v1.3.17)
+## State as of v1.3.17 (see CHANGELOG.md for later releases)
 
 **What works today:**
 
