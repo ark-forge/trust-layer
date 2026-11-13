@@ -110,7 +110,7 @@ def run(base: str, existing_key: str = ""):
         # free-signup no longer returns a key (address confirmation by email): take an
         # ephemeral key from the admin smoke setup, swept by the smoke teardown.
         internal_secret = os.environ.get("TRUST_LAYER_INTERNAL_SECRET", "")
-        s, r = _request("POST", f"{base}/v1/admin/smoke/setup",
+        s, r = _request("POST", f"{base}/v1/admin/smoke/setup", body={},
                         headers={"X-Internal-Secret": internal_secret})
         free_key = r.get("free_key", "")
         if not free_key:
