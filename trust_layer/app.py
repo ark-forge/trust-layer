@@ -135,9 +135,6 @@ _PAID_PLAN_ROUTES = frozenset({
     ("POST", "/create-checkout-session"),
     ("GET", "/trial"),
     ("POST", "/v1/keys/trial"),
-    ("POST", "/v1/keys/portal"),
-    ("POST", "/v1/credits/buy"),
-    ("POST", "/v1/keys/overage"),
 })
 
 

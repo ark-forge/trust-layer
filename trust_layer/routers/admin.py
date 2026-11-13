@@ -6,7 +6,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from ..config import INTERNAL_SECRET
-from ..usage_metrics import MetricsUnavailable, snapshot
+from ..usage_metrics import MetricsUnavailableError, snapshot
 from ..keys import (
     create_api_key,
     deactivate_key_by_ref,
@@ -108,5 +108,5 @@ async def usage_metrics(request: Request, days: int = 7) -> JSONResponse:
         return JSONResponse({"error": "forbidden"}, status_code=403)
     try:
         return JSONResponse(snapshot(days))
-    except MetricsUnavailable:
+    except MetricsUnavailableError:
         return JSONResponse({"error": "metrics_unavailable"}, status_code=503)

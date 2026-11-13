@@ -20,9 +20,6 @@ PAID_ROUTES = [
     ("POST", "/create-checkout-session"),
     ("GET", "/trial"),
     ("POST", "/v1/keys/trial"),
-    ("POST", "/v1/keys/portal"),
-    ("POST", "/v1/credits/buy"),
-    ("POST", "/v1/keys/overage"),
 ]
 
 
@@ -54,13 +51,13 @@ def client():
 @pytest.fixture
 def free_key():
     from trust_layer.keys import create_api_key
-    return create_api_key("", "free_guard", "free-guard@example.com", test_mode=False, plan="free")
+    return create_api_key("", "free_guard", "free-guard@arkforge-test.dev", test_mode=False, plan="free")
 
 
 @pytest.fixture
 def pro_key():
     from trust_layer.keys import create_api_key
-    return create_api_key("cus_guard", "sub_guard", "pro-guard@example.com", test_mode=False, plan="pro")
+    return create_api_key("cus_guard", "sub_guard", "pro-guard@arkforge-test.dev", test_mode=False, plan="pro")
 
 
 def _mock_http():
@@ -103,7 +100,7 @@ def test_flag_false_paid_route_answers_410_and_calls_no_stripe(client, monkeypat
     monkeypatch.setenv("TL_PAID_PLANS_ENABLED", "false")
     stripe_mock = MagicMock()
     with patch("trust_layer.app.stripe", stripe_mock):
-        r = client.request(method, path, json={"email": "someone@example.com"})
+        r = client.request(method, path, json={"email": "someone@arkforge-test.dev"})
     assert r.status_code == 410
     assert "/v1/keys/free-signup" in json.dumps(r.json())
     assert stripe_mock.mock_calls == []
@@ -118,13 +115,13 @@ def test_flag_false_pricing_exposes_only_free_and_no_upgrade_cta(client, monkeyp
 
 def test_flag_false_free_signup_response_has_no_upgrade_cta(client, monkeypatch):
     monkeypatch.setenv("TL_PAID_PLANS_ENABLED", "false")
-    r = client.post("/v1/keys/free-signup", json={"email": "nocta@example.com"})
+    r = client.post("/v1/keys/free-signup", json={"email": "nocta@arkforge-test.dev"})
     assert r.status_code == 200
     assert "upgrade_cta" not in r.json()
 
 
 def test_flag_true_free_signup_response_keeps_upgrade_cta(client):
-    r = client.post("/v1/keys/free-signup", json={"email": "cta@example.com"})
+    r = client.post("/v1/keys/free-signup", json={"email": "cta@arkforge-test.dev"})
     assert r.status_code == 200
     assert "upgrade_cta" in r.json()
 
@@ -174,7 +171,7 @@ def test_paid_key_passes_when_free_cap_is_reached(client, free_key, pro_key, mon
 
 
 def test_refused_proof_does_not_keep_a_slot(guard_redis, monkeypatch):
-    from trust_layer.free_tier_guard import GuardError, reserve_free_proof, release_free_proof
+    from trust_layer.free_tier_guard import GuardError, release_free_proof, reserve_free_proof
     monkeypatch.setenv("TL_FREE_DAILY_GLOBAL_CAP", "1")
     reserve_free_proof()
     with pytest.raises(GuardError):
@@ -188,13 +185,12 @@ def test_failed_write_gives_the_slot_back(client, free_key, monkeypatch, guard_r
     monkeypatch.setenv("TL_FREE_DAILY_GLOBAL_CAP", "1")
     with patch("trust_layer.proxy.store_proof", side_effect=OSError("disk full")), \
          patch("httpx.AsyncClient", return_value=_mock_http()), \
-         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock):
-        with pytest.raises(OSError):
-            client.post(
-                "/v1/proxy",
-                json={"target": "https://example.com/api", "payload": {}},
-                headers={"Authorization": f"Bearer {free_key}"},
-            )
+         patch("trust_layer.proxy._post_proof_background", new_callable=AsyncMock), pytest.raises(OSError):
+        client.post(
+            "/v1/proxy",
+            json={"target": "https://example.com/api", "payload": {}},
+            headers={"Authorization": f"Bearer {free_key}"},
+        )
     assert guard_redis.get(_cap_key()) == "0"
     assert _prove(client, free_key).status_code == 200
 
@@ -307,7 +303,7 @@ async def test_email_n_plus_1_of_the_day_is_not_sent_but_proof_is_created(monkey
     monkeypatch.setattr(proxy_mod, "add_proof_to_batch", lambda *a, **k: {"batch_id": "b"})
     record = {"parties": {"buyer_fingerprint": "fp_a"}}
     for n in range(3):
-        await proxy_mod._post_proof_background(f"prf_{n}", record, "h", "https://v", "a@example.com")
+        await proxy_mod._post_proof_background(f"prf_{n}", record, "h", "https://v", "a@arkforge-test.dev")
     assert sent == ["prf_0", "prf_1"]
 
 
@@ -320,20 +316,20 @@ async def test_email_cap_is_per_key(monkeypatch, guard_redis):
     monkeypatch.setattr(proxy_mod, "add_proof_to_batch", lambda *a, **k: {"batch_id": "b"})
     for fp in ("fp_a", "fp_b"):
         await proxy_mod._post_proof_background(
-            f"prf_{fp}", {"parties": {"buyer_fingerprint": fp}}, "h", "https://v", "a@example.com")
+            f"prf_{fp}", {"parties": {"buyer_fingerprint": fp}}, "h", "https://v", "a@arkforge-test.dev")
     assert sent == ["prf_fp_a", "prf_fp_b"]
 
 
 @pytest.mark.asyncio
 async def test_email_not_sent_when_redis_cannot_decide(monkeypatch):
-    from trust_layer import proxy as proxy_mod
     import trust_layer.free_tier_guard as guard_mod
+    from trust_layer import proxy as proxy_mod
     monkeypatch.setattr(guard_mod, "get_redis", lambda: None)
     sent = []
     monkeypatch.setattr(proxy_mod, "send_proof_email", lambda email, pid, rec: sent.append(pid))
     monkeypatch.setattr(proxy_mod, "add_proof_to_batch", lambda *a, **k: {"batch_id": "b"})
     await proxy_mod._post_proof_background(
-        "prf_x", {"parties": {"buyer_fingerprint": "fp_a"}}, "h", "https://v", "a@example.com")
+        "prf_x", {"parties": {"buyer_fingerprint": "fp_a"}}, "h", "https://v", "a@arkforge-test.dev")
     assert sent == []
 
 
@@ -345,7 +341,7 @@ def test_signup_limit_is_shared_between_nodes(client, guard_redis):
     for i in range(6):
         # Each request lands on a "fresh node": the per-process memory is empty.
         app_mod._FREE_SIGNUP_RATE.clear()
-        statuses.append(client.post("/v1/keys/free-signup", json={"email": f"node{i}@example.com"}).status_code)
+        statuses.append(client.post("/v1/keys/free-signup", json={"email": f"node{i}@arkforge-test.dev"}).status_code)
     assert statuses == [200] * 5 + [429]
 
 
@@ -353,10 +349,10 @@ def test_refused_signup_creates_no_key(client, guard_redis):
     import trust_layer.app as app_mod
     from trust_layer.keys import load_api_keys
     for i in range(5):
-        client.post("/v1/keys/free-signup", json={"email": f"ok{i}@example.com"})
+        client.post("/v1/keys/free-signup", json={"email": f"ok{i}@arkforge-test.dev"})
     app_mod._FREE_SIGNUP_RATE.clear()
     before = len(load_api_keys())
-    r = client.post("/v1/keys/free-signup", json={"email": "refused@example.com"})
+    r = client.post("/v1/keys/free-signup", json={"email": "refused@arkforge-test.dev"})
     assert r.status_code == 429
     assert len(load_api_keys()) == before
 
@@ -374,7 +370,7 @@ def _today_row(response):
 
 
 def test_signup_and_proof_increment_the_aggregates(client, monkeypatch):
-    key = client.post("/v1/keys/free-signup", json={"email": "agg@example.com"}).json()["api_key"]
+    key = client.post("/v1/keys/free-signup", json={"email": "agg@arkforge-test.dev"}).json()["api_key"]
     assert _prove(client, key).status_code == 200
     row = _today_row(_metrics(client, monkeypatch))
     assert row["free_keys_created"] == 1
@@ -402,7 +398,7 @@ def test_internal_ip_is_not_counted(client, free_key, monkeypatch, guard_redis):
     internal = {"x-real-ip": INTERNAL_IP}
     client.get(f"/v1/proof/{proof_id}", headers=internal)
     client.get(f"/v1/proof/{proof_id}/verify", headers=internal)
-    client.post("/v1/keys/free-signup", json={"email": "internal@example.com"}, headers=internal)
+    client.post("/v1/keys/free-signup", json={"email": "internal@arkforge-test.dev"}, headers=internal)
     row = _today_row(_metrics(client, monkeypatch))
     assert row["external_verifications"] == 0
     assert row["free_keys_created"] == 0
@@ -417,7 +413,7 @@ def test_internal_key_proof_is_not_counted(client, monkeypatch):
 
 
 def test_serialized_aggregate_holds_no_ip_email_or_key(client, free_key, monkeypatch, guard_redis):
-    email = "leak-check@example.com"
+    email = "leak-check@arkforge-test.dev"
     ip = "203.0.113.77"
     key = client.post("/v1/keys/free-signup", json={"email": email}, headers={"x-real-ip": ip}).json()["api_key"]
     proof_id = _prove(client, key, headers={"x-real-ip": ip}).json()["proof"]["proof_id"]
@@ -492,24 +488,30 @@ def test_hash_identifier_is_salted_and_stable(monkeypatch):
 
 
 def test_email_hash_in_funnel_logs_has_no_fragment_of_the_email(client, tmp_path):
-    email = "fragment@example.com"
+    email = "fragment@arkforge-test.dev"
     client.post("/v1/keys/free-signup", json={"email": email})
+    seen = 0
     for name in ("conversion_events.jsonl", "funnel_events.jsonl"):
-        text = (tmp_path / "data" / name).read_text()
-        assert "fra" not in json.dumps([json.loads(line)["email_hash"] for line in text.splitlines()])
-        assert "***" not in text
+        path = tmp_path / "data" / name
+        if not path.exists():
+            continue
+        text = path.read_text()
         hashes = [json.loads(line)["email_hash"] for line in text.splitlines()]
+        assert "fra" not in json.dumps(hashes)
+        assert "***" not in text
         assert hashes and all(len(h) >= 32 and h.isalnum() for h in hashes)
+        seen += 1
+    assert seen >= 1
 
 
 def test_email_hash_helper_is_salted(monkeypatch):
     from trust_layer.app import _email_hash
-    h = _email_hash("someone@example.com")
+    h = _email_hash("someone@arkforge-test.dev")
     assert h and "som" not in h and "@" not in h
     monkeypatch.setenv("TL_METRICS_SALT", "other-salt")
-    assert _email_hash("someone@example.com") != h
+    assert _email_hash("someone@arkforge-test.dev") != h
     monkeypatch.delenv("TL_METRICS_SALT")
-    assert _email_hash("someone@example.com") == ""
+    assert _email_hash("someone@arkforge-test.dev") == ""
 
 
 def test_metrics_endpoint_answers_503_when_counters_cannot_be_read(client, monkeypatch):

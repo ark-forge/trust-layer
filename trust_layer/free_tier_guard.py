@@ -18,8 +18,7 @@ operator without a code change:
 import hashlib
 import logging
 import os
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from .redis_client import get_redis
 
@@ -49,7 +48,7 @@ class GuardError(Exception):
 
 
 def _today() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return datetime.now(UTC).strftime("%Y-%m-%d")
 
 
 def paid_plans_enabled() -> bool:
@@ -69,7 +68,7 @@ def hash_identifier(value: str) -> str:
     return hashlib.sha256(f"{salt}\x00{value}".encode()).hexdigest()
 
 
-def _int_setting(name: str, default: int) -> Optional[int]:
+def _int_setting(name: str, default: int) -> int | None:
     """Integer setting; default when unset, None when set but unusable."""
     raw = os.environ.get(name)
     if raw is None or raw.strip() == "":
@@ -163,7 +162,7 @@ def proof_email_allowed(key_fingerprint: str) -> bool:
         return False
 
 
-def signup_count(ip_id: str) -> Optional[int]:
+def signup_count(ip_id: str) -> int | None:
     """Count one signup for this IP in the current UTC hour; None when Redis cannot say.
 
     Fixed hourly bucket in the key name, so the EXPIRE can ride in the same
@@ -172,7 +171,7 @@ def signup_count(ip_id: str) -> Optional[int]:
     r = get_redis()
     if r is None:
         return None
-    name = f"tl:signup_ip:{datetime.now(timezone.utc).strftime('%Y%m%d%H')}:{ip_id}"
+    name = f"tl:signup_ip:{datetime.now(UTC).strftime('%Y%m%d%H')}:{ip_id}"
     try:
         pipe = r.pipeline(transaction=True)
         pipe.incr(name)

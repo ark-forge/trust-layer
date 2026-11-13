@@ -13,7 +13,7 @@ Measurement is best effort: a Redis failure is logged and never blocks a request
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from .free_tier_guard import hash_identifier
 from .redis_client import get_redis
@@ -29,7 +29,7 @@ def _name(day: str, metric: str) -> str:
 
 
 def _today() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return datetime.now(UTC).strftime("%Y-%m-%d")
 
 
 def _bump(metric: str) -> None:
@@ -71,7 +71,7 @@ def record_proof(api_key: str) -> None:
         logger.warning("Active key sketch not updated: %s", e)
 
 
-class MetricsUnavailable(RuntimeError):
+class MetricsUnavailableError(RuntimeError):
     """Redis cannot be read: a failed read must not look like a day of zeros."""
 
 
@@ -80,8 +80,8 @@ def snapshot(days: int) -> dict:
     days = max(1, min(int(days), MAX_DAYS))
     r = get_redis()
     if r is None:
-        raise MetricsUnavailable("Redis unavailable")
-    today = datetime.now(timezone.utc).date()
+        raise MetricsUnavailableError("Redis unavailable")
+    today = datetime.now(UTC).date()
     rows = []
     for offset in range(days - 1, -1, -1):
         day = (today - timedelta(days=offset)).strftime("%Y-%m-%d")
@@ -94,6 +94,6 @@ def snapshot(days: int) -> dict:
             row["active_keys"] = int(r.pfcount(_name(day, "active_keys")))
         except Exception as e:
             logger.warning("Metrics read failed for %s: %s", day, e)
-            raise MetricsUnavailable(str(e)) from e
+            raise MetricsUnavailableError(str(e)) from e
         rows.append(row)
     return {"days": rows}
