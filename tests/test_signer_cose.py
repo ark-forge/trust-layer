@@ -339,25 +339,27 @@ def test_cbor_encoder_matches_rfc_8949_appendix_a_examples():
 
 # ---- 11. existing operations untouched -----------------------------------------------
 
-# sha256 of ast.dump() of each existing branch of Signer.handle at 4c2e05b.
+# sha256 of the source text of each existing branch of Signer.handle at 4c2e05b (source text, not ast.dump:
+# the dump differs between Python versions, the deploy gate runs 3.14, CI 3.11).
 EXISTING_BRANCHES = {
-    "pubkeys": "e71a5a2d25408ae7ceaf9ab281b248cfa71b49f480577c56602b9c1b3d0c9e3e",
-    "sign_chain_hash": "28b2af59a5919a78fd6edb17e3afc3559311008a8fdc067ac10407577801e1db",
-    "sign_reputation": "0e46e6cf9bb4a20bd451af5d979d08141f837d293617257703b84b0d6c5f94af",
-    "sign_jws": "703315fe662ec6c99689e0bc420fe32eab75f24d0484f21c27c47d056dcd9da2",
-    "sign_rekor": "fcd81532dbc0b11984a9aeac502f46d9598c57dd47af0d20a2d7d0e1b78bffd2",
+    "pubkeys": "53bd49da4d6a15ecf3716574c4fa780e3f9f129d24cac54f9928112904345ce9",
+    "sign_chain_hash": "bc3cf04264173bd7d29d5765f15ecbf31d2897132c54d0b25d0d25bbd847aa41",
+    "sign_reputation": "d44b9608a30be62112b2977c14d41ba6a0781da1b1360307ee5d0d1edc77aa52",
+    "sign_jws": "7564023c448e0a2c30e6270b3838ff75cd1e52b775be2cd34b08afa9ca0411c0",
+    "sign_rekor": "d57b17c60bd5100df6777fe6743ebe35913397552aa0af81161b02f25d808205",
 }
 
 
 def test_existing_operation_branches_are_unchanged():
-    tree = ast.parse(Path(tl_signer.__file__).read_text())
+    source = Path(tl_signer.__file__).read_text()
+    tree = ast.parse(source)
     handle = next(n for c in tree.body if isinstance(c, ast.ClassDef) and c.name == "Signer"
                   for n in c.body if isinstance(n, ast.FunctionDef) and n.name == "handle")
     found = {}
     for node in handle.body:
         if isinstance(node, ast.If) and isinstance(node.test, ast.Compare):
             found[node.test.comparators[0].value] = hashlib.sha256(
-                ast.dump(node).encode()).hexdigest()
+                ast.get_source_segment(source, node).encode()).hexdigest()
     assert {op: found.get(op) for op in EXISTING_BRANCHES} == EXISTING_BRANCHES
 
 
