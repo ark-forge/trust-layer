@@ -114,17 +114,13 @@ def test_flag_false_pricing_exposes_only_free_and_no_upgrade_cta(client, monkeyp
     assert "upgrade_cta" not in json.dumps(body)
 
 
-def test_flag_false_free_signup_response_has_no_upgrade_cta(client, monkeypatch):
-    monkeypatch.setenv("TL_PAID_PLANS_ENABLED", "false")
+@pytest.mark.parametrize("flag", ["false", "true"])
+def test_free_signup_pending_response_has_no_upgrade_cta_whatever_the_flag(client, monkeypatch, flag):
+    # TLREG: the 202 is identical for every address and carries no offer.
+    monkeypatch.setenv("TL_PAID_PLANS_ENABLED", flag)
     r = client.post("/v1/keys/free-signup", json={"email": "nocta@arkforge-test.dev"})
-    assert r.status_code == 200
-    assert "upgrade_cta" not in r.json()
-
-
-def test_flag_true_free_signup_response_keeps_upgrade_cta(client):
-    r = client.post("/v1/keys/free-signup", json={"email": "cta@arkforge-test.dev"})
-    assert r.status_code == 200
-    assert "upgrade_cta" in r.json()
+    assert r.status_code == 202
+    assert "upgrade_cta" not in r.json() and "upgrade_url" not in r.json()
 
 
 def test_flag_false_stripe_webhook_still_processes_events(client, monkeypatch):
@@ -337,25 +333,22 @@ async def test_email_not_sent_when_redis_cannot_decide(monkeypatch):
 # --- 5. Signup limit shared through Redis ---
 
 def test_signup_limit_is_shared_between_nodes(client, guard_redis):
-    import trust_layer.app as app_mod
+    # No per-process window any more: the count lives in Redis only, so every node sees it.
     statuses = []
     for i in range(6):
-        # Each request lands on a "fresh node": the per-process memory is empty.
-        app_mod._FREE_SIGNUP_RATE.clear()
         statuses.append(client.post("/v1/keys/free-signup", json={"email": f"node{i}@arkforge-test.dev"}).status_code)
-    assert statuses == [200] * 5 + [429]
+    assert statuses == [202] * 5 + [429]
 
 
-def test_refused_signup_creates_no_key(client, guard_redis):
-    import trust_layer.app as app_mod
+def test_refused_signup_creates_no_key_and_sends_no_mail(client, guard_redis, mailbox):
     from trust_layer.keys import load_api_keys
     for i in range(5):
         client.post("/v1/keys/free-signup", json={"email": f"ok{i}@arkforge-test.dev"})
-    app_mod._FREE_SIGNUP_RATE.clear()
-    before = len(load_api_keys())
+    before, sent = len(load_api_keys()), len(mailbox)
     r = client.post("/v1/keys/free-signup", json={"email": "refused@arkforge-test.dev"})
     assert r.status_code == 429
     assert len(load_api_keys()) == before
+    assert len(mailbox) == sent
 
 
 # --- 6. Aggregate measurement ---
@@ -370,8 +363,8 @@ def _today_row(response):
     return response.json()["days"][-1]
 
 
-def test_signup_and_proof_increment_the_aggregates(client, monkeypatch):
-    key = client.post("/v1/keys/free-signup", json={"email": "agg@arkforge-test.dev"}).json()["api_key"]
+def test_signup_and_proof_increment_the_aggregates(client, monkeypatch, signup_key):
+    key = signup_key(client, "agg@arkforge-test.dev")
     assert _prove(client, key).status_code == 200
     row = _today_row(_metrics(client, monkeypatch))
     assert row["free_keys_created"] == 1
@@ -413,10 +406,10 @@ def test_internal_key_proof_is_not_counted(client, monkeypatch):
     assert row["proofs"] == 0 and row["active_keys"] == 0
 
 
-def test_serialized_aggregate_holds_no_ip_email_or_key(client, free_key, monkeypatch, guard_redis):
+def test_serialized_aggregate_holds_no_ip_email_or_key(client, free_key, monkeypatch, guard_redis, signup_key):
     email = "leak-check@arkforge-test.dev"
     ip = "203.0.113.77"
-    key = client.post("/v1/keys/free-signup", json={"email": email}, headers={"x-real-ip": ip}).json()["api_key"]
+    key = signup_key(client, email, headers={"x-real-ip": ip})
     proof_id = _prove(client, key, headers={"x-real-ip": ip}).json()["proof"]["proof_id"]
     client.get(f"/v1/proof/{proof_id}", headers={"x-real-ip": ip})
     text = _metrics(client, monkeypatch).text
@@ -594,15 +587,12 @@ def test_410_carries_cors_headers(client, monkeypatch):
     assert "access-control-allow-origin" in r.headers
 
 
-def test_register_for_existing_email_never_returns_the_key(client, monkeypatch):
-    from unittest.mock import patch
-    with patch("trust_layer.app.send_welcome_email") as mail:
-        first = client.post("/api/register", json={"email": "owner@arkforge-test.dev"}, headers={"x-real-ip": "198.51.100.9"})
-        assert "api_key" in first.json()
-        key = first.json()["api_key"]
-        again = client.post("/api/register", json={"email": "owner@arkforge-test.dev"}, headers={"x-real-ip": "198.51.100.10"})
-    body = again.json()
-    assert again.status_code == 200 and body["already_existed"] is True
+def test_register_for_existing_email_never_returns_the_key(client, monkeypatch, signup_key, mailbox):
+    key = signup_key(client, "owner@arkforge-test.dev", path="/api/register", headers={"x-real-ip": "198.51.100.9"})
+    sent = len(mailbox)
+    again = client.post("/api/register", json={"email": "owner@arkforge-test.dev"}, headers={"x-real-ip": "198.51.100.10"})
+    assert again.status_code == 202
     assert key not in again.text
-    assert "api_key" not in body
-    assert mail.call_args.args == ("owner@arkforge-test.dev", key)
+    assert "api_key" not in again.json()
+    # Only the confirmation link leaves before the confirm step: no key in any mail yet.
+    assert len(mailbox) == sent + 1 and key not in mailbox[-1]["body"]

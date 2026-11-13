@@ -6,6 +6,30 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased]
+
+### Changed (breaking)
+- `POST /api/register` and `POST /v1/keys/free-signup` never return `api_key` any more. Both answer
+  `202 {"status":"pending_confirmation"}`, identical for a new and for an already registered address (the 409
+  `already_exists` of free-signup is gone, and so is `already_existed` on register). A confirmation link is mailed;
+  the key is mailed once the address is confirmed. Clients that read `api_key` from the response must stop doing so
+  (the `mcp-eu-ai-act` CLI is to be updated separately).
+- Both endpoints share one IP limit of 5 requests per hour, counted in Redis (the per-process maps are removed;
+  register was 10 per hour).
+- The 202 response carries no `upgrade_cta`.
+
+### Added
+- `GET /v1/register/confirm` (page that reads the token from the URL fragment `#token=` and consumes nothing) and
+  `POST /v1/register/confirm {"token"}` (single use, 24 h, consumed atomically; a wrong, used or expired token is
+  a plain 400; limited to 20 attempts per IP per hour). The POST answers `{"status":"confirmed"}`.
+- Per-address cap of 3 confirmation mails per 24 h (silent: same 202, no mail) and a global daily cap on
+  confirmation mails (`TL_REG_MAIL_DAILY_MAX`, default 500; over the cap the endpoints answer 503).
+- Funnel event `register_requested`; `register_completion` and `signup_attributed` now fire at the confirm step.
+
+### Security
+- Both endpoints answer 503 without Redis or without `TL_METRICS_SALT`, before any mail or key.
+- Outgoing-mail logs carry a salted hash of the recipient instead of the address.
+
 ## [1.13.0] — 2026-11-13
 
 ### Added

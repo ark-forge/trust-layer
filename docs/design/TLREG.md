@@ -1,6 +1,6 @@
 # TLREG: free API key delivered by email only, with address confirmation
 
-Status: design note (R2), not implemented. Follows TLCOSE-S.
+Status: implemented (R2), see CHANGELOG Unreleased. Follows TLCOSE-S.
 
 ## Problem
 
