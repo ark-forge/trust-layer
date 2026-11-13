@@ -236,14 +236,12 @@ curl -X POST https://trust.arkforge.tech/v1/keys/free-signup \
   -d '{"email": "you@example.com"}'
 ```
 
-**Response:**
+**Response (`202`, identical for a new or a known address):**
 ```json
-{
-  "api_key": "mcp_free_abc123...",
-  "plan": "free",
-  "limit": "500 proofs/month"
-}
+{"status": "pending_confirmation"}
 ```
+
+The key is never returned by the API. Open the confirmation link in the email (valid 24 hours, single use) and confirm on the page: your `mcp_free_...` key is then sent to that address. Limits: 3 emails per address per 24 hours, 5 requests per IP per hour (`429`); `503` if the service cannot guarantee the limits, retry later.
 
 No credit card required.
 

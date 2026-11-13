@@ -256,7 +256,7 @@ For custom requirements (eIDAS-qualified timestamps, on-premise deployment): [co
 | `GET` | `/v1/health` | Health check |
 | `GET` | `/v1/pricing` | Plans and limits |
 | `POST` | `/v1/proxy` | Certified proxy call |
-| `POST` | `/v1/keys/free-signup` | Create free API key |
+| `POST` | `/v1/keys/free-signup` | Request a free API key (202, key sent by email after confirmation) |
 | `POST` | `/v1/keys/setup` | Subscribe to Pro, Enterprise, or Platform (Stripe Checkout) |
 | `POST` | `/v1/keys/portal` | Open Stripe Billing Portal |
 | `POST` | `/v1/keys/overage` | Enable/disable overage billing |

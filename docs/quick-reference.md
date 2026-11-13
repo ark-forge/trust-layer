@@ -50,6 +50,7 @@ Use case: certified GitHub comments, Slack messages,
 # Free (500/month, no card)
 curl -X POST https://trust.arkforge.tech/v1/keys/free-signup \
   -d '{"email": "you@example.com"}'
+# → 202 {"status": "pending_confirmation"}: confirm from the email, the key is sent by email only
 
 # Pro Test (development)
 curl -X POST https://trust.arkforge.tech/v1/keys/setup \
@@ -180,7 +181,7 @@ if 'provider_payment' in result['proof']:
 ## Key endpoints
 
 ```bash
-# Free signup
+# Free signup (202, key sent by email after confirmation)
 POST https://trust.arkforge.tech/v1/keys/free-signup
 
 # Pro/Test setup
