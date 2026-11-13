@@ -32,8 +32,8 @@ Conformance tests against the [Proof Specification](https://github.com/ark-forge
 
 ### Code Style
 
-- Python 3.10+, type hints where helpful
-- No linter enforced yet — match existing style
+- Python 3.11 (as in CI and the Dockerfile), type hints where helpful
+- `ruff check` (config in `ruff.toml`) runs in CI on the `.py` files changed by a PR or push, not on the whole repository — match existing style elsewhere
 - Keep functions short, no deep nesting
 - No comments unless the logic is non-obvious
 

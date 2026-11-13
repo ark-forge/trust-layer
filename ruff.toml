@@ -1,0 +1,11 @@
+line-length = 120
+target-version = "py311"  # écart à la base commune (py312) : Python du dépôt (Dockerfile, CI)
+
+[lint]
+select = ["E", "F", "W", "B", "UP", "SIM", "I", "N"]
+ignore = [
+  "E501",  # la longueur relève de la revue, pas du lint
+]
+
+[lint.per-file-ignores]
+"**/tests/**" = ["F811"]  # fixture pytest passée en paramètre : faux positif connu
