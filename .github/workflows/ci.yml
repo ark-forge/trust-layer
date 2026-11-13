@@ -54,7 +54,7 @@ jobs:
             echo "No .py file changed, nothing to lint."
             exit 0
           fi
-          pip install ruff==0.14.0
+          pip install ruff==0.15.15
           xargs -0 ruff check < "$RUNNER_TEMP/changed_py.list"
 
   lock:
