@@ -43,13 +43,8 @@ If you discover a security vulnerability, **do not open a public issue**. Email 
 
 ### Releases
 
-Releases follow [semver](https://semver.org/). To create a release:
+Releases follow [semver](https://semver.org/). The version is decided in the pull request: bump `trust_layer/__init__.py` and add a `## [x.y.z]` entry to `CHANGELOG.md`. Once merged with green CI, the maintainer runs `scripts/deploy_trust_layer_prod.sh`, which deploys and pushes the `vX.Y.Z` tag. Never push a tag by hand.
 
-```bash
-git tag v0.3.0
-git push origin v0.3.0
-```
-
-This triggers the release workflow which:
+The tag triggers the release workflow which:
 1. Runs the full test suite (gate)
 2. Creates a GitHub Release with auto-generated changelog
