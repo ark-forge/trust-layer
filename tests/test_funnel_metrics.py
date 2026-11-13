@@ -1,8 +1,6 @@
 """Tests for funnel metrics instrumentation (cta_impression, register_page_visit, register_completion)."""
 
 import json
-from pathlib import Path
-from unittest.mock import patch, AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -90,7 +88,6 @@ class TestRegisterCompletion:
 
     def test_existing_key_no_completion_event(self, client, tmp_path):
         client.post("/api/register", json={"email": "dup@example.com", "source": "web_register"})
-        events_before = len(_read_funnel_events(tmp_path))
 
         resp = client.post("/api/register", json={"email": "dup@example.com", "source": "web_register"})
         assert resp.status_code == 200
