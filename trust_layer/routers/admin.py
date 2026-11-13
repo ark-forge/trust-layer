@@ -6,6 +6,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from ..config import INTERNAL_SECRET
+from ..usage_metrics import MetricsUnavailable, snapshot
 from ..keys import (
     create_api_key,
     deactivate_key_by_ref,
@@ -93,3 +94,19 @@ async def batch_close(request: Request) -> JSONResponse:
         "timestamp_authority": record["timestamp_authority"].get("status"),
         "transparency_log": record["transparency_log"].get("status"),
     })
+
+
+@router.get("/v1/admin/metrics")
+async def usage_metrics(request: Request, days: int = 7) -> JSONResponse:
+    """Daily aggregate totals (free keys created, active keys, proofs, verifications).
+
+    Protected by X-Internal-Secret like the other admin routes. Totals only: no
+    IP, email, key or per-identifier figure, hashed or not. 503 when the counters
+    cannot be read, so a failed read never looks like a day of zeros.
+    """
+    if not _authorized(request):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    try:
+        return JSONResponse(snapshot(days))
+    except MetricsUnavailable:
+        return JSONResponse({"error": "metrics_unavailable"}, status_code=503)

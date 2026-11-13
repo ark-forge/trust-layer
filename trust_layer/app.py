@@ -128,6 +128,39 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
+# Subscription and plan-change routes, answered 410 when TL_PAID_PLANS_ENABLED is false.
+# The Stripe webhook is deliberately absent: existing subscribers keep being processed.
+_PAID_PLAN_ROUTES = frozenset({
+    ("POST", "/v1/keys/setup"),
+    ("POST", "/create-checkout-session"),
+    ("GET", "/trial"),
+    ("POST", "/v1/keys/trial"),
+    ("POST", "/v1/keys/portal"),
+    ("POST", "/v1/credits/buy"),
+    ("POST", "/v1/keys/overage"),
+})
+
+
+class PaidPlansGateMiddleware(BaseHTTPMiddleware):
+    """Answer 410 on subscription routes while paid plans are switched off (reversible)."""
+    async def dispatch(self, request: Request, call_next):
+        if (request.method, request.url.path.rstrip("/")) in _PAID_PLAN_ROUTES \
+                and not paid_plans_enabled():
+            return JSONResponse(
+                status_code=410,
+                content={
+                    "error": {
+                        "code": "paid_plans_disabled",
+                        "message": "Paid plans are not offered at the moment. Trust Layer is free: "
+                                   "get a free API key instead.",
+                        "status": 410,
+                        "free_signup": f"{TRUST_LAYER_BASE_URL}/v1/keys/free-signup",
+                    }
+                },
+            )
+        return await call_next(request)
+
+
 class FailoverReadOnlyMiddleware(BaseHTTPMiddleware):
     """Bloque les écritures en mode failover pour éviter le split-brain."""
     async def dispatch(self, request: Request, call_next):
@@ -215,6 +248,8 @@ from .demo import check_demo_rate_limit, build_demo_proof, _PAYLOAD_MAX_BYTES as
 from .templates import render_proof_page
 from .rate_limit import get_usage, get_daily_limit
 from .redis_client import get_redis
+from .free_tier_guard import paid_plans_enabled, hash_identifier, signup_count
+from . import usage_metrics
 from .email_notify import (
     send_welcome_email,
     send_welcome_email_pro,
@@ -352,7 +387,7 @@ def _restore_abuse_counters():
                 except json.JSONDecodeError:
                     continue
                 ts_str = entry.get("ts", "")
-                ip = entry.get("ip", "")
+                ip = entry.get("ip_hash", "")
                 if not ts_str or not ip:
                     continue
                 try:
@@ -377,11 +412,21 @@ def _proof_access_blocked(ip: str) -> bool:
         if r is not None:
             count = r.get(f"proof_abuse:{ip}")
             if count and int(count) > _ABUSE_THRESHOLD:
-                logger.warning("ABUSE BLOCKED: IP %s blocked on proof access (%s req/h)", ip, count)
+                logger.warning("ABUSE BLOCKED: IP %s blocked on proof access (%s req/h)", _ip_id(ip) or "-", count)
                 return True
     except Exception:
         pass
     return False
+
+
+def _email_hash(email: str) -> str:
+    """Salted hash of an email for event logs (first 32 hex chars). Empty without salt."""
+    return hash_identifier((email or "").strip().lower())[:32]
+
+
+def _ip_id(ip: str) -> str:
+    """Identifier for an IP in logs and in-memory counters: salted hash, "" without salt."""
+    return hash_identifier(ip)[:32]
 
 
 def _log_proof_access(proof_ids, ip: str, user_agent: str):
@@ -395,10 +440,12 @@ def _log_proof_access(proof_ids, ip: str, user_agent: str):
     if isinstance(proof_ids, str):
         proof_ids = [proof_ids]
     ts = datetime.now(timezone.utc).isoformat()
+    # Never the raw IP in a log: salted hash, or nothing when no salt is configured.
+    ip_id = _ip_id(ip)
     try:
         with open(PROOF_ACCESS_LOG, "a") as f:
             for proof_id in proof_ids:
-                f.write(json.dumps({"ts": ts, "proof_id": proof_id, "ip": ip,
+                f.write(json.dumps({"ts": ts, "proof_id": proof_id, "ip_hash": ip_id,
                                     "ua": (user_agent or "")[:200]}) + "\n")
     except OSError as e:
         logger.debug("Proof access log write failed: %s", e)
@@ -412,16 +459,17 @@ def _log_proof_access(proof_ids, ip: str, user_agent: str):
             if count == 1:
                 r.expire(key, _ABUSE_WINDOW)
             if count > _ABUSE_THRESHOLD:
-                logger.warning("ABUSE DETECTED: IP %s made %d proof requests in 1h (Redis)", ip, count)
+                logger.warning("ABUSE DETECTED: IP %s made %d proof requests in 1h (Redis)", ip_id or "-", count)
         else:
             raise RuntimeError("Redis unavailable")
     except Exception:
-        timestamps = _proof_access_counts[ip]
+        mem_key = ip_id or ip  # memory only, never logged
+        timestamps = _proof_access_counts[mem_key]
         timestamps.append(now)
         cutoff = now - _ABUSE_WINDOW
-        _proof_access_counts[ip] = [t for t in timestamps if t > cutoff]
-        if len(_proof_access_counts[ip]) > _ABUSE_THRESHOLD:
-            logger.warning("ABUSE DETECTED: IP %s made %d proof requests in 1h (in-memory)", ip, len(_proof_access_counts[ip]))
+        _proof_access_counts[mem_key] = [t for t in timestamps if t > cutoff]
+        if len(_proof_access_counts[mem_key]) > _ABUSE_THRESHOLD:
+            logger.warning("ABUSE DETECTED: IP %s made %d proof requests in 1h (in-memory)", ip_id or "-", len(_proof_access_counts[mem_key]))
 
 
 async def _batch_anchor_loop():
@@ -632,6 +680,7 @@ app.add_middleware(
 
 # Middleware always active — _is_failover_mode() checks state file dynamically
 app.add_middleware(FailoverReadOnlyMiddleware)
+app.add_middleware(PaidPlansGateMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 
 # --- Feature routers (v1.4+) ---
@@ -756,6 +805,11 @@ async def proxy_endpoint(
         status_code = result["error"].get("status", 502)
     else:
         status_code = 200
+
+    # Aggregate measurement: a stored proof counts once, internal IPs and keys excluded.
+    if (result.get("proof") or result.get("error", {}).get("proof_data")) \
+            and client_ip not in _INTERNAL_IPS and not is_internal_key(api_key):
+        usage_metrics.record_proof(api_key)
 
     # Level 2 — Ghost Stamp: inject proof headers
     proof = result.get("proof") or result.get("error", {}).get("proof_data")
@@ -904,6 +958,9 @@ async def get_proof(proof_id: str, request: Request):
     if not proof:
         return _error_response("not_found", f"Proof '{proof_id}' not found", 404)
 
+    if client_ip not in _INTERNAL_IPS:
+        usage_metrics.record_verification()
+
     # Increment views_count in proof metadata
     proof["views_count"] = proof.get("views_count", 0) + 1
     try:
@@ -972,7 +1029,7 @@ async def get_proofs_batch(request: Request):
 # --- GET /v1/proof/{proof_id}/verify — Lightweight verification ---
 
 @app.get("/v1/proof/{proof_id}/verify")
-async def verify_proof_endpoint(proof_id: str):
+async def verify_proof_endpoint(proof_id: str, request: Request):
     """Lightweight proof verification — no auth, no view increment.
 
     Returns integrity check result with chain hash and timestamp info.
@@ -984,6 +1041,10 @@ async def verify_proof_endpoint(proof_id: str):
     proof = load_proof(proof_id)
     if not proof:
         return _error_response("not_found", f"Proof '{proof_id}' not found", 404)
+
+    client_ip = request.headers.get("x-real-ip") or (request.client.host if request.client else "unknown")
+    if client_ip not in _INTERNAL_IPS:
+        usage_metrics.record_verification()
 
     integrity_ok = verify_proof_integrity(proof)
     hashes = proof.get("hashes", {})
@@ -1235,7 +1296,7 @@ async def setup_key(request: Request):
         _log_funnel_event("checkout_initiated", client_ip, referer_for_classify, user_agent, extra={
             "plan": plan_name,
             "product": product_tag,
-            "email_hash": email[:3] + "***" if email else "",
+            "email_hash": _email_hash(email),
             "session_id": session.id,
             "test_mode": req_mode == "test",
             "utm_source": utm_source,
@@ -1574,7 +1635,7 @@ async def create_trial(request: Request):
     send_trial_welcome_email(email, trial_key, trial_ends, upgrade_url, lang=lang)
 
     _log_funnel_event("trial_key_created", client_ip, request.headers.get("referer", ""), user_agent, extra={
-        "email_hash": email[:3] + "***",
+        "email_hash": _email_hash(email),
         "test_mode": req_mode == "test",
         "lang": lang,
     })
@@ -1850,13 +1911,20 @@ async def free_signup(request: Request):
         request.headers.get("x-real-ip")
         or (request.client.host if request.client else "unknown")
     )
-    now = time.time()
-    timestamps = _FREE_SIGNUP_RATE.get(client_ip, [])
-    timestamps = [t for t in timestamps if t > now - 3600]
-    if len(timestamps) >= _FREE_SIGNUP_MAX_PER_HOUR:
-        return _error_response("rate_limited", "Too many signups. Try again later.", 429)
-    timestamps.append(now)
-    _FREE_SIGNUP_RATE[client_ip] = timestamps
+    # Shared between nodes through Redis; the per-node memory window is the fallback
+    # only when Redis cannot answer (free proofs are refused in that case anyway).
+    shared = signup_count(_ip_id(client_ip) or hashlib.sha256(client_ip.encode()).hexdigest())
+    if shared is not None:
+        if shared > _FREE_SIGNUP_MAX_PER_HOUR:
+            return _error_response("rate_limited", "Too many signups. Try again later.", 429)
+    else:
+        now = time.time()
+        timestamps = _FREE_SIGNUP_RATE.get(client_ip, [])
+        timestamps = [t for t in timestamps if t > now - 3600]
+        if len(timestamps) >= _FREE_SIGNUP_MAX_PER_HOUR:
+            return _error_response("rate_limited", "Too many signups. Try again later.", 429)
+        timestamps.append(now)
+        _FREE_SIGNUP_RATE[client_ip] = timestamps
 
     # Check if email already has a free key
     from .keys import load_api_keys
@@ -1874,6 +1942,8 @@ async def free_signup(request: Request):
         plan="free",
     )
     logger.info("Free API key created for %s", email)
+    if client_ip not in _INTERNAL_IPS:
+        usage_metrics.record_free_signup()
 
     try:
         send_welcome_email(email, api_key)
@@ -1892,7 +1962,7 @@ async def free_signup(request: Request):
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "event": "signup_attributed",
                 "plan": "free",
-                "email_hash": email[:3] + "***" if email else "",
+                "email_hash": _email_hash(email),
                 "source": attribution_source,
                 "utm_source": utm_source,
                 "utm_medium": utm_medium,
@@ -1915,20 +1985,22 @@ async def free_signup(request: Request):
                 "scan_id": "",
                 "source": f"web_{attribution_source}" if attribution_source else "web_direct",
                 "client_ip_hash": hashlib.sha256(client_ip.encode()).hexdigest()[:12],
-                "email_hash": email[:3] + "***" if email else "",
+                "email_hash": _email_hash(email),
             }) + "\n")
     except Exception:
         pass
 
-    return {
+    response = {
         "api_key": api_key,
         "plan": "free",
         "limit": f"{FREE_TIER_MONTHLY_LIMIT} proofs/month",
         "email": email,
         "message": "Your free API key is ready. It has also been sent to your email.",
-        "upgrade_url": "https://arkforge.tech/en/pro-signup.html?utm_source=free_signup_response",
-        "upgrade_cta": "Need more? Try Pro free for 14 days — 5,000 proofs/month, no charge until day 15.",
     }
+    if paid_plans_enabled():
+        response["upgrade_url"] = "https://arkforge.tech/en/pro-signup.html?utm_source=free_signup_response"
+        response["upgrade_cta"] = "Need more? Try Pro free for 14 days — 5,000 proofs/month, no charge until day 15."
+    return response
 
 
 # --- GET /register (inline CTA from MCP scan results) ---
@@ -2113,7 +2185,7 @@ async def mcp_register(request: Request):
                 "scan_id": scan_id[:32] if scan_id else "",
                 "source": source,
                 "client_ip_hash": hashlib.sha256(client_ip.encode()).hexdigest()[:12],
-                "email_hash": email[:3] + "***" if email else "",
+                "email_hash": _email_hash(email),
             }) + "\n")
     except Exception:
         pass
@@ -2124,7 +2196,7 @@ async def mcp_register(request: Request):
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "event": "signup_attributed",
                 "plan": "free",
-                "email_hash": email[:3] + "***" if email else "",
+                "email_hash": _email_hash(email),
                 "source": source,
                 "scan_id": scan_id[:32] if scan_id else "",
                 "client_ip_hash": hashlib.sha256(client_ip.encode()).hexdigest()[:12],
@@ -2133,15 +2205,20 @@ async def mcp_register(request: Request):
         pass
 
 
-    return {
+    if client_ip not in _INTERNAL_IPS:
+        usage_metrics.record_free_signup()
+
+    response = {
         "api_key": api_key,
         "plan": "free",
         "limit": f"{FREE_TIER_MONTHLY_LIMIT} proofs/month",
         "email": email,
         "message": "Your free API key is ready. It has also been sent to your email.",
-        "upgrade_url": "https://arkforge.tech/en/pro-signup.html?utm_source=mcp_register_response",
-        "upgrade_cta": "Need more? Try Pro free for 14 days — 5,000 proofs/month, no charge until day 15.",
     }
+    if paid_plans_enabled():
+        response["upgrade_url"] = "https://arkforge.tech/en/pro-signup.html?utm_source=mcp_register_response"
+        response["upgrade_cta"] = "Need more? Try Pro free for 14 days — 5,000 proofs/month, no charge until day 15."
+    return response
 
 
 # --- POST /api/mcp-scan-ping ---
@@ -2736,7 +2813,7 @@ def _process_stripe_event(event_type: str, data: dict, is_test: bool, event_id: 
                         "ts": datetime.now(timezone.utc).isoformat(),
                         "event": "checkout_completed",
                         "product": product or "free",
-                        "email_hash": customer_email[:3] + "***" if customer_email else "",
+                        "email_hash": _email_hash(customer_email),
                         "subscription_id": subscription_id,
                         "test_mode": is_test,
                         "is_external": _is_ext,
@@ -2748,7 +2825,7 @@ def _process_stripe_event(event_type: str, data: dict, is_test: bool, event_id: 
                         "ts": datetime.now(timezone.utc).isoformat(),
                         "event": "signup_attributed",
                         "plan": product.replace("trust_layer_", "").replace("scanner_", "").replace("_subscription", "") if product else "pro",
-                        "email_hash": customer_email[:3] + "***" if customer_email else "",
+                        "email_hash": _email_hash(customer_email),
                         "source": "stripe_checkout",
                         "utm_source": metadata.get("utm_source", ""),
                         "utm_medium": metadata.get("utm_medium", ""),
@@ -2763,7 +2840,7 @@ def _process_stripe_event(event_type: str, data: dict, is_test: bool, event_id: 
                             "ts": datetime.now(timezone.utc).isoformat(),
                             "event": "trial_to_paid",
                             "trial_key_ref": trial_key_ref,
-                            "email_hash": customer_email[:3] + "***" if customer_email else "",
+                            "email_hash": _email_hash(customer_email),
                             "product": product or "free",
                             "test_mode": is_test,
                             "utm_source": metadata.get("utm_source", ""),
@@ -2848,14 +2925,14 @@ def _process_stripe_event(event_type: str, data: dict, is_test: bool, event_id: 
             except Exception as _e:
                 logger.warning("Checkout abandoned email failed: %s", _e)
         elif _is_fake and customer_email:
-            logger.info("Skipped abandoned email for test/fake address (%s): %s", _fake_reason, customer_email[:3] + "***")
+            logger.info("Skipped abandoned email for test/fake address (%s): %s", _fake_reason, _email_hash(customer_email))
             try:
                 with open(CONVERSION_EVENTS_LOG, "a") as _cel:
                     _cel.write(json.dumps({
                         "ts": datetime.now(timezone.utc).isoformat(),
                         "event": "checkout_abandoned",
                         "plan": plan,
-                        "email_hash": customer_email[:3] + "***",
+                        "email_hash": _email_hash(customer_email),
                         "test_mode": is_test,
                         "is_external": metadata.get("is_external", "") == "true",
                         "source_type": metadata.get("source_type", "unknown"),
@@ -3104,6 +3181,15 @@ async def usage(
 
 @app.get("/v1/pricing")
 async def pricing():
+    body = _pricing_body()
+    if not paid_plans_enabled():
+        # Free mode: only the free plan is offered, with no upgrade call to action.
+        body["plans"] = {"free": body["plans"]["free"]}
+        body.pop("upgrade_cta", None)
+    return body
+
+
+def _pricing_body() -> dict:
     return {
         "plans": {
             "free": {

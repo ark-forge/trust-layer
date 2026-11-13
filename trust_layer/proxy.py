@@ -45,6 +45,7 @@ from .persistence import load_json, save_json
 from .rate_limit import check_rate_limit
 from .batch_anchor import add_proof as add_proof_to_batch
 from .email_notify import send_proof_email, send_low_credits_email, send_credits_exhausted_email
+from .free_tier_guard import GuardError, reserve_free_proof, release_free_proof, proof_email_allowed
 
 logger = logging.getLogger("trust_layer.proxy")
 
@@ -121,8 +122,13 @@ async def _post_proof_background(proof_id: str, proof_record: dict, chain_hash: 
         logger.warning("Batch queue failed for %s: %s", proof_id, e)
         _log_background_task(proof_id, "batch_queue", "failure", str(e))
 
-    # Email
-    if email:
+    # Email: capped per key and per day. The proof exists either way; a skipped mail
+    # (cap reached, or counter unreadable) never fails or delays it.
+    fingerprint = (proof_record.get("parties") or {}).get("buyer_fingerprint", "")
+    if email and not proof_email_allowed(fingerprint):
+        logger.info("Proof email skipped for %s: daily cap or counter", proof_id)
+        _log_background_task(proof_id, "email", "skipped", "daily_cap")
+    elif email:
         try:
             await asyncio.get_running_loop().run_in_executor(
                 None, send_proof_email, email, proof_id, proof_record)
@@ -554,7 +560,36 @@ def _notify_low_credits_if_needed(api_key: str, key_info: dict, balance: float):
         send_low_credits_email(email, api_key, balance, proofs_remaining)
 
 
-async def execute_proxy(
+async def execute_proxy(**kwargs) -> dict:
+    """Free-mode guards around the proxy flow (see _execute_proxy for the flow itself).
+
+    A free key's proof takes one slot of the global daily cap BEFORE anything is
+    written; the slot goes back if the proof is not stored (error, exception).
+    Paid keys are not counted and not paused. An idempotent replay writes nothing,
+    so it takes no slot.
+    """
+    api_key = kwargs.get("api_key") or ""
+    needs_slot = (
+        get_key_plan(api_key) == "free"
+        and _check_idempotency(api_key, kwargs.get("idempotency_key")) is None
+    )
+    if needs_slot:
+        try:
+            reserve_free_proof()
+        except GuardError as e:
+            raise ProxyError(e.code, e.message, e.status)
+    try:
+        result = await _execute_proxy(**kwargs)
+    except BaseException:
+        if needs_slot:
+            release_free_proof()
+        raise
+    if needs_slot and "error" in result and not (result.get("proof") or result["error"].get("proof_data")):
+        release_free_proof()
+    return result
+
+
+async def _execute_proxy(
     target: str,
     method: str,
     payload: dict,

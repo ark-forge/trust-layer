@@ -91,6 +91,16 @@ def _isolate_data(tmp_path, monkeypatch):
     monkeypatch.setattr(redis_mod, "_redis_client", None)
     monkeypatch.setattr(redis_mod, "_redis_checked", True)
 
+    # Free-mode guards fail closed without Redis (free writes refused): give every
+    # test a private fake Redis for the guard and metrics modules. Tests of the
+    # Redis-down case patch get_redis() to None explicitly.
+    import fakeredis
+    import trust_layer.free_tier_guard as guard_mod
+    import trust_layer.usage_metrics as metrics_mod
+    _guard_redis = fakeredis.FakeRedis(server=fakeredis.FakeServer(), decode_responses=True)
+    monkeypatch.setattr(guard_mod, "get_redis", lambda: _guard_redis)
+    monkeypatch.setattr(metrics_mod, "get_redis", lambda: _guard_redis)
+
     # Email isolation — la vault charge smtp.password dans os.environ même si
     # SETTINGS_ENV_PATH=/dev/null. On neutralise _send_email au niveau du module
     # pour éviter tout envoi SMTP réel (Resend) pendant les tests.
