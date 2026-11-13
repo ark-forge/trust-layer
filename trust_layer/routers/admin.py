@@ -1,17 +1,18 @@
 """Admin endpoints — smoke test lifecycle and batch anchoring (internal use only)."""
 import asyncio
 import logging
+import os
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from ..config import INTERNAL_SECRET
-from ..usage_metrics import MetricsUnavailableError, snapshot
 from ..keys import (
     create_api_key,
     deactivate_key_by_ref,
     deactivate_smoke_keys,
 )
+from ..usage_metrics import MetricsUnavailableError, snapshot
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -107,6 +108,12 @@ async def usage_metrics(request: Request, days: int = 7) -> JSONResponse:
     if not _authorized(request):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     try:
-        return JSONResponse(snapshot(days))
+        data = snapshot(days)
     except MetricsUnavailableError:
         return JSONResponse({"error": "metrics_unavailable"}, status_code=503)
+    # Without the salt no active-key sketch is ever written: say so, do not show a zero.
+    data["salt_configured"] = bool(os.environ.get("TL_METRICS_SALT"))
+    if not data["salt_configured"]:
+        for row in data["days"]:
+            row["active_keys"] = None
+    return JSONResponse(data)

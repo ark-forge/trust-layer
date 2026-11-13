@@ -245,7 +245,7 @@ from .demo import check_demo_rate_limit, build_demo_proof, _PAYLOAD_MAX_BYTES as
 from .templates import render_proof_page
 from .rate_limit import get_usage, get_daily_limit
 from .redis_client import get_redis
-from .free_tier_guard import paid_plans_enabled, hash_identifier, signup_count
+from .free_tier_guard import paid_plans_enabled, hash_identifier, signup_count, writes_paused
 from . import usage_metrics
 from .email_notify import (
     send_welcome_email,
@@ -629,6 +629,8 @@ async def lifespan(app):
     # Startup — first: no way to sign, no service (moved from import time, see config.init_signer)
     from . import config as _cfg
     _cfg.init_signer()
+    if not os.environ.get("TL_METRICS_SALT"):
+        logger.warning("TL_METRICS_SALT is not set: usage metrics and hashed identifiers are disabled")
     # Startup — prune stale webhook idempotency entries (>7 days old)
     _prune_webhook_idempotency()
     # Startup — restore abuse detection sliding window from JSONL
@@ -667,6 +669,8 @@ app = FastAPI(
 )
 
 app.add_middleware(HeadToGetMiddleware)
+# Inside CORS, so a 410 still carries the CORS headers a browser needs to read it.
+app.add_middleware(PaidPlansGateMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ALLOWED_ORIGINS,
@@ -677,7 +681,6 @@ app.add_middleware(
 
 # Middleware always active — _is_failover_mode() checks state file dynamically
 app.add_middleware(FailoverReadOnlyMiddleware)
-app.add_middleware(PaidPlansGateMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 
 # --- Feature routers (v1.4+) ---
@@ -839,6 +842,10 @@ async def demo_endpoint(request: Request):
     """
     client_ip = request.headers.get("x-real-ip") or (request.client.host if request.client else "unknown")
 
+    if writes_paused():
+        return JSONResponse(status_code=503, content={"error": "service_degraded",
+                            "detail": "Proof creation is temporarily paused."})
+
     is_limited, retry_after = check_demo_rate_limit(client_ip)
     if is_limited:
         return JSONResponse(
@@ -874,7 +881,7 @@ async def demo_endpoint(request: Request):
     )
     _track_task(task)
 
-    logger.info("Demo proof generated: %s from IP %s", proof_id, client_ip)
+    logger.info("Demo proof generated: %s from IP %s", proof_id, _ip_id(client_ip) or "-")
 
     return JSONResponse(status_code=200, content={
         "proof_id": proof_id,
@@ -1910,7 +1917,9 @@ async def free_signup(request: Request):
     )
     # Shared between nodes through Redis; the per-node memory window is the fallback
     # only when Redis cannot answer (free proofs are refused in that case anyway).
-    shared = signup_count(_ip_id(client_ip) or hashlib.sha256(client_ip.encode()).hexdigest())
+    # No salt, no Redis key: an unsalted IP digest is reversible, so the node-local window serves.
+    ip_id = _ip_id(client_ip)
+    shared = signup_count(ip_id) if ip_id else None
     if shared is not None:
         if shared > _FREE_SIGNUP_MAX_PER_HOUR:
             return _error_response("rate_limited", "Too many signups. Try again later.", 429)
@@ -3182,7 +3191,6 @@ async def pricing():
     if not paid_plans_enabled():
         # Free mode: only the free plan is offered, with no upgrade call to action.
         body["plans"] = {"free": body["plans"]["free"]}
-        body.pop("upgrade_cta", None)
     return body
 
 

@@ -96,11 +96,26 @@ def _refuse_unavailable(reason: str) -> GuardError:
     )
 
 
-def reserve_free_proof() -> None:
+def writes_paused() -> bool:
+    """True when the kill switch is on (environment variable or Redis key)."""
+    if _truthy(os.environ.get(PAUSED_REDIS_KEY, "")):
+        return True
+    r = get_redis()
+    if r is None:
+        return False
+    try:
+        return _truthy(r.get(PAUSED_REDIS_KEY) or "")
+    except Exception:
+        return False
+
+
+def reserve_free_proof() -> str:
     """Count one free proof BEFORE the write; raise GuardError when it must not happen.
 
     One INCR (inside a MULTI with its EXPIRE) per proof, so two concurrent requests
-    at cap - 1 cannot both pass. The caller releases the slot if the write fails.
+    at cap - 1 cannot both pass. Returns the counter key actually incremented: the
+    caller hands it back to release_free_proof so a release after midnight UTC hits
+    the same day's counter.
     """
     if _truthy(os.environ.get(PAUSED_REDIS_KEY, "")):
         raise _refuse_unavailable("writes paused")
@@ -115,8 +130,9 @@ def reserve_free_proof() -> None:
         if _truthy(r.get(PAUSED_REDIS_KEY) or ""):
             raise _refuse_unavailable("writes paused")
         pipe = r.pipeline(transaction=True)
-        pipe.incr(_cap_key())
-        pipe.expire(_cap_key(), _DAY_TTL)
+        cap_key = _cap_key()
+        pipe.incr(cap_key)
+        pipe.expire(cap_key, _DAY_TTL)
         count = int(pipe.execute()[0])
     except GuardError:
         raise
@@ -124,21 +140,25 @@ def reserve_free_proof() -> None:
         logger.error("Free cap counter failed, free write refused: %s", e)
         raise _refuse_unavailable("counter unavailable") from e
     if count > cap:
-        release_free_proof()
+        release_free_proof(cap_key)
         raise GuardError(
             "free_daily_cap_reached",
             "The global daily limit of free proofs is reached. Retry tomorrow (UTC).",
             429,
         )
+    return cap_key
 
 
-def release_free_proof() -> None:
-    """Give back a slot taken by reserve_free_proof (write failed or refused)."""
+def release_free_proof(cap_key: str) -> None:
+    """Give back a slot taken by reserve_free_proof (nothing was stored)."""
     r = get_redis()
-    if r is None:
+    if r is None or not cap_key:
         return
     try:
-        r.decr(_cap_key())
+        pipe = r.pipeline(transaction=True)
+        pipe.decr(cap_key)
+        pipe.expire(cap_key, _DAY_TTL)
+        pipe.execute()
     except Exception as e:
         logger.error("Free cap release failed: %s", e)
 

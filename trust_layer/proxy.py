@@ -1,6 +1,7 @@
 """Core proxy logic — charge, forward, prove."""
 
 import asyncio
+import contextvars
 import hashlib
 import ipaddress
 import logging
@@ -125,7 +126,8 @@ async def _post_proof_background(proof_id: str, proof_record: dict, chain_hash: 
     # Email: capped per key and per day. The proof exists either way; a skipped mail
     # (cap reached, or counter unreadable) never fails or delays it.
     fingerprint = (proof_record.get("parties") or {}).get("buyer_fingerprint", "")
-    if email and not proof_email_allowed(fingerprint):
+    # Free keys only: paid keys keep their mails whatever the counter says.
+    if email and plan == "free" and not proof_email_allowed(fingerprint):
         logger.info("Proof email skipped for %s: daily cap or counter", proof_id)
         _log_background_task(proof_id, "email", "skipped", "daily_cap")
     elif email:
@@ -560,6 +562,9 @@ def _notify_low_credits_if_needed(api_key: str, key_info: dict, balance: float):
         send_low_credits_email(email, api_key, balance, proofs_remaining)
 
 
+_proof_stored: contextvars.ContextVar[bool] = contextvars.ContextVar("proof_stored", default=False)
+
+
 async def execute_proxy(**kwargs) -> dict:
     """Free-mode guards around the proxy flow (see _execute_proxy for the flow itself).
 
@@ -573,19 +578,23 @@ async def execute_proxy(**kwargs) -> dict:
         get_key_plan(api_key) == "free"
         and _check_idempotency(api_key, kwargs.get("idempotency_key")) is None
     )
+    slot = ""
     if needs_slot:
         try:
-            reserve_free_proof()
+            slot = reserve_free_proof()
         except GuardError as e:
-            raise ProxyError(e.code, e.message, e.status)
+            raise ProxyError(e.code, e.message, e.status) from e
+    _proof_stored.set(False)
     try:
         result = await _execute_proxy(**kwargs)
     except BaseException:
-        if needs_slot:
-            release_free_proof()
+        # A proof already stored keeps its slot: only the code after the write failed.
+        if slot and not _proof_stored.get():
+            release_free_proof(slot)
         raise
-    if needs_slot and "error" in result and not (result.get("proof") or result["error"].get("proof_data")):
-        release_free_proof()
+    if slot and not _proof_stored.get() and "error" in result \
+            and not (result.get("proof") or result["error"].get("proof_data")):
+        release_free_proof(slot)
     return result
 
 
@@ -910,6 +919,7 @@ async def _execute_proxy(
 
     # 10. Store proof
     store_proof(proof_id, proof_record)
+    _proof_stored.set(True)
 
     # 11. Fire-and-forget background tasks (OTS, Archive.org, email)
     email = key_info.get("email", "")

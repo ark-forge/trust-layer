@@ -4,6 +4,7 @@ Every guard has a refusal test that checks the absent effect (nothing stored,
 nothing sent, nothing charged), not only the status code.
 """
 
+import contextlib
 import json
 import threading
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -173,10 +174,10 @@ def test_paid_key_passes_when_free_cap_is_reached(client, free_key, pro_key, mon
 def test_refused_proof_does_not_keep_a_slot(guard_redis, monkeypatch):
     from trust_layer.free_tier_guard import GuardError, release_free_proof, reserve_free_proof
     monkeypatch.setenv("TL_FREE_DAILY_GLOBAL_CAP", "1")
-    reserve_free_proof()
+    slot = reserve_free_proof()
     with pytest.raises(GuardError):
         reserve_free_proof()
-    release_free_proof()
+    release_free_proof(slot)
     reserve_free_proof()  # the slot freed by the release is usable, the refused one left no trace
 
 
@@ -303,7 +304,7 @@ async def test_email_n_plus_1_of_the_day_is_not_sent_but_proof_is_created(monkey
     monkeypatch.setattr(proxy_mod, "add_proof_to_batch", lambda *a, **k: {"batch_id": "b"})
     record = {"parties": {"buyer_fingerprint": "fp_a"}}
     for n in range(3):
-        await proxy_mod._post_proof_background(f"prf_{n}", record, "h", "https://v", "a@arkforge-test.dev")
+        await proxy_mod._post_proof_background(f"prf_{n}", record, "h", "https://v", "a@arkforge-test.dev", "free")
     assert sent == ["prf_0", "prf_1"]
 
 
@@ -316,7 +317,7 @@ async def test_email_cap_is_per_key(monkeypatch, guard_redis):
     monkeypatch.setattr(proxy_mod, "add_proof_to_batch", lambda *a, **k: {"batch_id": "b"})
     for fp in ("fp_a", "fp_b"):
         await proxy_mod._post_proof_background(
-            f"prf_{fp}", {"parties": {"buyer_fingerprint": fp}}, "h", "https://v", "a@arkforge-test.dev")
+            f"prf_{fp}", {"parties": {"buyer_fingerprint": fp}}, "h", "https://v", "a@arkforge-test.dev", "free")
     assert sent == ["prf_fp_a", "prf_fp_b"]
 
 
@@ -329,7 +330,7 @@ async def test_email_not_sent_when_redis_cannot_decide(monkeypatch):
     monkeypatch.setattr(proxy_mod, "send_proof_email", lambda email, pid, rec: sent.append(pid))
     monkeypatch.setattr(proxy_mod, "add_proof_to_batch", lambda *a, **k: {"batch_id": "b"})
     await proxy_mod._post_proof_background(
-        "prf_x", {"parties": {"buyer_fingerprint": "fp_a"}}, "h", "https://v", "a@arkforge-test.dev")
+        "prf_x", {"parties": {"buyer_fingerprint": "fp_a"}}, "h", "https://v", "a@arkforge-test.dev", "free")
     assert sent == []
 
 
@@ -431,7 +432,7 @@ def test_aggregate_exposes_totals_only_no_per_identifier_dimension(client, free_
     body = _metrics(client, monkeypatch).json()
     allowed = {"date", "free_keys_created", "active_keys", "proofs", "external_verifications"}
     assert all(set(row) == allowed for row in body["days"])
-    assert set(body) == {"days"}
+    assert set(body) == {"days", "salt_configured"}
 
 
 def test_metrics_endpoint_refuses_without_internal_secret(client, monkeypatch):
@@ -518,3 +519,76 @@ def test_metrics_endpoint_answers_503_when_counters_cannot_be_read(client, monke
     import trust_layer.usage_metrics as metrics_mod
     monkeypatch.setattr(metrics_mod, "get_redis", lambda: None)
     assert _metrics(client, monkeypatch).status_code == 503
+
+
+# --- Review round 1 ---
+
+def test_no_salt_no_unsalted_ip_digest_in_any_redis_key(client, monkeypatch, guard_redis):
+    import hashlib
+    monkeypatch.delenv("TL_METRICS_SALT", raising=False)
+    ip = "203.0.113.7"
+    client.post("/api/register", json={"email": "nosalt@arkforge-test.dev"}, headers={"x-real-ip": ip})
+    digest = hashlib.sha256(ip.encode()).hexdigest()
+    keys = guard_redis.keys("*")
+    assert not any(digest in k or ip in k for k in keys)
+    assert not any(k.startswith("tl:signup_ip:") for k in keys)
+
+
+def test_metrics_without_salt_says_so_instead_of_zero(client, monkeypatch):
+    monkeypatch.delenv("TL_METRICS_SALT", raising=False)
+    r = _metrics(client, monkeypatch)
+    assert r.json()["salt_configured"] is False
+    assert r.json()["days"][-1]["active_keys"] is None
+
+
+@pytest.mark.asyncio
+async def test_paid_key_email_is_not_capped_even_without_redis(monkeypatch):
+    import trust_layer.free_tier_guard as guard_mod
+    from trust_layer import proxy as proxy_mod
+    monkeypatch.setattr(guard_mod, "get_redis", lambda: None)
+    sent = []
+    monkeypatch.setattr(proxy_mod, "send_proof_email", lambda email, pid, rec: sent.append(pid))
+    monkeypatch.setattr(proxy_mod, "add_proof_to_batch", lambda *a, **k: {"batch_id": "b"})
+    await proxy_mod._post_proof_background(
+        "prf_p", {"parties": {"buyer_fingerprint": "fp_p"}}, "h", "https://v", "a@arkforge-test.dev", "pro")
+    assert sent == ["prf_p"]
+
+
+def test_release_hits_the_day_of_the_reservation(guard_redis):
+    from trust_layer.free_tier_guard import release_free_proof
+    release_free_proof("tl:free_cap:19990101")
+    # Never creates a day counter out of nothing but the one it was given, with a TTL.
+    assert guard_redis.ttl("tl:free_cap:19990101") > 0
+
+
+def test_failure_after_the_write_keeps_the_slot(client, free_key, monkeypatch, guard_redis):
+    from trust_layer import proxy as proxy_mod
+    from trust_layer.free_tier_guard import _cap_key
+    monkeypatch.setattr(proxy_mod, "_cache_idempotency",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("disk")), raising=False)
+    monkeypatch.setattr(proxy_mod, "_update_agent_profile",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("disk")), raising=False)
+    with contextlib.suppress(Exception):
+        _prove(client, free_key, {"X-Idempotency-Key": "idem-after-write"})
+    assert guard_redis.get(_cap_key()) == "1"
+
+
+def test_idempotent_replay_takes_no_slot(client, free_key, guard_redis):
+    from trust_layer.free_tier_guard import _cap_key
+    h = {"X-Idempotency-Key": "idem-replay-1"}
+    assert _prove(client, free_key, h).status_code == 200
+    assert _prove(client, free_key, h).status_code == 200
+    assert guard_redis.get(_cap_key()) == "1"
+
+
+def test_demo_obeys_the_kill_switch(client, monkeypatch):
+    monkeypatch.setenv("TL_WRITES_PAUSED", "true")
+    r = client.post("/v1/demo", json={"target": "https://example.com", "payload": {}})
+    assert r.status_code == 503
+
+
+def test_410_carries_cors_headers(client, monkeypatch):
+    monkeypatch.setenv("TL_PAID_PLANS_ENABLED", "false")
+    r = client.post("/create-checkout-session", json={}, headers={"Origin": "https://arkforge.tech"})
+    assert r.status_code == 410
+    assert "access-control-allow-origin" in r.headers
