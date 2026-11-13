@@ -44,6 +44,25 @@ findings = []
 # create test key" — a gate that cannot reach the service measures nothing.
 USER_AGENT = "ArkForge-SecuritySmokeTest/1.0"
 
+DEPLOY_HOST_SETTINGS = "/opt/claude-ceo/config/settings.env"
+
+
+def _settings_secret() -> str:
+    """Internal secret from the deploy host's settings file.
+
+    During a release the deploy script that runs is the previous version (it is only
+    replaced once the deploy is done), so it cannot be relied on to pass the secret
+    in the environment.
+    """
+    try:
+        with open(DEPLOY_HOST_SETTINGS) as fh:
+            for line in fh:
+                if line.startswith("TRUST_LAYER_INTERNAL_SECRET="):
+                    return line.split("=", 1)[1].strip().strip("\"'")
+    except OSError:
+        pass
+    return ""
+
 
 def _request(method: str, url: str, body: Any = None, headers: dict | None = None,
              expected_status: int | None = None, label: str = "") -> tuple[int, dict]:
@@ -109,7 +128,7 @@ def run(base: str, existing_key: str = ""):
     else:
         # free-signup no longer returns a key (address confirmation by email): take an
         # ephemeral key from the admin smoke setup, swept by the smoke teardown.
-        internal_secret = os.environ.get("TRUST_LAYER_INTERNAL_SECRET", "")
+        internal_secret = os.environ.get("TRUST_LAYER_INTERNAL_SECRET", "") or _settings_secret()
         s, r = _request("POST", f"{base}/v1/admin/smoke/setup", body={},
                         headers={"X-Internal-Secret": internal_secret})
         free_key = r.get("free_key", "")
