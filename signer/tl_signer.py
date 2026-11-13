@@ -186,7 +186,7 @@ class Signer:
         protected = _cbor({
             1: COSE_ALG_ED25519,
             3: COSE_CONTENT_TYPE,
-            4: f"{self.did}#{self.kid}".encode("utf-8"),
+            4: f"{self.did}#{self.kid}".encode(),
             15: {1: self.did, 2: f"sha256:{chain_hash}"},  # CWT claims iss, sub (RFC 9597)
         })
         payload = bytes.fromhex(chain_hash)

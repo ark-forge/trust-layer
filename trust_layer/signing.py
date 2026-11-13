@@ -86,6 +86,7 @@ class LocalSigner:
     @property
     def rekor_public_pem(self) -> str:
         from cryptography.hazmat.primitives import serialization
+
         from .rekor import _get_or_create_rekor_ec_key
         return _get_or_create_rekor_ec_key().public_key().public_bytes(
             serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo,
@@ -110,7 +111,7 @@ class LocalSigner:
         protected = _cbor({
             1: COSE_ALG_ED25519,
             3: COSE_CONTENT_TYPE,
-            4: f"{self.did}#{self.kid}".encode("utf-8"),
+            4: f"{self.did}#{self.kid}".encode(),
             15: {1: self.did, 2: f"sha256:{chain_hash}"},
         })
         payload = bytes.fromhex(chain_hash)
@@ -120,6 +121,7 @@ class LocalSigner:
     def sign_rekor(self, chain_hash: str) -> str:
         from cryptography.hazmat.primitives import hashes
         from cryptography.hazmat.primitives.asymmetric import ec
+
         from .rekor import _get_or_create_rekor_ec_key
         der = _get_or_create_rekor_ec_key().sign(chain_hash.encode("utf-8"),
                                                  ec.ECDSA(hashes.SHA256()))
