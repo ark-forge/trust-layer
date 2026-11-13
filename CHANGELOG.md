@@ -8,6 +8,8 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.14.0] — 2026-11-13
+
 ### Changed (breaking)
 - `POST /api/register` and `POST /v1/keys/free-signup` never return `api_key` any more. Both answer
   `202 {"status":"pending_confirmation"}`, identical for a new and for an already registered address (the 409
@@ -19,6 +21,8 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - The 202 response carries no `upgrade_cta`.
 
 ### Added
+- `tl-signer` operation `sign_cose`: COSE_Sign1 (RFC 9052) over a proof's chain hash, signer side only (no route, no export yet;
+  first step of the SCITT export). Same Ed25519 key as proofs, header built by the signer, caller supplies the chain hash only.
 - `GET /v1/register/confirm` (page that reads the token from the URL fragment `#token=` and consumes nothing) and
   `POST /v1/register/confirm {"token"}` (single use, 24 h, consumed atomically; a wrong, used or expired token is
   a plain 400; limited to 20 attempts per IP per hour). The POST answers `{"status":"confirmed"}`.
