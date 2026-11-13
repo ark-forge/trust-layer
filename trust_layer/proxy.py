@@ -1,50 +1,50 @@
 """Core proxy logic — charge, forward, prove."""
 
 import asyncio
+import contextvars
 import hashlib
 import ipaddress
 import logging
 import socket
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 from urllib.parse import urlparse
 
 import httpx
 
-from .config import (
-    SUPPORTED_CURRENCIES,
-    MIN_AMOUNT,
-    MAX_AMOUNT,
-    PROOF_PRICE,
-    OVERAGE_PRICES,
-    PRO_OVERAGE_PRICE,
-    PROXY_TIMEOUT_SECONDS,
-    MAX_RESPONSE_STORE_BYTES,
+from .batch_anchor import add_proof as add_proof_to_batch
+from .config import (  # noqa: F401 (INTERNAL_SECRET, CHALLENGE_SECRET: looked up by name, see _SERVICE_SECRETS)
+    AGENTS_DIR,
+    BACKGROUND_TASKS_LOG,
+    CHALLENGE_HOSTS,
+    CHALLENGE_KEYS,
+    CHALLENGE_OPEN,
+    CHALLENGE_SECRET,
     IDEMPOTENCY_DIR,
     IDEMPOTENCY_TTL_HOURS,
-    TRUST_LAYER_BASE_URL,
-    AGENTS_DIR,
-    SERVICES_DIR,
-    BACKGROUND_TASKS_LOG,
     INTERNAL_SECRET,
+    MAX_AMOUNT,
+    MAX_RESPONSE_STORE_BYTES,
+    MIN_AMOUNT,
+    OVERAGE_PRICES,
+    PRO_OVERAGE_PRICE,
+    PROOF_PRICE,
+    PROXY_TIMEOUT_SECONDS,
+    SERVICES_DIR,
+    SUPPORTED_CURRENCIES,
+    TRUST_LAYER_BASE_URL,
     TRUSTED_INTERNAL_HOSTS,
-    CHALLENGE_SECRET,
-    CHALLENGE_HOSTS,
-    CHALLENGE_OPEN,
-    CHALLENGE_KEYS,
     get_signer,
 )
-from .keys import validate_api_key, get_key_plan, _KEYS_LOCK
+from .credits import InsufficientCredits, debit_credits, refund_credits
+from .email_notify import send_credits_exhausted_email, send_low_credits_email, send_proof_email
+from .free_tier_guard import GuardError, proof_email_allowed, release_free_proof, reserve_free_proof
+from .keys import _KEYS_LOCK, get_key_plan, validate_api_key
 from .payments.base import ChargeResult
-from .credits import debit_credits, refund_credits, InsufficientCredits
-from .signing import SignerError
-from .rate_limit import rollback_overage
-from .proofs import sha256_hex, generate_proof_id, generate_proof, store_proof, strip_private
-from .receipt import fetch_receipt
 from .persistence import load_json, save_json
-from .rate_limit import check_rate_limit
-from .batch_anchor import add_proof as add_proof_to_batch
-from .email_notify import send_proof_email, send_low_credits_email, send_credits_exhausted_email
+from .proofs import generate_proof, generate_proof_id, sha256_hex, store_proof, strip_private
+from .rate_limit import check_rate_limit, rollback_overage
+from .receipt import fetch_receipt
+from .signing import SignerError
 
 logger = logging.getLogger("trust_layer.proxy")
 
@@ -91,7 +91,7 @@ def _log_background_task(proof_id: str, task: str, status: str, detail: str = ""
     """Append one line to background_tasks_log.jsonl for monitoring."""
     import json
     entry = {
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now(UTC).isoformat(),
         "proof_id": proof_id,
         "task": task,
         "status": status,
@@ -121,8 +121,14 @@ async def _post_proof_background(proof_id: str, proof_record: dict, chain_hash: 
         logger.warning("Batch queue failed for %s: %s", proof_id, e)
         _log_background_task(proof_id, "batch_queue", "failure", str(e))
 
-    # Email
-    if email:
+    # Email: capped per key and per day. The proof exists either way; a skipped mail
+    # (cap reached, or counter unreadable) never fails or delays it.
+    fingerprint = (proof_record.get("parties") or {}).get("buyer_fingerprint", "")
+    # Free keys only: paid keys keep their mails whatever the counter says.
+    if email and plan == "free" and not proof_email_allowed(fingerprint):
+        logger.info("Proof email skipped for %s: daily cap or counter", proof_id)
+        _log_background_task(proof_id, "email", "skipped", "daily_cap")
+    elif email:
         try:
             await asyncio.get_running_loop().run_in_executor(
                 None, send_proof_email, email, proof_id, proof_record)
@@ -279,8 +285,8 @@ async def _check_no_private_dns(hostname: str) -> None:
     loop = asyncio.get_running_loop()
     try:
         results = await loop.run_in_executor(None, socket.getaddrinfo, hostname, None)
-    except OSError:
-        raise ProxyError("invalid_target", f"Could not resolve hostname '{hostname}'", 400)
+    except OSError as e:
+        raise ProxyError("invalid_target", f"Could not resolve hostname '{hostname}'", 400) from e
     for _family, _type, _proto, _canonname, sockaddr in results:
         ip_str = sockaddr[0]
         try:
@@ -294,7 +300,7 @@ async def _check_no_private_dns(hostname: str) -> None:
 
 class ProxyError(Exception):
     """Structured proxy error."""
-    def __init__(self, code: str, message: str, status: int, proof: Optional[dict] = None):
+    def __init__(self, code: str, message: str, status: int, proof: dict | None = None):
         self.code = code
         self.message = message
         self.status = status
@@ -327,7 +333,7 @@ def validate_target_url(target: str) -> str:
         addr = ipaddress.ip_address(hostname)
         for network in _PRIVATE_NETWORKS:
             if addr in network:
-                raise ProxyError("invalid_target", f"Target resolves to private IP range", 400)
+                raise ProxyError("invalid_target", "Target resolves to private IP range", 400)
     except ValueError:
         # hostname is a domain name, not an IP — OK
         pass
@@ -367,7 +373,7 @@ def _idempotency_path(api_key: str, key: str):
     return IDEMPOTENCY_DIR / f"{hashed}.json"
 
 
-def _check_idempotency(api_key: str, key: Optional[str]) -> Optional[dict]:
+def _check_idempotency(api_key: str, key: str | None) -> dict | None:
     """Check idempotency cache. Returns cached response or None."""
     if not key:
         return None
@@ -380,7 +386,7 @@ def _check_idempotency(api_key: str, key: Optional[str]) -> Optional[dict]:
     if created:
         try:
             created_dt = datetime.fromisoformat(created)
-            age_hours = (datetime.now(timezone.utc) - created_dt).total_seconds() / 3600
+            age_hours = (datetime.now(UTC) - created_dt).total_seconds() / 3600
             if age_hours > IDEMPOTENCY_TTL_HOURS:
                 path.unlink(missing_ok=True)
                 return None
@@ -392,7 +398,7 @@ def _check_idempotency(api_key: str, key: Optional[str]) -> Optional[dict]:
 _MAX_IDEMPOTENCY_BYTES = 512 * 1024  # 512 KB
 
 
-def _cache_idempotency(api_key: str, key: Optional[str], response: dict):
+def _cache_idempotency(api_key: str, key: str | None, response: dict):
     """Cache response for idempotency key. Skipped if response exceeds 512 KB."""
     if not key:
         return
@@ -406,18 +412,18 @@ def _cache_idempotency(api_key: str, key: Optional[str], response: dict):
         return
     path = _idempotency_path(api_key, key)
     save_json(path, {
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "response": response,
     })
 
 
 def _update_agent_profile(api_key: str, amount: float, currency: str, target_domain: str, succeeded: bool,
-                          agent_identity: Optional[str] = None, agent_version: Optional[str] = None):
+                          agent_identity: str | None = None, agent_version: str | None = None):
     """Update shadow profile for the agent (buyer)."""
     key_prefix = api_key[:16]
     path = AGENTS_DIR / f"{key_prefix}.json"
     profile = load_json(path, {
-        "first_seen": datetime.now(timezone.utc).isoformat(),
+        "first_seen": datetime.now(UTC).isoformat(),
         "transactions_total": 0,
         "transactions_succeeded": 0,
         "amount_total_eur": 0.0,
@@ -433,11 +439,11 @@ def _update_agent_profile(api_key: str, amount: float, currency: str, target_dom
     if target_domain not in services:
         services.append(target_domain)
     profile["services_used"] = services
-    profile["last_transaction"] = datetime.now(timezone.utc).isoformat()
+    profile["last_transaction"] = datetime.now(UTC).isoformat()
     # Rolling 30-day activity index — avoids O(N) proof scan for active_days_30d
     from datetime import timedelta
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    cutoff_date = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
+    cutoff_date = (datetime.now(UTC) - timedelta(days=30)).strftime("%Y-%m-%d")
     dates = profile.get("proof_dates_30d", [])
     if today not in dates:
         dates.append(today)
@@ -475,7 +481,7 @@ def _update_service_profile(target_domain: str, response_time_ms: float, succeed
     path = SERVICES_DIR / f"{domain_hash}.json"
     profile = load_json(path, {
         "domain": target_domain,
-        "first_seen": datetime.now(timezone.utc).isoformat(),
+        "first_seen": datetime.now(UTC).isoformat(),
         "transactions_total": 0,
         "transactions_succeeded": 0,
         "avg_response_time_ms": 0.0,
@@ -492,13 +498,14 @@ def _update_service_profile(target_domain: str, response_time_ms: float, succeed
     profile["transactions_succeeded"] = success_count
     profile["avg_response_time_ms"] = round(new_avg, 1)
     profile["success_rate"] = round(success_count / total, 3) if total > 0 else 1.0
-    profile["last_transaction"] = datetime.now(timezone.utc).isoformat()
+    profile["last_transaction"] = datetime.now(UTC).isoformat()
     save_json(path, profile)
 
 
 def _notify_credits_exhausted(api_key: str, key_info: dict):
     """Send exhausted email once per 24h to avoid spamming."""
     from datetime import timedelta
+
     from .keys import load_api_keys, save_api_keys
     email = key_info.get("email")
     if not email:
@@ -511,12 +518,12 @@ def _notify_credits_exhausted(api_key: str, key_info: dict):
         if last:
             try:
                 last_dt = datetime.fromisoformat(last)
-                if datetime.now(timezone.utc) - last_dt < timedelta(hours=24):
+                if datetime.now(UTC) - last_dt < timedelta(hours=24):
                     return  # Already notified in the last 24h
             except (ValueError, AttributeError):
                 pass
         should_notify = True
-        info["credits_exhausted_alert_sent_at"] = datetime.now(timezone.utc).isoformat()
+        info["credits_exhausted_alert_sent_at"] = datetime.now(UTC).isoformat()
         keys[api_key] = info
         save_api_keys(keys)
     if should_notify:
@@ -526,6 +533,7 @@ def _notify_credits_exhausted(api_key: str, key_info: dict):
 def _notify_low_credits_if_needed(api_key: str, key_info: dict, balance: float):
     """Send low-credits warning when balance drops below 10 proofs. Once per 24h."""
     from datetime import timedelta
+
     from .keys import load_api_keys, save_api_keys
     low_threshold = round(PROOF_PRICE * 10, 2)  # 1.00 EUR = 10 proofs
     if balance > low_threshold:
@@ -542,19 +550,55 @@ def _notify_low_credits_if_needed(api_key: str, key_info: dict, balance: float):
         if last:
             try:
                 last_dt = datetime.fromisoformat(last)
-                if datetime.now(timezone.utc) - last_dt < timedelta(hours=24):
+                if datetime.now(UTC) - last_dt < timedelta(hours=24):
                     return
             except (ValueError, AttributeError):
                 pass
         should_notify = True
-        info["low_credits_alert_sent_at"] = datetime.now(timezone.utc).isoformat()
+        info["low_credits_alert_sent_at"] = datetime.now(UTC).isoformat()
         keys[api_key] = info
         save_api_keys(keys)
     if should_notify:
         send_low_credits_email(email, api_key, balance, proofs_remaining)
 
 
-async def execute_proxy(
+_proof_stored: contextvars.ContextVar[bool] = contextvars.ContextVar("proof_stored", default=False)
+
+
+async def execute_proxy(**kwargs) -> dict:
+    """Free-mode guards around the proxy flow (see _execute_proxy for the flow itself).
+
+    A free key's proof takes one slot of the global daily cap BEFORE anything is
+    written; the slot goes back if the proof is not stored (error, exception).
+    Paid keys are not counted and not paused. An idempotent replay writes nothing,
+    so it takes no slot.
+    """
+    api_key = kwargs.get("api_key") or ""
+    needs_slot = (
+        get_key_plan(api_key) == "free"
+        and _check_idempotency(api_key, kwargs.get("idempotency_key")) is None
+    )
+    slot = ""
+    if needs_slot:
+        try:
+            slot = reserve_free_proof()
+        except GuardError as e:
+            raise ProxyError(e.code, e.message, e.status) from e
+    _proof_stored.set(False)
+    try:
+        result = await _execute_proxy(**kwargs)
+    except BaseException:
+        # A proof already stored keeps its slot: only the code after the write failed.
+        if slot and not _proof_stored.get():
+            release_free_proof(slot)
+        raise
+    if slot and not _proof_stored.get() and "error" in result \
+            and not (result.get("proof") or result["error"].get("proof_data")):
+        release_free_proof(slot)
+    return result
+
+
+async def _execute_proxy(
     target: str,
     method: str,
     payload: dict,
@@ -562,11 +606,11 @@ async def execute_proxy(
     currency: str,
     api_key: str,
     description: str = "",
-    idempotency_key: Optional[str] = None,
-    agent_identity: Optional[str] = None,
-    agent_version: Optional[str] = None,
-    provider_payment: Optional[dict] = None,
-    extra_headers: Optional[dict] = None,
+    idempotency_key: str | None = None,
+    agent_identity: str | None = None,
+    agent_version: str | None = None,
+    provider_payment: dict | None = None,
+    extra_headers: dict | None = None,
 ) -> dict:
     """Execute the full proxy flow: validate → charge → forward → prove."""
 
@@ -578,8 +622,8 @@ async def execute_proxy(
     # DID override: if the key has a cryptographically verified DID, it takes
     # precedence over any X-Agent-Identity header declared by the caller.
     verified_did = key_info.get("verified_did")
-    agent_identity_verified: Optional[bool] = None
-    did_resolution_status: Optional[str] = None
+    agent_identity_verified: bool | None = None
+    did_resolution_status: str | None = None
     if verified_did:
         agent_identity = verified_did
         agent_identity_verified = True
@@ -613,9 +657,9 @@ async def execute_proxy(
     if signer is not None:
         try:
             signer.ping()
-        except SignerError:
+        except SignerError as e:
             logger.error("tl-signer unreachable, request refused before charge")
-            raise ProxyError("signing_unavailable", "Proof signing is temporarily unavailable. Nothing was charged.", 503)
+            raise ProxyError("signing_unavailable", "Proof signing is temporarily unavailable. Nothing was charged.", 503) from e
 
     # 3. Check rate limit (must be before amount calculation: overage status affects price)
     allowed, remaining, is_overage, block_reason = check_rate_limit(api_key)
@@ -656,7 +700,7 @@ async def execute_proxy(
     is_test = plan == "test"
 
     # 5. Hash request
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     # extra_headers inclus dans le hash (font partie du contexte de la requête certifiée)
     # Les valeurs sensibles (Authorization) sont hashées, pas stockées en clair dans la preuve
     _safe_extra_headers = {k: "***" for k in (extra_headers or {})} if extra_headers else {}
@@ -700,13 +744,13 @@ async def execute_proxy(
                     "insufficient_overage_credits",
                     f"Overage requires prepaid credits. Balance: {e.balance:.2f} EUR. Buy at /v1/credits/buy",
                     402,
-                )
+                ) from e
             _notify_credits_exhausted(api_key, key_info)
             raise ProxyError(
                 "insufficient_credits",
                 f"Insufficient credits ({e.balance:.2f} EUR). Buy credits at /v1/credits/buy",
                 402,
-            )
+            ) from e
         charge_result = ChargeResult(
             provider="prepaid_credit",
             transaction_id=debit_id,
@@ -813,9 +857,7 @@ async def execute_proxy(
             agent_path = AGENTS_DIR / f"{api_key[:16]}.json"
             existing_profile = load_json(agent_path, {})
             existing_id = existing_profile.get("declared_identity")
-            if existing_id and existing_id != agent_identity:
-                identity_consistent = False
-            elif existing_profile.get("identity_mismatch"):
+            if existing_id and existing_id != agent_identity or existing_profile.get("identity_mismatch"):
                 identity_consistent = False
             else:
                 identity_consistent = True
@@ -860,14 +902,14 @@ async def execute_proxy(
     if signer:
         try:
             signature = signer.sign_chain_hash(chain_hash)
-        except SignerError:
+        except SignerError as e:
             # Charged, but no signed proof: give the money back, never keep it.
             logger.error("tl-signer lost during request, refunding proof %s", proof_id_for_debit)
             if debit_id:
                 refund_credits(api_key, charge_result.amount, debit_id, proof_id_for_debit)
             if is_overage:
                 rollback_overage(api_key)
-            raise ProxyError("signing_unavailable", "Proof signing is temporarily unavailable. The charge was refunded.", 503)
+            raise ProxyError("signing_unavailable", "Proof signing is temporarily unavailable. The charge was refunded.", 503) from e
         # Added after the chain hash: the kid, like the pubkey, is not hashed.
         proof_record["arkforge_signature"] = signature
         proof_record["arkforge_pubkey"] = signer.public
@@ -875,6 +917,7 @@ async def execute_proxy(
 
     # 10. Store proof
     store_proof(proof_id, proof_record)
+    _proof_stored.set(True)
 
     # 11. Fire-and-forget background tasks (OTS, Archive.org, email)
     email = key_info.get("email", "")
@@ -887,7 +930,8 @@ async def execute_proxy(
     _update_service_profile(target_domain, response_time_ms, service_succeeded)
 
     # Snapshot buyer reputation — après update profil, cache invalidé → score inclut cette transaction
-    from .reputation import get_reputation as _get_rep, invalidate_cache as _invalidate_rep
+    from .reputation import get_reputation as _get_rep
+    from .reputation import invalidate_cache as _invalidate_rep
     _invalidate_rep(f"sha256:{buyer_fingerprint}")
     _rep = _get_rep(f"sha256:{buyer_fingerprint}")
     if _rep:

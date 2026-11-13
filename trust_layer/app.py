@@ -5,14 +5,13 @@ import hashlib
 import json
 import logging
 import os
-from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from contextlib import asynccontextmanager, suppress
+from datetime import UTC, datetime, timedelta
 
 import stripe
-from fastapi import FastAPI, Request, HTTPException, Header
-from fastapi.responses import JSONResponse, Response, HTMLResponse, RedirectResponse
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 # Failover read-only mode — read dynamically from failover_state.json
@@ -128,6 +127,36 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
+# Subscription and plan-change routes, answered 410 when TL_PAID_PLANS_ENABLED is false.
+# The Stripe webhook is deliberately absent: existing subscribers keep being processed.
+_PAID_PLAN_ROUTES = frozenset({
+    ("POST", "/v1/keys/setup"),
+    ("POST", "/create-checkout-session"),
+    ("GET", "/trial"),
+    ("POST", "/v1/keys/trial"),
+})
+
+
+class PaidPlansGateMiddleware(BaseHTTPMiddleware):
+    """Answer 410 on subscription routes while paid plans are switched off (reversible)."""
+    async def dispatch(self, request: Request, call_next):
+        if (request.method, request.url.path.rstrip("/")) in _PAID_PLAN_ROUTES \
+                and not paid_plans_enabled():
+            return JSONResponse(
+                status_code=410,
+                content={
+                    "error": {
+                        "code": "paid_plans_disabled",
+                        "message": "Paid plans are not offered at the moment. Trust Layer is free: "
+                                   "get a free API key instead.",
+                        "status": 410,
+                        "free_signup": f"{TRUST_LAYER_BASE_URL}/v1/keys/free-signup",
+                    }
+                },
+            )
+        return await call_next(request)
+
+
 class FailoverReadOnlyMiddleware(BaseHTTPMiddleware):
     """Bloque les écritures en mode failover pour éviter le split-brain."""
     async def dispatch(self, request: Request, call_next):
@@ -151,92 +180,126 @@ class FailoverReadOnlyMiddleware(BaseHTTPMiddleware):
                 )
         return await call_next(request)
 
-import re
-from . import __version__
-from collections import defaultdict
-from .config import (
-    STRIPE_WEBHOOK_SECRET_LIVE,
-    STRIPE_WEBHOOK_SECRET_TEST,
-    STRIPE_TEST_KEY,
-    STRIPE_LIVE_KEY,
-    PROOFS_DIR,
-    TRUST_LAYER_BASE_URL,
-    SUPPORTED_CURRENCIES,
-    PROOF_PRICE,
-    MIN_CREDIT_PURCHASE,
-    MAX_CREDIT_PURCHASE,
-    PRO_SETUP_MIN_AMOUNT,
-    RATE_LIMIT_PER_KEY_PER_DAY, DAILY_LIMITS_PER_PLAN,
-    FREE_TIER_MONTHLY_LIMIT,
-    PRO_MONTHLY_LIMIT,
-    ENTERPRISE_MONTHLY_LIMIT,
-    PLATFORM_MONTHLY_LIMIT,
-    PRO_OVERAGE_PRICE,
-    ENTERPRISE_OVERAGE_PRICE,
-    PLATFORM_OVERAGE_PRICE,
-    PROOF_ACCESS_LOG,
-    PROVEIT_PROOF_SELLERS,
-    WEBHOOK_IDEMPOTENCY_FILE,
-    CONVERSION_EVENTS_LOG,
-    FUNNEL_EVENTS_LOG,
-    MCP_SCAN_PINGS_LOG,
-    CORS_ALLOWED_ORIGINS,
-    PRO_OVERAGE_PRICE,
-    ENTERPRISE_OVERAGE_PRICE,
-    OVERAGE_PRICES,
-    OVERAGE_CAP_MIN,
-    OVERAGE_CAP_MAX,
-    OVERAGE_CAP_DEFAULT,
+import re  # noqa: E402
+from collections import defaultdict  # noqa: E402
 
-    STRIPE_PRO_PRICE_ID,
-    STRIPE_PRO_PRICE_ID_TEST,
-    STRIPE_PRO_PRODUCT_ID,
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey  # noqa: E402
+
+from . import __version__, usage_metrics  # noqa: E402
+from .attestation import (  # noqa: E402
+    attestation_to_encina_response,
+    build_attestation,
+    find_by_record_id,
+    load_attestation,
+    store_attestation,
+)
+from .config import (  # noqa: E402
+    CONVERSION_EVENTS_LOG,
+    CORS_ALLOWED_ORIGINS,
+    DAILY_LIMITS_PER_PLAN,
+    ENTERPRISE_MONTHLY_LIMIT,
+    ENTERPRISE_OVERAGE_PRICE,
+    FREE_TIER_MONTHLY_LIMIT,
+    FUNNEL_EVENTS_LOG,
+    MAX_CREDIT_PURCHASE,
+    MCP_SCAN_PINGS_LOG,
+    MIN_CREDIT_PURCHASE,
+    OVERAGE_CAP_DEFAULT,
+    OVERAGE_CAP_MAX,
+    OVERAGE_CAP_MIN,
+    OVERAGE_PRICES,
+    PLATFORM_MONTHLY_LIMIT,
+    PLATFORM_OVERAGE_PRICE,
+    PRO_MONTHLY_LIMIT,
+    PRO_OVERAGE_PRICE,
+    PROOF_ACCESS_LOG,
+    PROOF_PRICE,
+    PROOFS_DIR,
+    PROVEIT_PROOF_SELLERS,
     STRIPE_ENTERPRISE_PRICE_ID,
     STRIPE_ENTERPRISE_PRICE_ID_TEST,
+    STRIPE_LIVE_KEY,
     STRIPE_PLATFORM_PRICE_ID,
     STRIPE_PLATFORM_PRICE_ID_TEST,
+    STRIPE_PRO_PRICE_ID,
+    STRIPE_PRO_PRICE_ID_TEST,
     STRIPE_SCANNER_PRO_PRICE_ID,
     STRIPE_SCANNER_PRO_PRICE_ID_TEST,
+    STRIPE_TEST_KEY,
+    STRIPE_WEBHOOK_SECRET_LIVE,
+    STRIPE_WEBHOOK_SECRET_TEST,
+    TRUST_LAYER_BASE_URL,
+    WEBHOOK_IDEMPOTENCY_FILE,
 )
-from .keys import (
-    validate_api_key, create_api_key, deactivate_key_by_ref, reactivate_key_by_ref, is_test_key, is_free_key,
-    get_overage_settings, update_overage_settings, get_key_plan, is_internal_key, find_key_info_by_ref,
-    create_trial_key, find_active_trial_by_email, find_expiring_trial_keys, find_expired_trial_keys,
-    deactivate_trial_key, deactivate_trial_keys_for_email,
+from .credits import add_credits, get_balance  # noqa: E402
+from .demo import _PAYLOAD_MAX_BYTES as _DEMO_PAYLOAD_MAX_BYTES  # noqa: E402
+from .demo import build_demo_proof, check_demo_rate_limit  # noqa: E402
+from .did_resolver import (  # noqa: E402
+    DIDResolutionError,
+    bind_did_to_key,
+    check_bind_rate,
+    consume_challenge,
+    create_challenge,
+    extract_ed25519_pubkey_bytes,
+    resolve_did,
+    validate_did,
+    verify_oatr_delegation,
 )
-from .credits import add_credits, get_balance
-from .proofs import load_proof, store_proof, get_public_proof, get_full_proof, verify_proof_integrity, sha256_hex
-from .attestation import (
-    build_attestation, store_attestation, load_attestation,
-    find_by_record_id, attestation_to_encina_response,
-)
-from .proxy import execute_proxy, ProxyError, drain_background_tasks, _track_task, _log_background_task, _post_proof_background
-from .demo import check_demo_rate_limit, build_demo_proof, _PAYLOAD_MAX_BYTES as _DEMO_PAYLOAD_MAX_BYTES
-from .templates import render_proof_page
-from .rate_limit import get_usage, get_daily_limit
-from .redis_client import get_redis
-from .email_notify import (
+from .disputes import create_dispute, get_agent_disputes  # noqa: E402
+from .email_notify import (  # noqa: E402
+    _is_test_email,
+    send_admin_alert,
+    send_checkout_abandoned_email,
+    send_demo_request_email,
+    send_subscription_reactivated_email,
+    send_subscription_suspended_email,
+    send_trial_ended_email,
+    send_trial_upgrade_reminder_email,
+    send_trial_welcome_email,
     send_welcome_email,
     send_welcome_email_pro,
-    send_trial_ended_email,
-    send_demo_request_email,
-    send_subscription_suspended_email,
-    send_subscription_reactivated_email,
-    send_checkout_abandoned_email,
-    send_trial_welcome_email,
-    send_trial_upgrade_reminder_email,
-    send_admin_alert,
-    _is_test_email,
 )
-from .timestamps import submit_hash
-from .reputation import get_reputation, get_public_reputation
-from .disputes import create_dispute, get_agent_disputes
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-from .did_resolver import (
-    validate_did, resolve_did, extract_ed25519_pubkey_bytes,
-    create_challenge, consume_challenge, check_bind_rate,
-    verify_oatr_delegation, bind_did_to_key, DIDResolutionError,
+from .free_tier_guard import hash_identifier, paid_plans_enabled, signup_count, writes_paused  # noqa: E402
+from .keys import (  # noqa: E402
+    create_api_key,
+    create_trial_key,
+    deactivate_key_by_ref,
+    deactivate_trial_key,
+    deactivate_trial_keys_for_email,
+    find_active_trial_by_email,
+    find_expired_trial_keys,
+    find_expiring_trial_keys,
+    find_key_info_by_ref,
+    get_key_plan,
+    get_overage_settings,
+    is_free_key,
+    is_internal_key,
+    is_test_key,
+    reactivate_key_by_ref,
+    update_overage_settings,
+    validate_api_key,
 )
+from .proofs import (  # noqa: E402
+    get_full_proof,
+    get_public_proof,
+    load_proof,
+    sha256_hex,
+    store_proof,
+    verify_proof_integrity,
+)
+from .proxy import (  # noqa: E402
+    ProxyError,
+    _log_background_task,
+    _post_proof_background,
+    _track_task,
+    drain_background_tasks,
+    execute_proxy,
+)
+from .rate_limit import get_usage  # noqa: E402
+from .redis_client import get_redis  # noqa: E402
+from .reputation import get_public_reputation, get_reputation  # noqa: E402
+from .templates import render_proof_page  # noqa: E402
+from .timestamps import submit_hash  # noqa: E402
 
 logger = logging.getLogger("trust_layer.app")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
@@ -259,7 +322,7 @@ class _SensitiveDataFilter(logging.Filter):
                 record.msg = pat.sub(r"\g<1>[REDACTED]", record.msg)
         if record.args:
             try:
-                safe = tuple(
+                tuple(
                     pat.sub(r"\g<1>[REDACTED]", str(a)) if isinstance(a, str) else a
                     for a in (record.args if isinstance(record.args, tuple) else (record.args,))
                     for pat in [_LOG_REDACT[0]]  # apply first pattern as sample — full loop below
@@ -342,7 +405,7 @@ def _restore_abuse_counters():
     cutoff = now - _ABUSE_WINDOW
     restored = 0
     try:
-        with open(PROOF_ACCESS_LOG, "r") as f:
+        with open(PROOF_ACCESS_LOG) as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -352,7 +415,7 @@ def _restore_abuse_counters():
                 except json.JSONDecodeError:
                     continue
                 ts_str = entry.get("ts", "")
-                ip = entry.get("ip", "")
+                ip = entry.get("ip_hash", "")
                 if not ts_str or not ip:
                     continue
                 try:
@@ -377,11 +440,21 @@ def _proof_access_blocked(ip: str) -> bool:
         if r is not None:
             count = r.get(f"proof_abuse:{ip}")
             if count and int(count) > _ABUSE_THRESHOLD:
-                logger.warning("ABUSE BLOCKED: IP %s blocked on proof access (%s req/h)", ip, count)
+                logger.warning("ABUSE BLOCKED: IP %s blocked on proof access (%s req/h)", _ip_id(ip) or "-", count)
                 return True
     except Exception:
         pass
     return False
+
+
+def _email_hash(email: str) -> str:
+    """Salted hash of an email for event logs (first 32 hex chars). Empty without salt."""
+    return hash_identifier((email or "").strip().lower())[:32]
+
+
+def _ip_id(ip: str) -> str:
+    """Identifier for an IP in logs and in-memory counters: salted hash, "" without salt."""
+    return hash_identifier(ip)[:32]
 
 
 def _log_proof_access(proof_ids, ip: str, user_agent: str):
@@ -394,11 +467,13 @@ def _log_proof_access(proof_ids, ip: str, user_agent: str):
     now = time.time()
     if isinstance(proof_ids, str):
         proof_ids = [proof_ids]
-    ts = datetime.now(timezone.utc).isoformat()
+    ts = datetime.now(UTC).isoformat()
+    # Never the raw IP in a log: salted hash, or nothing when no salt is configured.
+    ip_id = _ip_id(ip)
     try:
         with open(PROOF_ACCESS_LOG, "a") as f:
             for proof_id in proof_ids:
-                f.write(json.dumps({"ts": ts, "proof_id": proof_id, "ip": ip,
+                f.write(json.dumps({"ts": ts, "proof_id": proof_id, "ip_hash": ip_id,
                                     "ua": (user_agent or "")[:200]}) + "\n")
     except OSError as e:
         logger.debug("Proof access log write failed: %s", e)
@@ -412,16 +487,17 @@ def _log_proof_access(proof_ids, ip: str, user_agent: str):
             if count == 1:
                 r.expire(key, _ABUSE_WINDOW)
             if count > _ABUSE_THRESHOLD:
-                logger.warning("ABUSE DETECTED: IP %s made %d proof requests in 1h (Redis)", ip, count)
+                logger.warning("ABUSE DETECTED: IP %s made %d proof requests in 1h (Redis)", ip_id or "-", count)
         else:
             raise RuntimeError("Redis unavailable")
     except Exception:
-        timestamps = _proof_access_counts[ip]
+        mem_key = ip_id or ip  # memory only, never logged
+        timestamps = _proof_access_counts[mem_key]
         timestamps.append(now)
         cutoff = now - _ABUSE_WINDOW
-        _proof_access_counts[ip] = [t for t in timestamps if t > cutoff]
-        if len(_proof_access_counts[ip]) > _ABUSE_THRESHOLD:
-            logger.warning("ABUSE DETECTED: IP %s made %d proof requests in 1h (in-memory)", ip, len(_proof_access_counts[ip]))
+        _proof_access_counts[mem_key] = [t for t in timestamps if t > cutoff]
+        if len(_proof_access_counts[mem_key]) > _ABUSE_THRESHOLD:
+            logger.warning("ABUSE DETECTED: IP %s made %d proof requests in 1h (in-memory)", ip_id or "-", len(_proof_access_counts[mem_key]))
 
 
 async def _batch_anchor_loop():
@@ -430,7 +506,7 @@ async def _batch_anchor_loop():
     A batch opened at 23:00 must not stay unanchored until the next request in
     the morning, so the clock runs here rather than on the request path.
     """
-    from .batch_anchor import close_due_batch, BATCH_TICK_SECONDS
+    from .batch_anchor import BATCH_TICK_SECONDS, close_due_batch
     while True:
         try:
             await asyncio.sleep(BATCH_TICK_SECONDS)
@@ -447,11 +523,13 @@ async def _batch_anchor_loop():
 async def _recover_pending_tsa():
     """Startup task: retry TSA for recent proofs stuck in 'submitted' status."""
     import base64 as _b64
-    from .proofs import load_proof, store_proof as _store_proof
+
+    from .proofs import load_proof
+    from .proofs import store_proof as _store_proof
     recovered = 0
     failed = 0
     try:
-        cutoff = datetime.now(timezone.utc).timestamp() - 86400  # last 24h
+        cutoff = datetime.now(UTC).timestamp() - 86400  # last 24h
         for proof_file in PROOFS_DIR.glob("prf_*.json"):
             if proof_file.stat().st_mtime < cutoff:
                 continue
@@ -492,7 +570,8 @@ async def _recover_pending_tsa():
 # cles, le journal quotidien evite un second envoi si le service redemarre dans
 # la journee. Sans la seconde, un simple redemarrage refait partir la campagne.
 
-from .config import DATA_DIR as _NOTIFY_DIR
+from .config import DATA_DIR as _NOTIFY_DIR  # noqa: E402
+
 _NOTIFY_LOG = _NOTIFY_DIR / "lifecycle_notifications.json"
 
 
@@ -515,16 +594,16 @@ def _load_notify_log() -> dict:
 
 
 def _notified_today(email: str, kind: str) -> bool:
-    today = datetime.now(timezone.utc).date().isoformat()
+    today = datetime.now(UTC).date().isoformat()
     return _load_notify_log().get(f"{kind}:{email.lower()}") == today
 
 
 def _mark_notified(email: str, kind: str) -> None:
     log = _load_notify_log()
-    today = datetime.now(timezone.utc).date().isoformat()
+    today = datetime.now(UTC).date().isoformat()
     log[f"{kind}:{email.lower()}"] = today
     # bornage : on ne garde que les 30 derniers jours
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).date().isoformat()
+    cutoff = (datetime.now(UTC) - timedelta(days=30)).date().isoformat()
     log = {k: v for k, v in log.items() if v >= cutoff}
     try:
         tmp = _NOTIFY_LOG.with_suffix(".json.tmp")
@@ -538,7 +617,7 @@ async def _trial_maintenance_loop():
     """Daily background job: send upgrade reminders + deactivate expired trial keys."""
     from datetime import timedelta as _td
     while True:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         next_run = now.replace(hour=8, minute=0, second=0, microsecond=0)
         if next_run <= now:
             next_run += _td(days=1)
@@ -553,7 +632,7 @@ async def _trial_maintenance_loop():
             for _email in _unique_emails(expiring):
                 if _notified_today(_email, "trial_reminder"):
                     continue
-                _upgrade = f"https://arkforge.tech/en/pro-signup.html?utm_source=email&utm_medium=trial_reminder"
+                _upgrade = "https://arkforge.tech/en/pro-signup.html?utm_source=email&utm_medium=trial_reminder"
                 send_trial_upgrade_reminder_email(_email, _upgrade, days_remaining=1)
                 _mark_notified(_email, "trial_reminder")
                 reminded += 1
@@ -584,6 +663,8 @@ async def lifespan(app):
     # Startup — first: no way to sign, no service (moved from import time, see config.init_signer)
     from . import config as _cfg
     _cfg.init_signer()
+    if not os.environ.get("TL_METRICS_SALT"):
+        logger.warning("TL_METRICS_SALT is not set: usage metrics and hashed identifiers are disabled")
     # Startup — prune stale webhook idempotency entries (>7 days old)
     _prune_webhook_idempotency()
     # Startup — restore abuse detection sliding window from JSONL
@@ -622,6 +703,8 @@ app = FastAPI(
 )
 
 app.add_middleware(HeadToGetMiddleware)
+# Inside CORS, so a 410 still carries the CORS headers a browser needs to read it.
+app.add_middleware(PaidPlansGateMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ALLOWED_ORIGINS,
@@ -635,19 +718,22 @@ app.add_middleware(FailoverReadOnlyMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 
 # --- Feature routers (v1.4+) ---
-from .routers.assess import router as _assess_router
-from .routers.compliance import router as _compliance_router
+from .routers.assess import router as _assess_router  # noqa: E402
+from .routers.compliance import router as _compliance_router  # noqa: E402
+
 app.include_router(_assess_router)
 app.include_router(_compliance_router)
-from .routers.verdict import router as _verdict_router
+from .routers.verdict import router as _verdict_router  # noqa: E402
+
 app.include_router(_verdict_router)
-from .routers.admin import router as _admin_router
+from .routers.admin import router as _admin_router  # noqa: E402
+
 app.include_router(_admin_router)
 
 
 # --- Helpers ---
 
-def _get_api_key(authorization: Optional[str] = None, x_api_key: Optional[str] = None) -> Optional[str]:
+def _get_api_key(authorization: str | None = None, x_api_key: str | None = None) -> str | None:
     if x_api_key:
         return x_api_key
     if authorization and authorization.startswith("Bearer "):
@@ -667,11 +753,11 @@ def _error_response(code: str, message: str, status: int, proof: dict = None) ->
 @app.post("/v1/proxy")
 async def proxy_endpoint(
     request: Request,
-    authorization: Optional[str] = Header(None),
-    x_api_key: Optional[str] = Header(None),
-    x_idempotency_key: Optional[str] = Header(None),
-    x_agent_identity: Optional[str] = Header(None),
-    x_agent_version: Optional[str] = Header(None),
+    authorization: str | None = Header(None),
+    x_api_key: str | None = Header(None),
+    x_idempotency_key: str | None = Header(None),
+    x_agent_identity: str | None = Header(None),
+    x_agent_version: str | None = Header(None),
 ):
     """The core endpoint — charge, forward, prove."""
     client_ip = request.headers.get("x-real-ip") or (request.client.host if request.client else "unknown")
@@ -722,17 +808,16 @@ async def proxy_endpoint(
         # Spec 3.1 commits agent_identity and publishes it in `disclosed`: the value is
         # engraved and served forever. Bound it here, before it reaches the commitments.
         # Measured on production before choosing 256: 2 distinct identities, 27 chars max.
-        if x_agent_identity is not None:
-            if len(x_agent_identity) > _MAX_AGENT_IDENTITY_LEN or any(
-                ord(c) < 32 or ord(c) == 127 for c in x_agent_identity
-            ):
-                return JSONResponse(status_code=400, content={
-                    "error": "invalid_agent_identity",
-                    "message": (
-                        f"agent_identity must be at most {_MAX_AGENT_IDENTITY_LEN} "
-                        "characters and carry no control character"
-                    ),
-                })
+        if x_agent_identity is not None and (len(x_agent_identity) > _MAX_AGENT_IDENTITY_LEN or any(
+            ord(c) < 32 or ord(c) == 127 for c in x_agent_identity
+        )):
+            return JSONResponse(status_code=400, content={
+                "error": "invalid_agent_identity",
+                "message": (
+                    f"agent_identity must be at most {_MAX_AGENT_IDENTITY_LEN} "
+                    "characters and carry no control character"
+                ),
+            })
 
         result = await execute_proxy(
             target=target,
@@ -752,10 +837,12 @@ async def proxy_endpoint(
         return JSONResponse(status_code=e.status, content=e.to_dict())
 
     # Determine status code from result
-    if "error" in result:
-        status_code = result["error"].get("status", 502)
-    else:
-        status_code = 200
+    status_code = result["error"].get("status", 502) if "error" in result else 200
+
+    # Aggregate measurement: a stored proof counts once, internal IPs and keys excluded.
+    if (result.get("proof") or result.get("error", {}).get("proof_data")) \
+            and client_ip not in _INTERNAL_IPS and not is_internal_key(api_key):
+        usage_metrics.record_proof(api_key)
 
     # Level 2 — Ghost Stamp: inject proof headers
     proof = result.get("proof") or result.get("error", {}).get("proof_data")
@@ -787,6 +874,10 @@ async def demo_endpoint(request: Request):
     The upstream call is simulated (synthetic response) so no SSRF risk.
     """
     client_ip = request.headers.get("x-real-ip") or (request.client.host if request.client else "unknown")
+
+    if writes_paused():
+        return JSONResponse(status_code=503, content={"error": "service_degraded",
+                            "detail": "Proof creation is temporarily paused."})
 
     is_limited, retry_after = check_demo_rate_limit(client_ip)
     if is_limited:
@@ -823,7 +914,7 @@ async def demo_endpoint(request: Request):
     )
     _track_task(task)
 
-    logger.info("Demo proof generated: %s from IP %s", proof_id, client_ip)
+    logger.info("Demo proof generated: %s from IP %s", proof_id, _ip_id(client_ip) or "-")
 
     return JSONResponse(status_code=200, content={
         "proof_id": proof_id,
@@ -852,8 +943,8 @@ async def demo_endpoint(request: Request):
 async def get_proof_full(
     proof_id: str,
     request: Request,
-    authorization: Optional[str] = Header(None),
-    x_api_key: Optional[str] = Header(None),
+    authorization: str | None = Header(None),
+    x_api_key: str | None = Header(None),
 ):
     """Authenticated full proof — owner only. Returns all fields including payment details."""
     api_key = _get_api_key(authorization, x_api_key)
@@ -903,6 +994,9 @@ async def get_proof(proof_id: str, request: Request):
     proof = load_proof(proof_id)
     if not proof:
         return _error_response("not_found", f"Proof '{proof_id}' not found", 404)
+
+    if client_ip not in _INTERNAL_IPS:
+        usage_metrics.record_verification()
 
     # Increment views_count in proof metadata
     proof["views_count"] = proof.get("views_count", 0) + 1
@@ -972,7 +1066,7 @@ async def get_proofs_batch(request: Request):
 # --- GET /v1/proof/{proof_id}/verify — Lightweight verification ---
 
 @app.get("/v1/proof/{proof_id}/verify")
-async def verify_proof_endpoint(proof_id: str):
+async def verify_proof_endpoint(proof_id: str, request: Request):
     """Lightweight proof verification — no auth, no view increment.
 
     Returns integrity check result with chain hash and timestamp info.
@@ -984,6 +1078,10 @@ async def verify_proof_endpoint(proof_id: str):
     proof = load_proof(proof_id)
     if not proof:
         return _error_response("not_found", f"Proof '{proof_id}' not found", 404)
+
+    client_ip = request.headers.get("x-real-ip") or (request.client.host if request.client else "unknown")
+    if client_ip not in _INTERNAL_IPS:
+        usage_metrics.record_verification()
 
     integrity_ok = verify_proof_integrity(proof)
     hashes = proof.get("hashes", {})
@@ -1228,14 +1326,14 @@ async def setup_key(request: Request):
                     "plan": plan_name,
                 }
             },
-            expires_at=int(datetime.now(timezone.utc).timestamp()) + 86400,
+            expires_at=int(datetime.now(UTC).timestamp()) + 86400,
             api_key=sk,
         )
 
         _log_funnel_event("checkout_initiated", client_ip, referer_for_classify, user_agent, extra={
             "plan": plan_name,
             "product": product_tag,
-            "email_hash": email[:3] + "***" if email else "",
+            "email_hash": _email_hash(email),
             "session_id": session.id,
             "test_mode": req_mode == "test",
             "utm_source": utm_source,
@@ -1286,7 +1384,7 @@ async def trial_landing(request: Request):
         )
         with open(FUNNEL_EVENTS_LOG, "a") as _f:
             _f.write(json.dumps({
-                "ts": datetime.now(timezone.utc).isoformat(),
+                "ts": datetime.now(UTC).isoformat(),
                 "event": "trial_page_visit",
                 "client_ip_hash": hashlib.sha256(client_ip.encode()).hexdigest()[:12],
                 "referrer": (request.headers.get("referer") or "")[:200],
@@ -1296,7 +1394,6 @@ async def trial_landing(request: Request):
     except Exception:
         pass
 
-    utm_qs = f"&utm_source={utm_source}" if utm_source else ""
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -1440,16 +1537,15 @@ async def create_trial(request: Request):
 
     user_agent = request.headers.get("user-agent", "")
     referer_for_classify = request.headers.get("referer", "")
-    visitor = _classify_visitor(client_ip, referer_for_classify, user_agent)
+    _classify_visitor(client_ip, referer_for_classify, user_agent)
     req_mode = "live"
     is_reserved, _reserved_reason = _is_test_email(email)
     if is_reserved:
         req_mode = "test"
     if client_ip in _INTERNAL_IPS:
         req_mode = "test"
-    if req_mode == "live":
-        if "test" in local_part or "diag" in local_part or "e2e" in local_part or "healthcheck" in local_part or "verify" in local_part or "flow-" in local_part:
-            req_mode = "test"
+    if req_mode == "live" and ("test" in local_part or "diag" in local_part or "e2e" in local_part or "healthcheck" in local_part or "verify" in local_part or "flow-" in local_part):
+        req_mode = "test"
     if req_mode == "live" and user_agent and _BOT_UA_RE.search(user_agent):
         logger.info("keys/trial: bot-like UA %r — keeping live mode (rate-limit protects)", user_agent[:80])
 
@@ -1510,7 +1606,7 @@ async def create_trial(request: Request):
                         "trial_period_days": 14,
                         "metadata": {"product": product_tag, "email": email, "plan": "pro"},
                     },
-                    expires_at=int(datetime.now(timezone.utc).timestamp()) + 82800,
+                    expires_at=int(datetime.now(UTC).timestamp()) + 82800,
                     api_key=sk,
                 )
                 upgrade_url = session.url
@@ -1563,7 +1659,7 @@ async def create_trial(request: Request):
                     "trial_period_days": 14,
                     "metadata": {"product": product_tag, "email": email, "plan": "pro"},
                 },
-                expires_at=int(datetime.now(timezone.utc).timestamp()) + 82800,
+                expires_at=int(datetime.now(UTC).timestamp()) + 82800,
                 api_key=sk,
             )
             upgrade_url = session.url
@@ -1574,7 +1670,7 @@ async def create_trial(request: Request):
     send_trial_welcome_email(email, trial_key, trial_ends, upgrade_url, lang=lang)
 
     _log_funnel_event("trial_key_created", client_ip, request.headers.get("referer", ""), user_agent, extra={
-        "email_hash": email[:3] + "***",
+        "email_hash": _email_hash(email),
         "test_mode": req_mode == "test",
         "lang": lang,
     })
@@ -1592,8 +1688,8 @@ async def create_trial(request: Request):
 @app.post("/v1/keys/portal")
 async def billing_portal(
     request: Request,
-    authorization: Optional[str] = Header(None),
-    x_api_key: Optional[str] = Header(None),
+    authorization: str | None = Header(None),
+    x_api_key: str | None = Header(None),
 ):
     """Create a Stripe Billing Portal session for card/billing management.
 
@@ -1655,7 +1751,7 @@ async def billing_portal(
 
 # --- POST /v1/keys/free-signup ---
 
-import re as _re
+import re as _re  # noqa: E402
 
 # RFC 5321-compatible email regex: local@domain.tld
 # - local part: alphanum + ._%+- (no consecutive dots, no leading/trailing dot)
@@ -1679,9 +1775,7 @@ def _looks_like_gibberish(local_part: str) -> bool:
     consonant_run = max(
         (len(s) for s in _re.split(r"[aeiouy0-9_.@\-+]", lp) if s), default=0
     )
-    if consonant_run >= 6:
-        return True
-    return False
+    return consonant_run >= 6
 
 # Valid proof ID format: prf_YYYYMMDD_HHMMSS_<6hex>
 _PROOF_ID_RE = _re.compile(r"^prf_\d{8}_\d{6}_[0-9a-f]{6}$")
@@ -1797,7 +1891,7 @@ def _log_funnel_event(event: str, client_ip: str, referer: str, user_agent: str,
     """Log a funnel event with visitor classification to both event logs."""
     vis = _classify_visitor(client_ip, referer, user_agent)
     record = {
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now(UTC).isoformat(),
         "event": event,
         "is_external": vis["is_external"],
         "source_type": vis["source_type"],
@@ -1850,18 +1944,27 @@ async def free_signup(request: Request):
         request.headers.get("x-real-ip")
         or (request.client.host if request.client else "unknown")
     )
-    now = time.time()
-    timestamps = _FREE_SIGNUP_RATE.get(client_ip, [])
-    timestamps = [t for t in timestamps if t > now - 3600]
-    if len(timestamps) >= _FREE_SIGNUP_MAX_PER_HOUR:
-        return _error_response("rate_limited", "Too many signups. Try again later.", 429)
-    timestamps.append(now)
-    _FREE_SIGNUP_RATE[client_ip] = timestamps
+    # Shared between nodes through Redis; the per-node memory window is the fallback
+    # only when Redis cannot answer (free proofs are refused in that case anyway).
+    # No salt, no Redis key: an unsalted IP digest is reversible, so the node-local window serves.
+    ip_id = _ip_id(client_ip)
+    shared = signup_count(ip_id) if ip_id else None
+    if shared is not None:
+        if shared > _FREE_SIGNUP_MAX_PER_HOUR:
+            return _error_response("rate_limited", "Too many signups. Try again later.", 429)
+    else:
+        now = time.time()
+        timestamps = _FREE_SIGNUP_RATE.get(client_ip, [])
+        timestamps = [t for t in timestamps if t > now - 3600]
+        if len(timestamps) >= _FREE_SIGNUP_MAX_PER_HOUR:
+            return _error_response("rate_limited", "Too many signups. Try again later.", 429)
+        timestamps.append(now)
+        _FREE_SIGNUP_RATE[client_ip] = timestamps
 
     # Check if email already has a free key
     from .keys import load_api_keys
     existing_keys = load_api_keys()
-    for key, info in existing_keys.items():
+    for _key, info in existing_keys.items():
         if info.get("email", "").lower() == email and info.get("plan") == "free" and info.get("active"):
             return _error_response("already_exists", "A free API key already exists for this email. Check your inbox or contact support.", 409)
 
@@ -1874,6 +1977,8 @@ async def free_signup(request: Request):
         plan="free",
     )
     logger.info("Free API key created for %s", email)
+    if client_ip not in _INTERNAL_IPS:
+        usage_metrics.record_free_signup()
 
     try:
         send_welcome_email(email, api_key)
@@ -1889,10 +1994,10 @@ async def free_signup(request: Request):
     try:
         with open(CONVERSION_EVENTS_LOG, "a") as _cel:
             _cel.write(json.dumps({
-                "ts": datetime.now(timezone.utc).isoformat(),
+                "ts": datetime.now(UTC).isoformat(),
                 "event": "signup_attributed",
                 "plan": "free",
-                "email_hash": email[:3] + "***" if email else "",
+                "email_hash": _email_hash(email),
                 "source": attribution_source,
                 "utm_source": utm_source,
                 "utm_medium": utm_medium,
@@ -1910,25 +2015,27 @@ async def free_signup(request: Request):
     try:
         with open(FUNNEL_EVENTS_LOG, "a") as _f:
             _f.write(json.dumps({
-                "ts": datetime.now(timezone.utc).isoformat(),
+                "ts": datetime.now(UTC).isoformat(),
                 "event": "register_completion",
                 "scan_id": "",
                 "source": f"web_{attribution_source}" if attribution_source else "web_direct",
                 "client_ip_hash": hashlib.sha256(client_ip.encode()).hexdigest()[:12],
-                "email_hash": email[:3] + "***" if email else "",
+                "email_hash": _email_hash(email),
             }) + "\n")
     except Exception:
         pass
 
-    return {
+    response = {
         "api_key": api_key,
         "plan": "free",
         "limit": f"{FREE_TIER_MONTHLY_LIMIT} proofs/month",
         "email": email,
         "message": "Your free API key is ready. It has also been sent to your email.",
-        "upgrade_url": "https://arkforge.tech/en/pro-signup.html?utm_source=free_signup_response",
-        "upgrade_cta": "Need more? Try Pro free for 14 days — 5,000 proofs/month, no charge until day 15.",
     }
+    if paid_plans_enabled():
+        response["upgrade_url"] = "https://arkforge.tech/en/pro-signup.html?utm_source=free_signup_response"
+        response["upgrade_cta"] = "Need more? Try Pro free for 14 days — 5,000 proofs/month, no charge until day 15."
+    return response
 
 
 # --- GET /register (inline CTA from MCP scan results) ---
@@ -1946,7 +2053,7 @@ async def register_form(request: Request, scan_id: str = ""):
         )
         with open(FUNNEL_EVENTS_LOG, "a") as _f:
             _f.write(json.dumps({
-                "ts": datetime.now(timezone.utc).isoformat(),
+                "ts": datetime.now(UTC).isoformat(),
                 "event": "register_page_visit",
                 "scan_id": scan_id_safe,
                 "client_ip_hash": hashlib.sha256(client_ip.encode()).hexdigest()[:12],
@@ -2080,12 +2187,16 @@ async def mcp_register(request: Request):
     existing_keys = load_api_keys()
     for key, info in existing_keys.items():
         if info.get("email", "").lower() == email and info.get("plan") == "free" and info.get("active"):
+            # The key goes to the mailbox only: whoever typed the address must not get it.
+            try:
+                send_welcome_email(email, key)
+            except (OSError, RuntimeError) as e:
+                logger.warning("Key resend failed for MCP register %s: %s", email, e)
             return JSONResponse(content={
-                "api_key": key,
                 "plan": "free",
                 "email": email,
                 "already_existed": True,
-                "message": "A free API key already exists for this email.",
+                "message": "A free API key already exists for this email. It has been sent to that address.",
             })
 
     api_key = create_api_key(
@@ -2108,12 +2219,12 @@ async def mcp_register(request: Request):
     try:
         with open(FUNNEL_EVENTS_LOG, "a") as _f:
             _f.write(json.dumps({
-                "ts": datetime.now(timezone.utc).isoformat(),
+                "ts": datetime.now(UTC).isoformat(),
                 "event": "register_completion",
                 "scan_id": scan_id[:32] if scan_id else "",
                 "source": source,
                 "client_ip_hash": hashlib.sha256(client_ip.encode()).hexdigest()[:12],
-                "email_hash": email[:3] + "***" if email else "",
+                "email_hash": _email_hash(email),
             }) + "\n")
     except Exception:
         pass
@@ -2121,10 +2232,10 @@ async def mcp_register(request: Request):
     try:
         with open(CONVERSION_EVENTS_LOG, "a") as _cel:
             _cel.write(json.dumps({
-                "ts": datetime.now(timezone.utc).isoformat(),
+                "ts": datetime.now(UTC).isoformat(),
                 "event": "signup_attributed",
                 "plan": "free",
-                "email_hash": email[:3] + "***" if email else "",
+                "email_hash": _email_hash(email),
                 "source": source,
                 "scan_id": scan_id[:32] if scan_id else "",
                 "client_ip_hash": hashlib.sha256(client_ip.encode()).hexdigest()[:12],
@@ -2133,15 +2244,20 @@ async def mcp_register(request: Request):
         pass
 
 
-    return {
+    if client_ip not in _INTERNAL_IPS:
+        usage_metrics.record_free_signup()
+
+    response = {
         "api_key": api_key,
         "plan": "free",
         "limit": f"{FREE_TIER_MONTHLY_LIMIT} proofs/month",
         "email": email,
         "message": "Your free API key is ready. It has also been sent to your email.",
-        "upgrade_url": "https://arkforge.tech/en/pro-signup.html?utm_source=mcp_register_response",
-        "upgrade_cta": "Need more? Try Pro free for 14 days — 5,000 proofs/month, no charge until day 15.",
     }
+    if paid_plans_enabled():
+        response["upgrade_url"] = "https://arkforge.tech/en/pro-signup.html?utm_source=mcp_register_response"
+        response["upgrade_cta"] = "Need more? Try Pro free for 14 days — 5,000 proofs/month, no charge until day 15."
+    return response
 
 
 # --- POST /api/mcp-scan-ping ---
@@ -2175,11 +2291,11 @@ async def mcp_scan_ping(request: Request):
     except Exception:
         return JSONResponse(status_code=400, content={"status": "invalid_json"})
 
-    day_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    day_str = datetime.now(UTC).strftime("%Y-%m-%d")
     ip_hash = hashlib.sha256(f"{client_ip}:{day_str}".encode()).hexdigest()[:12]
 
     entry = {
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now(UTC).isoformat(),
         "tool": str(body.get("tool", "unknown"))[:64],
         "transport": str(body.get("transport", "unknown"))[:16],
         "scan_id": str(body.get("scan_id", ""))[:32],
@@ -2273,8 +2389,8 @@ async def contact_endpoint(request: Request):
 @app.post("/v1/keys/bind-did")
 async def bind_did_initiate(
     request: Request,
-    authorization: Optional[str] = Header(None),
-    x_api_key: Optional[str] = Header(None),
+    authorization: str | None = Header(None),
+    x_api_key: str | None = Header(None),
 ):
     """Initiate DID binding for the API key.
 
@@ -2345,8 +2461,8 @@ async def bind_did_initiate(
 @app.post("/v1/keys/bind-did/confirm")
 async def bind_did_confirm(
     request: Request,
-    authorization: Optional[str] = Header(None),
-    x_api_key: Optional[str] = Header(None),
+    authorization: str | None = Header(None),
+    x_api_key: str | None = Header(None),
 ):
     """Confirm DID binding by submitting a signature over the challenge."""
     api_key = _get_api_key(authorization, x_api_key)
@@ -2400,8 +2516,8 @@ async def bind_did_confirm(
 
 @app.get("/v1/keys/identity")
 async def keys_identity(
-    authorization: Optional[str] = Header(None),
-    x_api_key: Optional[str] = Header(None),
+    authorization: str | None = Header(None),
+    x_api_key: str | None = Header(None),
 ):
     """The key holder reads the DID bound to their key and its binding history.
 
@@ -2430,8 +2546,8 @@ async def keys_identity(
 @app.post("/v1/credits/buy")
 async def buy_credits(
     request: Request,
-    authorization: Optional[str] = Header(None),
-    x_api_key: Optional[str] = Header(None),
+    authorization: str | None = Header(None),
+    x_api_key: str | None = Header(None),
 ):
     """Buy prepaid credits by charging the saved card off-session."""
     api_key = _get_api_key(authorization, x_api_key)
@@ -2519,11 +2635,11 @@ def _prune_webhook_idempotency(max_age_days: int = 7) -> int:
     """
     if not WEBHOOK_IDEMPOTENCY_FILE.exists():
         return 0
-    cutoff = datetime.now(timezone.utc)
+    cutoff = datetime.now(UTC)
     kept = []
     removed = 0
     try:
-        with open(WEBHOOK_IDEMPOTENCY_FILE, "r") as f:
+        with open(WEBHOOK_IDEMPOTENCY_FILE) as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -2566,7 +2682,7 @@ def _is_webhook_processed(event_id: str) -> bool:
     if not event_id:
         return False
     try:
-        with open(WEBHOOK_IDEMPOTENCY_FILE, "r") as f:
+        with open(WEBHOOK_IDEMPOTENCY_FILE) as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -2579,7 +2695,7 @@ def _is_webhook_processed(event_id: str) -> bool:
                     continue
                 try:
                     ts = datetime.fromisoformat(entry["processed_at"])
-                    age_days = (datetime.now(timezone.utc) - ts).total_seconds() / 86400
+                    age_days = (datetime.now(UTC) - ts).total_seconds() / 86400
                     if age_days < 7:
                         return True
                 except (KeyError, ValueError):
@@ -2598,7 +2714,7 @@ def _mark_webhook_processed(event_id: str, *, event_type: str = "", session_id: 
     """
     if not event_id:
         return
-    entry: dict = {"event_id": event_id, "processed_at": datetime.now(timezone.utc).isoformat()}
+    entry: dict = {"event_id": event_id, "processed_at": datetime.now(UTC).isoformat()}
     if event_type:
         entry["event_type"] = event_type
     if session_id:
@@ -2633,10 +2749,8 @@ async def stripe_webhook(request: Request):
     if event is None:
         if secrets_to_try:
             _diag_type = "?"
-            try:
+            with suppress(Exception):
                 _diag_type = json.loads(payload).get("type", "?")
-            except Exception:
-                pass
             logger.error("Webhook signature verification failed (event_type=%s, sig_prefix=%s)", _diag_type, sig_header[:40] if sig_header else "none")
             raise HTTPException(400, "Invalid signature")
         # No secrets configured — reject all unauthenticated webhook calls.
@@ -2733,10 +2847,10 @@ def _process_stripe_event(event_type: str, data: dict, is_test: bool, event_id: 
             try:
                 with open(CONVERSION_EVENTS_LOG, "a") as _cel:
                     _cel.write(json.dumps({
-                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "ts": datetime.now(UTC).isoformat(),
                         "event": "checkout_completed",
                         "product": product or "free",
-                        "email_hash": customer_email[:3] + "***" if customer_email else "",
+                        "email_hash": _email_hash(customer_email),
                         "subscription_id": subscription_id,
                         "test_mode": is_test,
                         "is_external": _is_ext,
@@ -2745,10 +2859,10 @@ def _process_stripe_event(event_type: str, data: dict, is_test: bool, event_id: 
                     }) + "\n")
                     # Also emit signup_attributed for paid conversions
                     _cel.write(json.dumps({
-                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "ts": datetime.now(UTC).isoformat(),
                         "event": "signup_attributed",
                         "plan": product.replace("trust_layer_", "").replace("scanner_", "").replace("_subscription", "") if product else "pro",
-                        "email_hash": customer_email[:3] + "***" if customer_email else "",
+                        "email_hash": _email_hash(customer_email),
                         "source": "stripe_checkout",
                         "utm_source": metadata.get("utm_source", ""),
                         "utm_medium": metadata.get("utm_medium", ""),
@@ -2760,10 +2874,10 @@ def _process_stripe_event(event_type: str, data: dict, is_test: bool, event_id: 
                     }) + "\n")
                     if trial_key_ref:
                         _cel.write(json.dumps({
-                            "ts": datetime.now(timezone.utc).isoformat(),
+                            "ts": datetime.now(UTC).isoformat(),
                             "event": "trial_to_paid",
                             "trial_key_ref": trial_key_ref,
-                            "email_hash": customer_email[:3] + "***" if customer_email else "",
+                            "email_hash": _email_hash(customer_email),
                             "product": product or "free",
                             "test_mode": is_test,
                             "utm_source": metadata.get("utm_source", ""),
@@ -2779,7 +2893,7 @@ def _process_stripe_event(event_type: str, data: dict, is_test: bool, event_id: 
             _email = key_record.get("email", "")
             _api_key = key_record["_key"]
             trial_end = data.get("trial_end")  # unix timestamp or None
-            in_trial = trial_end and datetime.now(timezone.utc).timestamp() <= float(trial_end)
+            in_trial = trial_end and datetime.now(UTC).timestamp() <= float(trial_end)
             try:
                 if in_trial:
                     send_trial_ended_email(_email, _api_key)
@@ -2848,14 +2962,14 @@ def _process_stripe_event(event_type: str, data: dict, is_test: bool, event_id: 
             except Exception as _e:
                 logger.warning("Checkout abandoned email failed: %s", _e)
         elif _is_fake and customer_email:
-            logger.info("Skipped abandoned email for test/fake address (%s): %s", _fake_reason, customer_email[:3] + "***")
+            logger.info("Skipped abandoned email for test/fake address (%s): %s", _fake_reason, _email_hash(customer_email))
             try:
                 with open(CONVERSION_EVENTS_LOG, "a") as _cel:
                     _cel.write(json.dumps({
-                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "ts": datetime.now(UTC).isoformat(),
                         "event": "checkout_abandoned",
                         "plan": plan,
-                        "email_hash": customer_email[:3] + "***",
+                        "email_hash": _email_hash(customer_email),
                         "test_mode": is_test,
                         "is_external": metadata.get("is_external", "") == "true",
                         "source_type": metadata.get("source_type", "unknown"),
@@ -2906,7 +3020,7 @@ async def health():
         "status": "ok",
         "service": "arkforge-trust-layer",
         "version": __version__,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "environment": TRUST_LAYER_ENV,
     }
     blocked = _writes_blocked()
@@ -2924,7 +3038,7 @@ async def health():
         "healthy": _email_failure_count < 3,
     }
     if _last_failure_time:
-        resp["email"]["last_failure"] = datetime.fromtimestamp(_last_failure_time, tz=timezone.utc).isoformat()
+        resp["email"]["last_failure"] = datetime.fromtimestamp(_last_failure_time, tz=UTC).isoformat()
     return resp
 
 
@@ -2934,8 +3048,8 @@ async def health():
 async def funnel_metrics(
     request: Request,
     days: int = 7,
-    x_api_key: Optional[str] = Header(None),
-    authorization: Optional[str] = Header(None),
+    x_api_key: str | None = Header(None),
+    authorization: str | None = Header(None),
 ):
     api_key = _get_api_key(authorization, x_api_key)
     if not api_key:
@@ -2945,7 +3059,7 @@ async def funnel_metrics(
         return _error_response("forbidden", "Internal key required", 403)
 
     from datetime import timedelta
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=min(days, 90))).isoformat()
+    cutoff = (datetime.now(UTC) - timedelta(days=min(days, 90))).isoformat()
     counts = {"cta_impression": 0, "register_page_visit": 0, "register_completion": 0}
     by_day: dict = {}
 
@@ -2994,8 +3108,8 @@ async def funnel_metrics(
 @app.post("/v1/keys/overage")
 async def set_overage(
     request: Request,
-    authorization: Optional[str] = Header(None),
-    x_api_key: Optional[str] = Header(None),
+    authorization: str | None = Header(None),
+    x_api_key: str | None = Header(None),
 ):
     """Enable or disable overage billing for the requesting API key.
 
@@ -3064,8 +3178,8 @@ async def set_overage(
 
 @app.get("/v1/keys/overage")
 async def get_overage(
-    authorization: Optional[str] = Header(None),
-    x_api_key: Optional[str] = Header(None),
+    authorization: str | None = Header(None),
+    x_api_key: str | None = Header(None),
 ):
     """Return current overage settings for the requesting API key."""
     api_key = _get_api_key(authorization, x_api_key)
@@ -3083,8 +3197,8 @@ async def get_overage(
 
 @app.get("/v1/usage")
 async def usage(
-    authorization: Optional[str] = Header(None),
-    x_api_key: Optional[str] = Header(None),
+    authorization: str | None = Header(None),
+    x_api_key: str | None = Header(None),
 ):
     """Return current usage for the requesting API key."""
     api_key = _get_api_key(authorization, x_api_key)
@@ -3104,6 +3218,14 @@ async def usage(
 
 @app.get("/v1/pricing")
 async def pricing():
+    body = _pricing_body()
+    if not paid_plans_enabled():
+        # Free mode: only the free plan is offered, with no upgrade call to action.
+        body["plans"] = {"free": body["plans"]["free"]}
+    return body
+
+
+def _pricing_body() -> dict:
     return {
         "plans": {
             "free": {
@@ -3210,10 +3332,7 @@ async def track_event(request: Request):
     page_url = (body.get("page_url") or "")[:256]
 
     event_data = body.get("data") or {}
-    if isinstance(event_data, dict):
-        event_data = {k: str(v)[:200] for k, v in list(event_data.items())[:10]}
-    else:
-        event_data = {}
+    event_data = {k: str(v)[:200] for k, v in list(event_data.items())[:10]} if isinstance(event_data, dict) else {}
     _log_funnel_event(event, client_ip, referer, user_agent, extra={
         "utm_source": utm_source,
         "page_url": page_url, **event_data,
@@ -3406,8 +3525,9 @@ async def get_agent_json():
 @app.get("/v1/stats")
 async def get_stats():
     """Public proof + assess counts — no auth required. Cached 60s."""
-    from .config import PROOFS_DIR, ASSESSMENTS_DIR
     import time
+
+    from .config import ASSESSMENTS_DIR, PROOFS_DIR
     cache = getattr(get_stats, "_cache", None)
     now = time.monotonic()
     if cache and now - cache["ts"] < 60:
@@ -3441,8 +3561,8 @@ async def agent_reputation(agent_id: str):
 @app.post("/v1/disputes")
 async def file_dispute(
     request: Request,
-    authorization: Optional[str] = Header(None),
-    x_api_key: Optional[str] = Header(None),
+    authorization: str | None = Header(None),
+    x_api_key: str | None = Header(None),
 ):
     """File a dispute against a proof. Resolved instantly."""
     api_key = _get_api_key(authorization, x_api_key)
@@ -3487,7 +3607,7 @@ def _dispute_impact_message(dispute: dict) -> str:
     if status == "UPHELD":
         return f"{dispute['contestant_role'].title()} wins. Proof corrected. Loser +1 lost_dispute."
     elif status == "DENIED":
-        return f"Dispute denied. Contestant +1 lost_dispute."
+        return "Dispute denied. Contestant +1 lost_dispute."
     return "No impact."
 
 
@@ -3504,8 +3624,8 @@ async def agent_disputes(agent_id: str):
 @app.post("/attest")
 async def attest_endpoint(
     request: Request,
-    authorization: Optional[str] = Header(None),
-    x_api_key: Optional[str] = Header(None),
+    authorization: str | None = Header(None),
+    x_api_key: str | None = Header(None),
 ):
     """Provider-agnostic execution attestation — Encina HttpAttestationProvider compatible.
 
@@ -3567,8 +3687,8 @@ async def attest_endpoint(
 @app.get("/receipt/{attestation_id}")
 async def get_receipt_endpoint(
     attestation_id: str,
-    authorization: Optional[str] = Header(None),
-    x_api_key: Optional[str] = Header(None),
+    authorization: str | None = Header(None),
+    x_api_key: str | None = Header(None),
 ):
     """Retrieve a stored attestation receipt by ID.
 

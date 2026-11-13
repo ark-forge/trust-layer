@@ -1,6 +1,7 @@
 """Admin endpoints — smoke test lifecycle and batch anchoring (internal use only)."""
 import asyncio
 import logging
+import os
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -11,6 +12,7 @@ from ..keys import (
     deactivate_key_by_ref,
     deactivate_smoke_keys,
 )
+from ..usage_metrics import MetricsUnavailableError, snapshot
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -93,3 +95,25 @@ async def batch_close(request: Request) -> JSONResponse:
         "timestamp_authority": record["timestamp_authority"].get("status"),
         "transparency_log": record["transparency_log"].get("status"),
     })
+
+
+@router.get("/v1/admin/metrics")
+async def usage_metrics(request: Request, days: int = 7) -> JSONResponse:
+    """Daily aggregate totals (free keys created, active keys, proofs, verifications).
+
+    Protected by X-Internal-Secret like the other admin routes. Totals only: no
+    IP, email, key or per-identifier figure, hashed or not. 503 when the counters
+    cannot be read, so a failed read never looks like a day of zeros.
+    """
+    if not _authorized(request):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    try:
+        data = snapshot(days)
+    except MetricsUnavailableError:
+        return JSONResponse({"error": "metrics_unavailable"}, status_code=503)
+    # Without the salt no active-key sketch is ever written: say so, do not show a zero.
+    data["salt_configured"] = bool(os.environ.get("TL_METRICS_SALT"))
+    if not data["salt_configured"]:
+        for row in data["days"]:
+            row["active_keys"] = None
+    return JSONResponse(data)
