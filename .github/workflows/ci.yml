@@ -33,6 +33,30 @@ jobs:
           pip-audit --require-hashes --disable-pip -r requirements-dev.txt
           pip-audit --require-hashes --disable-pip -r requirements-dev.txt --vulnerability-service osv
 
+  ruff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Ruff on the .py files changed by this PR or push (never the whole repo)
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          base="${PR_BASE:-$PUSH_BEFORE}"
+          # New branch (all-zero "before") or unreadable base: fall back to the merge base with main.
+          if [ -z "$base" ] || [ "${base//0/}" = "" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            base=$(git merge-base origin/main HEAD) || { echo "cannot determine the base to diff against"; exit 1; }
+          fi
+          git diff --name-only -z --diff-filter=ACMR "$base" HEAD -- '*.py' > "$RUNNER_TEMP/changed_py.list"
+          if [ ! -s "$RUNNER_TEMP/changed_py.list" ]; then
+            echo "No .py file changed, nothing to lint."
+            exit 0
+          fi
+          pip install ruff==0.14.0
+          xargs -0 ruff check < "$RUNNER_TEMP/changed_py.list"
+
   lock:
     runs-on: ubuntu-latest
     steps:
