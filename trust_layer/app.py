@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
 
 import stripe
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -85,6 +85,7 @@ _FAILOVER_BLOCKED_PATHS = {
     "/v1/keys/portal",
     "/v1/keys/free-signup",
     "/api/register",
+    "/v1/register/confirm",
     "/v1/keys/overage",
     "/v1/keys/bind-did",
     "/v1/keys/bind-did/confirm",
@@ -250,6 +251,7 @@ from .email_notify import (  # noqa: E402
     _is_test_email,
     send_admin_alert,
     send_checkout_abandoned_email,
+    send_confirmation_email,
     send_demo_request_email,
     send_subscription_reactivated_email,
     send_subscription_suspended_email,
@@ -259,7 +261,7 @@ from .email_notify import (  # noqa: E402
     send_welcome_email,
     send_welcome_email_pro,
 )
-from .free_tier_guard import hash_identifier, paid_plans_enabled, signup_count, writes_paused  # noqa: E402
+from .free_tier_guard import hash_identifier, paid_plans_enabled, writes_paused  # noqa: E402
 from .keys import (  # noqa: E402
     create_api_key,
     create_trial_key,
@@ -726,9 +728,13 @@ app.include_router(_compliance_router)
 from .routers.verdict import router as _verdict_router  # noqa: E402
 
 app.include_router(_verdict_router)
+from . import registration  # noqa: E402
 from .routers.admin import router as _admin_router  # noqa: E402
 
 app.include_router(_admin_router)
+from .routers.registration import router as _registration_router  # noqa: E402
+
+app.include_router(_registration_router)
 
 
 # --- Helpers ---
@@ -1780,9 +1786,6 @@ def _looks_like_gibberish(local_part: str) -> bool:
 # Valid proof ID format: prf_YYYYMMDD_HHMMSS_<6hex>
 _PROOF_ID_RE = _re.compile(r"^prf_\d{8}_\d{6}_[0-9a-f]{6}$")
 
-_FREE_SIGNUP_RATE: dict[str, list[float]] = {}  # IP -> timestamps (sliding 1h)
-_FREE_SIGNUP_MAX_PER_HOUR = 5
-
 _BLOCKED_EMAIL_DOMAINS = frozenset({
     "example.com", "example.org", "example.net",
     "test.com", "test.org",
@@ -1908,18 +1911,48 @@ def _log_funnel_event(event: str, client_ip: str, referer: str, user_agent: str,
         pass
 
 
-@app.post("/v1/keys/free-signup")
-async def free_signup(request: Request):
-    """Create a free-tier API key with email only — no credit card required."""
-    import time
+_PENDING_RESPONSE = {
+    "status": "pending_confirmation",
+    "message": "If this address can receive mail, a confirmation link is on its way. "
+               "It is valid for 24 hours. The API key is sent to that address once confirmed.",
+}
 
+
+def _send_confirmation_mail(email: str, token: str) -> None:
+    try:
+        send_confirmation_email(email, token)
+    except Exception as e:
+        logger.warning("Confirmation mail not sent: %s", type(e).__name__)
+
+
+async def _start_registration(request: Request, background: BackgroundTasks, email: str, meta: dict):
+    """Shared tail of /v1/keys/free-signup and /api/register: same 202 whether the address is new or known."""
+    client_ip = (
+        request.headers.get("x-real-ip")
+        or (request.client.host if request.client else "unknown")
+    )
+    try:
+        job = registration.request_registration(email, client_ip, meta)
+    except registration.RegistrationError as e:
+        return _error_response(e.code, e.message, e.status)
+    if job is not None:
+        background.add_task(_send_confirmation_mail, *job)
+        registration.log_funnel("register_requested", client_ip, email, meta)
+    return JSONResponse(status_code=202, content=_PENDING_RESPONSE)
+
+
+@app.post("/v1/keys/free-signup")
+async def free_signup(request: Request, background: BackgroundTasks):
+    """Ask for a free-tier API key by email only. The key is mailed once the address is confirmed."""
     try:
         body = await request.json()
     except Exception:
         return _error_response("invalid_request", "Invalid JSON body", 400)
+    if not isinstance(body, dict):
+        return _error_response("invalid_request", "Invalid JSON body", 400)
 
     if body.get("website"):
-        return {"api_key": "", "limit": "500 proofs/month", "email": "", "message": "OK"}
+        return JSONResponse(status_code=202, content=_PENDING_RESPONSE)
 
     email = (body.get("email") or "").strip().lower()
     if not email or not _EMAIL_RE.match(email):
@@ -1937,105 +1970,18 @@ async def free_signup(request: Request):
     if not _verify_mx(domain):
         return _error_response("invalid_request", "This email domain cannot receive mail. Please use a real email address.", 422)
 
-    # Rate limit: max 5 signups per IP per hour.
-    # X-Real-IP is set by nginx from $remote_addr and cannot be forged by clients.
-    # Fall back to direct connection IP if the header is absent.
-    client_ip = (
-        request.headers.get("x-real-ip")
-        or (request.client.host if request.client else "unknown")
-    )
-    # Shared between nodes through Redis; the per-node memory window is the fallback
-    # only when Redis cannot answer (free proofs are refused in that case anyway).
-    # No salt, no Redis key: an unsalted IP digest is reversible, so the node-local window serves.
-    ip_id = _ip_id(client_ip)
-    shared = signup_count(ip_id) if ip_id else None
-    if shared is not None:
-        if shared > _FREE_SIGNUP_MAX_PER_HOUR:
-            return _error_response("rate_limited", "Too many signups. Try again later.", 429)
-    else:
-        now = time.time()
-        timestamps = _FREE_SIGNUP_RATE.get(client_ip, [])
-        timestamps = [t for t in timestamps if t > now - 3600]
-        if len(timestamps) >= _FREE_SIGNUP_MAX_PER_HOUR:
-            return _error_response("rate_limited", "Too many signups. Try again later.", 429)
-        timestamps.append(now)
-        _FREE_SIGNUP_RATE[client_ip] = timestamps
-
-    # Check if email already has a free key
-    from .keys import load_api_keys
-    existing_keys = load_api_keys()
-    for _key, info in existing_keys.items():
-        if info.get("email", "").lower() == email and info.get("plan") == "free" and info.get("active"):
-            return _error_response("already_exists", "A free API key already exists for this email. Check your inbox or contact support.", 409)
-
-    # Create free-tier key (no Stripe customer needed)
-    api_key = create_api_key(
-        stripe_customer_id="",
-        ref_id=f"free_signup_{email}",
-        email=email,
-        test_mode=False,
-        plan="free",
-    )
-    logger.info("Free API key created for %s", email)
-    if client_ip not in _INTERNAL_IPS:
-        usage_metrics.record_free_signup()
-
-    try:
-        send_welcome_email(email, api_key)
-    except (OSError, RuntimeError) as e:
-        logger.warning("Welcome email failed for free signup %s: %s", email, e)
-
-    # Attribution event: capture referrer + UTM for funnel tracking
+    # Attribution: kept in the pending record, logged at the confirm step.
     referrer = request.headers.get("referer", "")
-    utm_source = body.get("utm_source", "")
-    utm_medium = body.get("utm_medium", "")
-    utm_campaign = body.get("utm_campaign", "")
+    utm_source = str(body.get("utm_source") or "")
     attribution_source = utm_source or _classify_referrer_source(referrer)
-    try:
-        with open(CONVERSION_EVENTS_LOG, "a") as _cel:
-            _cel.write(json.dumps({
-                "ts": datetime.now(UTC).isoformat(),
-                "event": "signup_attributed",
-                "plan": "free",
-                "email_hash": _email_hash(email),
-                "source": attribution_source,
-                "utm_source": utm_source,
-                "utm_medium": utm_medium,
-                "utm_campaign": utm_campaign,
-                "referrer": referrer,
-                "client_ip_hash": hashlib.sha256(client_ip.encode()).hexdigest()[:12],
-            }) + "\n")
-    except OSError:
-        pass
-
-
-    # Funnel event: register_completion from web form (/en/signup.html → /v1/keys/free-signup).
-    # Mirrors the emission in /api/register (MCP phone-home) so funnel metrics aggregate
-    # both surfaces uniformly. Without this, web signups bypass the funnel_events stream.
-    try:
-        with open(FUNNEL_EVENTS_LOG, "a") as _f:
-            _f.write(json.dumps({
-                "ts": datetime.now(UTC).isoformat(),
-                "event": "register_completion",
-                "scan_id": "",
-                "source": f"web_{attribution_source}" if attribution_source else "web_direct",
-                "client_ip_hash": hashlib.sha256(client_ip.encode()).hexdigest()[:12],
-                "email_hash": _email_hash(email),
-            }) + "\n")
-    except Exception:
-        pass
-
-    response = {
-        "api_key": api_key,
-        "plan": "free",
-        "limit": f"{FREE_TIER_MONTHLY_LIMIT} proofs/month",
-        "email": email,
-        "message": "Your free API key is ready. It has also been sent to your email.",
+    meta = {
+        "source": f"web_{attribution_source}" if attribution_source else "web_direct",
+        "utm_source": utm_source,
+        "utm_medium": str(body.get("utm_medium") or ""),
+        "utm_campaign": str(body.get("utm_campaign") or ""),
+        "referrer": referrer,
     }
-    if paid_plans_enabled():
-        response["upgrade_url"] = "https://arkforge.tech/en/pro-signup.html?utm_source=free_signup_response"
-        response["upgrade_cta"] = "Need more? Try Pro free for 14 days — 5,000 proofs/month, no charge until day 15."
-    return response
+    return await _start_registration(request, background, email, meta)
 
 
 # --- GET /register (inline CTA from MCP scan results) ---
@@ -2125,12 +2071,12 @@ headers:{{'Content-Type':'application/json'}},
 body:JSON.stringify({{email:email,source:'web_register',scan_id:scanId}})
 }});
 const d=await r.json();
-if(r.ok&&d.api_key){{
+if(r.status===202&&d.status==='pending_confirmation'){{
 res.className='result ok';
-res.innerHTML='API key activated!<div class="key-box"><span>'+d.api_key+'</span><button class="copy-btn" onclick="navigator.clipboard.writeText(\\''+d.api_key+'\\');this.textContent=\\'Copied\\'">Copy</button></div><p style="margin-top:.75rem;font-size:.85rem;color:#a0a0b0">Also sent to '+email+'</p>';
-btn.textContent='Done';
+res.textContent='Check your mailbox and confirm your email: your API key is sent to it once confirmed.';
+btn.textContent='Check your mailbox';
 }}else{{
-throw new Error(d.detail||d.error||'Registration failed');
+throw new Error((d.error&&d.error.message)||d.detail||'Registration failed');
 }}
 }}catch(err){{
 res.className='result err';
@@ -2147,22 +2093,22 @@ res.style.display='block';
 
 # --- POST /api/register (MCP phone-home) ---
 
-_MCP_REGISTER_RATE: dict = {}
-_MCP_REGISTER_MAX_PER_HOUR = 10
-
 @app.post("/api/register")
-async def mcp_register(request: Request):
-    """Register a free API key from MCP stdio clients (phone-home).
+async def mcp_register(request: Request, background: BackgroundTasks):
+    """Ask for a free API key from MCP stdio clients (phone-home).
 
-    Lightweight endpoint for MCP servers running in stdio mode to register
-    users server-side instead of writing keys locally (where they have no value).
+    Same flow as /v1/keys/free-signup: the response never carries the key, which is
+    mailed to the address once it is confirmed.
     """
-    import time as _time
-
     try:
         body = await request.json()
     except Exception:
         return _error_response("invalid_request", "Invalid JSON body", 400)
+    if not isinstance(body, dict):
+        return _error_response("invalid_request", "Invalid JSON body", 400)
+
+    if body.get("website"):
+        return JSONResponse(status_code=202, content=_PENDING_RESPONSE)
 
     email = (body.get("email") or "").strip().lower()
     if not email or not _EMAIL_RE.match(email):
@@ -2171,93 +2117,8 @@ async def mcp_register(request: Request):
     if len(email) > 320 or len(local_part) > 64:
         return _error_response("invalid_request", "Email address exceeds maximum allowed length", 400)
 
-    client_ip = (
-        request.headers.get("x-real-ip")
-        or (request.client.host if request.client else "unknown")
-    )
-    now = _time.time()
-    timestamps = _MCP_REGISTER_RATE.get(client_ip, [])
-    timestamps = [t for t in timestamps if t > now - 3600]
-    if len(timestamps) >= _MCP_REGISTER_MAX_PER_HOUR:
-        return _error_response("rate_limited", "Too many registrations. Try again later.", 429)
-    timestamps.append(now)
-    _MCP_REGISTER_RATE[client_ip] = timestamps
-
-    from .keys import load_api_keys
-    existing_keys = load_api_keys()
-    for key, info in existing_keys.items():
-        if info.get("email", "").lower() == email and info.get("plan") == "free" and info.get("active"):
-            # The key goes to the mailbox only: whoever typed the address must not get it.
-            try:
-                send_welcome_email(email, key)
-            except (OSError, RuntimeError) as e:
-                logger.warning("Key resend failed for MCP register %s: %s", email, e)
-            return JSONResponse(content={
-                "plan": "free",
-                "email": email,
-                "already_existed": True,
-                "message": "A free API key already exists for this email. It has been sent to that address.",
-            })
-
-    api_key = create_api_key(
-        stripe_customer_id="",
-        ref_id=f"mcp_phonehome_{email}",
-        email=email,
-        test_mode=False,
-        plan="free",
-    )
-    logger.info("MCP phone-home registration for %s", email)
-
-    try:
-        send_welcome_email(email, api_key)
-    except (OSError, RuntimeError) as e:
-        logger.warning("Welcome email failed for MCP register %s: %s", email, e)
-
-    # --- Funnel event: register completion ---
-    source = body.get("source", "mcp_phonehome")
-    scan_id = body.get("scan_id", "")
-    try:
-        with open(FUNNEL_EVENTS_LOG, "a") as _f:
-            _f.write(json.dumps({
-                "ts": datetime.now(UTC).isoformat(),
-                "event": "register_completion",
-                "scan_id": scan_id[:32] if scan_id else "",
-                "source": source,
-                "client_ip_hash": hashlib.sha256(client_ip.encode()).hexdigest()[:12],
-                "email_hash": _email_hash(email),
-            }) + "\n")
-    except Exception:
-        pass
-
-    try:
-        with open(CONVERSION_EVENTS_LOG, "a") as _cel:
-            _cel.write(json.dumps({
-                "ts": datetime.now(UTC).isoformat(),
-                "event": "signup_attributed",
-                "plan": "free",
-                "email_hash": _email_hash(email),
-                "source": source,
-                "scan_id": scan_id[:32] if scan_id else "",
-                "client_ip_hash": hashlib.sha256(client_ip.encode()).hexdigest()[:12],
-            }) + "\n")
-    except OSError:
-        pass
-
-
-    if client_ip not in _INTERNAL_IPS:
-        usage_metrics.record_free_signup()
-
-    response = {
-        "api_key": api_key,
-        "plan": "free",
-        "limit": f"{FREE_TIER_MONTHLY_LIMIT} proofs/month",
-        "email": email,
-        "message": "Your free API key is ready. It has also been sent to your email.",
-    }
-    if paid_plans_enabled():
-        response["upgrade_url"] = "https://arkforge.tech/en/pro-signup.html?utm_source=mcp_register_response"
-        response["upgrade_cta"] = "Need more? Try Pro free for 14 days — 5,000 proofs/month, no charge until day 15."
-    return response
+    meta = {"source": str(body.get("source") or "mcp_phonehome"), "scan_id": str(body.get("scan_id") or "")}
+    return await _start_registration(request, background, email, meta)
 
 
 # --- POST /api/mcp-scan-ping ---
@@ -3478,11 +3339,11 @@ async def get_agent_json():
             },
             {
                 "name": "free_signup",
-                "description": "Create a free-tier API key (500 proofs/month, no credit card required)",
+                "description": "Request a free-tier API key (500 proofs/month, no credit card required). The key is emailed after address confirmation; it is not returned in the response",
                 "endpoint": f"{base}/v1/keys/free-signup",
                 "method": "POST",
                 "parameters": {},
-                "returns": {"type": "object", "description": "API key and usage quota"},
+                "returns": {"type": "object", "description": "Pending confirmation status; the API key is sent by email"},
             },
         ],
         "pricing": {

@@ -6,6 +6,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 
+@pytest.fixture(autouse=True)
+def _salt(monkeypatch):
+    # Registration fails closed without the salt (the fake Redis comes from conftest).
+    monkeypatch.setenv("TL_METRICS_SALT", "test-salt-not-from-the-repo")
+
+
 @pytest.fixture
 def client():
     from trust_layer.app import app
@@ -71,14 +77,12 @@ class TestRegisterPageVisit:
 
 
 class TestRegisterCompletion:
-    def test_register_post_logs_completion(self, client, tmp_path):
-        resp = client.post(
-            "/api/register",
-            json={"email": "newuser@example.com", "source": "web_register", "scan_id": "asr_test_123"},
+    def test_register_post_logs_completion(self, client, tmp_path, signup_key):
+        key = signup_key(
+            client, "newuser@example.com", path="/api/register",
+            source="web_register", scan_id="asr_test_123",
         )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "api_key" in data
+        assert key.startswith("mcp_free_")
 
         events = _read_funnel_events(tmp_path)
         completion_events = [e for e in events if e["event"] == "register_completion"]
@@ -86,12 +90,11 @@ class TestRegisterCompletion:
         assert completion_events[0]["source"] == "web_register"
         assert completion_events[0]["scan_id"] == "asr_test_123"
 
-    def test_existing_key_no_completion_event(self, client, tmp_path):
-        client.post("/api/register", json={"email": "dup@example.com", "source": "web_register"})
+    def test_existing_key_no_completion_event(self, client, tmp_path, signup_key):
+        signup_key(client, "dup@example.com", path="/api/register", source="web_register")
 
         resp = client.post("/api/register", json={"email": "dup@example.com", "source": "web_register"})
-        assert resp.status_code == 200
-        assert resp.json().get("already_existed") is True
+        assert resp.status_code == 202
         assert "api_key" not in resp.json()
 
         events_after = _read_funnel_events(tmp_path)
@@ -104,14 +107,14 @@ class TestFunnelMetricsEndpoint:
         resp = client.get("/v1/funnel-metrics", headers={"X-Api-Key": free_key})
         assert resp.status_code == 403
 
-    def test_returns_aggregated_counts(self, client, internal_key, free_key, tmp_path):
+    def test_returns_aggregated_counts(self, client, internal_key, free_key, tmp_path, signup_key):
         client.post(
             "/v1/assess",
             json={"server_id": "s1", "manifest": {"tools": [{"name": "t1"}]}},
             headers={"X-Api-Key": free_key},
         )
         client.get("/register?scan_id=asr_test")
-        client.post("/api/register", json={"email": "agg@example.com", "source": "web_register"})
+        signup_key(client, "agg@example.com", path="/api/register", source="web_register")
 
         resp = client.get("/v1/funnel-metrics", headers={"X-Api-Key": internal_key})
         assert resp.status_code == 200

@@ -158,3 +158,40 @@ def client():
     """FastAPI test client."""
     from trust_layer.app import app
     return TestClient(app)
+
+
+@pytest.fixture
+def mailbox(monkeypatch):
+    """Capture every mail handed to _send_email as {"to", "subject", "body"}."""
+    import trust_layer.email_notify as email_mod
+    sent: list[dict] = []
+    monkeypatch.setattr(
+        email_mod, "_send_email",
+        lambda to, subject, body: sent.append({"to": to, "subject": subject, "body": body}),
+    )
+    return sent
+
+
+@pytest.fixture
+def signup_key(mailbox):
+    """Return a callable that registers an address, confirms it from the mail, and returns the key.
+
+    Needs TL_METRICS_SALT set and a Redis (the autouse fixture provides a fake one).
+    """
+    import re
+
+    def _signup(client, email, path="/v1/keys/free-signup", headers=None, **extra):
+        before = len(mailbox)
+        r = client.post(path, json={"email": email, **extra}, headers=headers or {})
+        assert r.status_code == 202, r.text
+        mails = mailbox[before:]
+        assert len(mails) == 1
+        token = re.search(r"#token=([A-Za-z0-9_\-]+)", mails[0]["body"]).group(1)
+        before = len(mailbox)
+        c = client.post("/v1/register/confirm", json={"token": token}, headers=headers or {})
+        assert c.status_code == 200, c.text
+        key_mail = mailbox[before:]
+        assert len(key_mail) == 1
+        return re.search(r"Your API key: (\S+)", key_mail[0]["body"]).group(1)
+
+    return _signup

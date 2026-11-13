@@ -9,7 +9,7 @@ Not a log. Not a trace. A proof.
 curl -X POST https://trust.arkforge.tech/v1/keys/free-signup \
   -H "Content-Type: application/json" \
   -d '{"email": "you@example.com"}'
-# → {"api_key": "mcp_free_xxxx...", "plan": "free", "limit": "500 proofs/month"}
+# → 202 {"status": "pending_confirmation"}  (confirm your address from the email; the key is sent by email only)
 ```
 
 [![Live](https://img.shields.io/badge/live-arkforge.tech-green)](https://trust.arkforge.tech/v1/health)
@@ -78,7 +78,7 @@ See a live proof: [example transaction](https://trust.arkforge.tech/v1/proof/prf
 curl -X POST https://trust.arkforge.tech/v1/keys/free-signup \
   -H "Content-Type: application/json" \
   -d '{"email": "you@example.com"}'
-# → {"api_key": "mcp_free_xxxx...", "plan": "free", "limit": "500 proofs/month"}
+# → 202 {"status": "pending_confirmation"}  (confirm your address from the email; the key is sent by email only)
 ```
 
 ### Step 2 — Make a certified API call

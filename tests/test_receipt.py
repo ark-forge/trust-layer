@@ -1,32 +1,30 @@
 """Tests for receipt fetching, parsing, and chain hash integration."""
 
 import hashlib
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
-from trust_layer.receipt import (
-    ReceiptResult,
-    ReceiptParser,
-    StripeReceiptParser,
-    fetch_receipt,
-    register_parser,
-    get_parser,
-    get_registered_domains,
-    _validate_receipt_url,
-    _detect_receipt_type,
-    _PARSER_REGISTRY,
-)
 from trust_layer.proofs import (
+    SPEC_VERSION,
     generate_proof,
-    verify_proof_integrity,
     get_public_proof,
     sha256_hex,
-    SPEC_VERSION,
-    SPEC_VERSION_RECEIPT,
+    verify_proof_integrity,
 )
-
+from trust_layer.receipt import (
+    _PARSER_REGISTRY,
+    ReceiptParser,
+    ReceiptResult,
+    StripeReceiptParser,
+    _detect_receipt_type,
+    _validate_receipt_url,
+    fetch_receipt,
+    get_parser,
+    get_registered_domains,
+    register_parser,
+)
 
 # ═══════════════════════════════════════════════════════════
 # URL Validation
@@ -489,11 +487,18 @@ class TestPublicProofWithReceipt:
 class TestProxyIntegration:
     """Integration tests using FastAPI TestClient."""
 
+    @pytest.fixture(autouse=True)
+    def _salt(self, monkeypatch):
+        # Registration fails closed without the salt (the fake Redis comes from conftest).
+        monkeypatch.setenv("TL_METRICS_SALT", "test-salt-not-from-the-repo")
+
+    @pytest.fixture(autouse=True)
+    def _signup(self, signup_key):
+        self._signup_key = signup_key
+
     def _setup_free_key(self, client):
-        """Create a free API key and return it."""
-        resp = client.post("/v1/keys/free-signup", json={"email": "receipt-test@arkforge-test.dev"})
-        assert resp.status_code == 200
-        return resp.json()["api_key"]
+        """Register a free address, confirm it from the mail, and return the key."""
+        return self._signup_key(client, "receipt-test@arkforge-test.dev")
 
     def test_proxy_with_provider_payment(self, client):
         api_key = self._setup_free_key(client)

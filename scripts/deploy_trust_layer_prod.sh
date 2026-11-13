@@ -455,7 +455,7 @@ except Exception:
         fi
         # Both gates must pass. The security test runs first: its ephemeral key uses
         # a smoke.invalid email, swept by the teardown at the end of the smoke test.
-        if python3 "$SECURITY_TEST_SCRIPT" --url "$SMOKE_BASE_URL" 2>&1 | tee -a "$SMOKE_LOG" | tail -8 \
+        if TRUST_LAYER_INTERNAL_SECRET="$SMOKE_INTERNAL_SECRET" python3 "$SECURITY_TEST_SCRIPT" --url "$SMOKE_BASE_URL" 2>&1 | tee -a "$SMOKE_LOG" | tail -8 \
            && TRUST_LAYER_INTERNAL_SECRET="$SMOKE_INTERNAL_SECRET" \
               TRUST_LAYER_SMOKE_WEBHOOK_SECRET="$SMOKE_WEBHOOK_SECRET" python3 "$SMOKE_TEST_SCRIPT" \
                --base-url "$SMOKE_BASE_URL" \

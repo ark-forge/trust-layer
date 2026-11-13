@@ -1,15 +1,20 @@
 """API key lifecycle — generate, validate, deactivate."""
 
 import json
+import logging
 import os
 import secrets
 import threading
-import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Optional
 
-from .config import API_KEYS_FILE, OVERAGE_CAP_DEFAULT, OVERAGE_CAP_MIN, OVERAGE_CAP_MAX, OVERAGE_PRICES, PLATFORM_MONTHLY_LIMIT
+from .config import (
+    API_KEYS_FILE,
+    OVERAGE_CAP_DEFAULT,
+    OVERAGE_CAP_MAX,
+    OVERAGE_CAP_MIN,
+    OVERAGE_PRICES,
+)
 from .persistence import load_json, save_json
 
 logger = logging.getLogger("trust_layer.keys")
@@ -63,7 +68,6 @@ def load_api_keys() -> dict:
     if not raw:
         return {}
     try:
-        from cryptography.fernet import InvalidToken
         decrypted = fernet.decrypt(raw)
         return json.loads(decrypted)
     except Exception:
@@ -110,7 +114,7 @@ def generate_api_key(test_mode: bool = False, plan: str = "pro") -> str:
     return f"{prefix}{secrets.token_hex(24)}"
 
 
-def validate_api_key(key: str) -> Optional[dict]:
+def validate_api_key(key: str) -> dict | None:
     """Return key info if valid and active, else None. Lazily expires trial keys."""
     keys = load_api_keys()
     info = keys.get(key)
@@ -118,17 +122,36 @@ def validate_api_key(key: str) -> Optional[dict]:
         return None
     if info.get("plan") == "trial":
         trial_ends = info.get("trial_ends", "")
-        if trial_ends and datetime.now(timezone.utc).isoformat() > trial_ends:
+        if trial_ends and datetime.now(UTC).isoformat() > trial_ends:
             with _KEYS_LOCK:
                 keys2 = load_api_keys()
                 if keys2.get(key, {}).get("active"):
                     keys2[key]["active"] = False
-                    keys2[key]["deactivated_at"] = datetime.now(timezone.utc).isoformat()
+                    keys2[key]["deactivated_at"] = datetime.now(UTC).isoformat()
                     keys2[key]["deactivation_reason"] = "trial_expired"
                     save_api_keys(keys2)
             logger.info("Trial key lazily expired: %s***", key[:16])
             return None
     return info
+
+
+def _new_key_record(stripe_customer_id: str, ref_id: str, email: str, plan: str) -> dict:
+    return {
+        "active": True,
+        "plan": plan,
+        "created_at": datetime.now(UTC).isoformat(),
+        "stripe_customer_id": stripe_customer_id,
+        "stripe_ref_id": ref_id,
+        "email": email,
+        "transactions_total": 0,
+        "credit_balance": 0.0,
+        "total_credits_purchased": 0.0,
+        "overage_enabled": False,
+        "overage_cap_eur": OVERAGE_CAP_DEFAULT,
+        "overage_consent_at": None,
+        "overage_consent_rate": None,
+        "overage_disabled_at": None,
+    }
 
 
 def create_api_key(stripe_customer_id: str, ref_id: str, email: str = "",
@@ -137,35 +160,39 @@ def create_api_key(stripe_customer_id: str, ref_id: str, email: str = "",
     key = generate_api_key(test_mode=test_mode, plan=plan)
     with _KEYS_LOCK:
         keys = load_api_keys()
-        keys[key] = {
-            "active": True,
-            "plan": plan,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "stripe_customer_id": stripe_customer_id,
-            "stripe_ref_id": ref_id,
-            "email": email,
-            "transactions_total": 0,
-            "credit_balance": 0.0,
-            "total_credits_purchased": 0.0,
-            "overage_enabled": False,
-            "overage_cap_eur": OVERAGE_CAP_DEFAULT,
-            "overage_consent_at": None,
-            "overage_consent_rate": None,
-            "overage_disabled_at": None,
-        }
+        keys[key] = _new_key_record(stripe_customer_id, ref_id, email, plan)
         save_api_keys(keys)
     logger.info("API key created for customer %s (plan=%s)", stripe_customer_id, plan)
     return key
+
+
+def get_or_create_free_key(email: str, ref_id: str) -> tuple[str, bool]:
+    """Return (key, created) for the active free key of this address, creating it if none exists.
+
+    The lookup and the creation run under one hold of _KEYS_LOCK, so two
+    confirmations of the same address cannot both create a key.
+    """
+    email = (email or "").strip().lower()
+    with _KEYS_LOCK:
+        keys = load_api_keys()
+        for key, info in keys.items():
+            if info.get("email", "").lower() == email and info.get("plan") == "free" and info.get("active"):
+                return key, False
+        key = generate_api_key(test_mode=False, plan="free")
+        keys[key] = _new_key_record("", ref_id, email, "free")
+        save_api_keys(keys)
+    logger.info("Free API key created")
+    return key, True
 
 
 def deactivate_key_by_ref(ref_id: str):
     """Deactivate all keys matching a Stripe ref (subscription/payment intent)."""
     with _KEYS_LOCK:
         keys = load_api_keys()
-        for key, info in keys.items():
+        for info in keys.values():
             if info.get("stripe_ref_id") == ref_id:
                 info["active"] = False
-                info["deactivated_at"] = datetime.now(timezone.utc).isoformat()
+                info["deactivated_at"] = datetime.now(UTC).isoformat()
                 logger.info("API key deactivated for ref %s", ref_id)
         save_api_keys(keys)
 
@@ -174,7 +201,7 @@ def reactivate_key_by_ref(ref_id: str):
     """Reactivate keys matching a Stripe ref (e.g., after invoice.paid following past_due)."""
     with _KEYS_LOCK:
         keys = load_api_keys()
-        for key, info in keys.items():
+        for info in keys.values():
             if info.get("stripe_ref_id") == ref_id and not info.get("active"):
                 info["active"] = True
                 info.pop("deactivated_at", None)
@@ -182,7 +209,7 @@ def reactivate_key_by_ref(ref_id: str):
         save_api_keys(keys)
 
 
-def find_key_by_ref(ref_id: str) -> Optional[str]:
+def find_key_by_ref(ref_id: str) -> str | None:
     """Find an active key by Stripe ref."""
     keys = load_api_keys()
     for key, info in keys.items():
@@ -191,7 +218,7 @@ def find_key_by_ref(ref_id: str) -> Optional[str]:
     return None
 
 
-def find_key_info_by_ref(ref_id: str) -> Optional[dict]:
+def find_key_info_by_ref(ref_id: str) -> dict | None:
     """Find key record (active or not) by Stripe ref. Returns dict with '_key' injected."""
     keys = load_api_keys()
     for key, info in keys.items():
@@ -203,13 +230,13 @@ def find_key_info_by_ref(ref_id: str) -> Optional[dict]:
 def create_trial_key(email: str, trial_days: int = 14, test_mode: bool = False) -> str:
     """Create an immediate card-free trial API key (no Stripe required)."""
     key = generate_api_key(test_mode=test_mode, plan="trial")
-    trial_ends = (datetime.now(timezone.utc) + timedelta(days=trial_days)).isoformat()
+    trial_ends = (datetime.now(UTC) + timedelta(days=trial_days)).isoformat()
     with _KEYS_LOCK:
         keys = load_api_keys()
         keys[key] = {
             "active": True,
             "plan": "trial",
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
             "trial_ends": trial_ends,
             "stripe_customer_id": "",
             "stripe_ref_id": "",
@@ -228,7 +255,7 @@ def create_trial_key(email: str, trial_days: int = 14, test_mode: bool = False) 
     return key
 
 
-def find_active_trial_by_email(email: str) -> Optional[dict]:
+def find_active_trial_by_email(email: str) -> dict | None:
     """Return active trial key info for an email, or None."""
     keys = load_api_keys()
     for key, info in keys.items():
@@ -240,7 +267,7 @@ def find_active_trial_by_email(email: str) -> Optional[dict]:
 
 def find_expiring_trial_keys(within_hours: int = 24) -> list:
     """Return active trial keys expiring within the given window."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     cutoff = (now + timedelta(hours=within_hours)).isoformat()
     now_iso = now.isoformat()
     keys = load_api_keys()
@@ -254,7 +281,7 @@ def find_expiring_trial_keys(within_hours: int = 24) -> list:
 
 def find_expired_trial_keys() -> list:
     """Return active trial keys whose trial_ends has passed."""
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso = datetime.now(UTC).isoformat()
     keys = load_api_keys()
     return [
         {**info, "_key": key}
@@ -270,7 +297,7 @@ def deactivate_trial_key(key: str, reason: str = "trial_expired"):
         keys = load_api_keys()
         if keys.get(key) and keys[key].get("active"):
             keys[key]["active"] = False
-            keys[key]["deactivated_at"] = datetime.now(timezone.utc).isoformat()
+            keys[key]["deactivated_at"] = datetime.now(UTC).isoformat()
             keys[key]["deactivation_reason"] = reason
             save_api_keys(keys)
             logger.info("Trial key deactivated (%s): %s***", reason, key[:16])
@@ -280,7 +307,7 @@ def deactivate_trial_keys_for_email(email: str, reason: str = "upgraded_to_paid"
     """Deactivate all active trial keys for an email. Returns count deactivated."""
     if not email:
         return 0
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     count = 0
     with _KEYS_LOCK:
         keys = load_api_keys()
@@ -370,7 +397,7 @@ def update_overage_settings(api_key: str, enabled: bool, cap_eur: float, overage
             f"cap_eur must be between {OVERAGE_CAP_MIN} and {OVERAGE_CAP_MAX}, got {cap_eur}"
         )
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
 
     with _KEYS_LOCK:
         keys = load_api_keys()

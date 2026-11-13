@@ -4,12 +4,14 @@ import logging
 import smtplib
 import ssl
 import time
-from datetime import datetime, timezone
-from email.mime.text import MIMEText
+from datetime import UTC, datetime
 from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from email.utils import formatdate, make_msgid
 
-from .config import SMTP_HOST, SMTP_PORT, SMTP_LOGIN, SMTP_USER, SMTP_CONTACT, SMTP_PASSWORD
+from . import config
+from .config import SMTP_CONTACT, SMTP_HOST, SMTP_LOGIN, SMTP_PASSWORD, SMTP_PORT, SMTP_USER
+from .free_tier_guard import hash_identifier
 
 logger = logging.getLogger("trust_layer.email")
 
@@ -55,6 +57,11 @@ def _is_test_email(to: str) -> tuple[bool, str]:
     return False, ""
 
 
+def _who(to: str) -> str:
+    """Log identifier for a recipient: a short salted hash, never the address."""
+    return hash_identifier((to or "").strip().lower())[:12] or "unhashed"
+
+
 def _send_email(to: str, subject: str, body: str):
     """Send a plain-text email via SMTP SSL. Best effort."""
     if not to or not SMTP_PASSWORD:
@@ -64,7 +71,7 @@ def _send_email(to: str, subject: str, body: str):
     # Block test/reserved/fake addresses — never deliver, never consume quota
     _blocked, _reason = _is_test_email(to)
     if _blocked:
-        logger.warning("Email skipped (%s): %s", _reason, to)
+        logger.warning("Email skipped (%s): to=%s", _reason.split(":", 1)[0], _who(to))
         return
 
     msg = MIMEMultipart("alternative")
@@ -85,11 +92,11 @@ def _send_email(to: str, subject: str, body: str):
             server.sendmail(SMTP_USER, to, msg.as_string())
         _email_success_count += 1
         _email_failure_count = 0
-        logger.info("Email sent to %s: %s", to, subject)
+        logger.info("Email sent to %s: %s", _who(to), subject)
     except smtplib.SMTPRecipientsRefused as e:
         _email_failure_count += 1
         _last_failure_time = time.time()
-        logger.error("SMTP recipient refused (count=%d): to=%s err=%s", _email_failure_count, to, e)
+        logger.error("SMTP recipient refused (count=%d): to=%s err=%s", _email_failure_count, _who(to), type(e).__name__)
     except smtplib.SMTPSenderRefused as e:
         _email_failure_count += 1
         _last_failure_time = time.time()
@@ -97,9 +104,31 @@ def _send_email(to: str, subject: str, body: str):
     except (smtplib.SMTPException, OSError) as e:
         _email_failure_count += 1
         _last_failure_time = time.time()
-        logger.error("SMTP delivery failed (count=%d): to=%s err=%s", _email_failure_count, to, e)
+        logger.error("SMTP delivery failed (count=%d): to=%s err=%s", _email_failure_count, _who(to),
+                     type(e).__name__)
     if _email_failure_count >= _FAILURE_ALERT_THRESHOLD:
         logger.critical("EMAIL_DELIVERY_ALERT: %d consecutive failures — last at %s. Check SMTP config (host=%s, from=%s)", _email_failure_count, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(_last_failure_time)), SMTP_HOST, SMTP_USER)
+
+
+def send_confirmation_email(email: str, token: str):
+    """Send the address-confirmation link; the token travels in the URL fragment only."""
+    link = f"{config.TRUST_LAYER_BASE_URL}/v1/register/confirm#token={token}"
+    subject = "Confirm your email for ArkForge Trust Layer"
+    body = f"""Someone asked for a free ArkForge Trust Layer API key for this address.
+
+To get the key, open this link and press the confirm button (valid for 24 hours, single use):
+
+  {link}
+
+The key is then sent to this address. If you did not ask for it, ignore this message:
+nothing is created unless the link is confirmed.
+
+Support: contact@arkforge.tech
+"""
+    try:
+        _send_email(email, subject, body)
+    except Exception as e:
+        logger.warning("Confirmation email failed: %s", type(e).__name__)
 
 
 def send_welcome_email(email: str, api_key: str):
@@ -766,7 +795,7 @@ def send_admin_alert(alert_type: str, details: str):
 {'=' * 50}
 
 Type: {alert_type}
-Time: {datetime.now(timezone.utc).isoformat()}
+Time: {datetime.now(UTC).isoformat()}
 
 {details}
 
