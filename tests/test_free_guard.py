@@ -592,3 +592,17 @@ def test_410_carries_cors_headers(client, monkeypatch):
     r = client.post("/create-checkout-session", json={}, headers={"Origin": "https://arkforge.tech"})
     assert r.status_code == 410
     assert "access-control-allow-origin" in r.headers
+
+
+def test_register_for_existing_email_never_returns_the_key(client, monkeypatch):
+    from unittest.mock import patch
+    with patch("trust_layer.app.send_welcome_email") as mail:
+        first = client.post("/api/register", json={"email": "owner@arkforge-test.dev"}, headers={"x-real-ip": "198.51.100.9"})
+        assert "api_key" in first.json()
+        key = first.json()["api_key"]
+        again = client.post("/api/register", json={"email": "owner@arkforge-test.dev"}, headers={"x-real-ip": "198.51.100.10"})
+    body = again.json()
+    assert again.status_code == 200 and body["already_existed"] is True
+    assert key not in again.text
+    assert "api_key" not in body
+    assert mail.call_args.args == ("owner@arkforge-test.dev", key)

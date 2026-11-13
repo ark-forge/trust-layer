@@ -95,6 +95,7 @@ class TestRegisterCompletion:
         resp = client.post("/api/register", json={"email": "dup@example.com", "source": "web_register"})
         assert resp.status_code == 200
         assert resp.json().get("already_existed") is True
+        assert "api_key" not in resp.json()
 
         events_after = _read_funnel_events(tmp_path)
         completions_after = [e for e in events_after if e["event"] == "register_completion"]

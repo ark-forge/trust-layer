@@ -1,10 +1,8 @@
 """Shared fixtures for trust layer tests."""
 
-import json
 import os
 import tempfile
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -34,7 +32,7 @@ def _isolate_data(tmp_path, monkeypatch):
         (tmp_path / d).mkdir(parents=True, exist_ok=True)
 
     # Generate a test signing key for Ed25519 signature tests
-    from trust_layer.crypto import generate_keypair, load_signing_key, get_public_key_b64url
+    from trust_layer.crypto import generate_keypair, load_signing_key
     test_key_path = tmp_path / ".signing_key.pem"
     test_pubkey = generate_keypair(test_key_path)
     test_privkey = load_signing_key(test_key_path)
@@ -43,9 +41,9 @@ def _isolate_data(tmp_path, monkeypatch):
 
     # Also patch the module-level imports in keys, rate_limit, proofs, proxy
     import trust_layer.keys as keys_mod
-    import trust_layer.rate_limit as rl_mod
     import trust_layer.proofs as proofs_mod
     import trust_layer.proxy as proxy_mod
+    import trust_layer.rate_limit as rl_mod
 
     monkeypatch.setattr(keys_mod, "API_KEYS_FILE", tmp_path / "data" / "api_keys.json")
     monkeypatch.setattr(rl_mod, "RATE_LIMITS_FILE", tmp_path / "data" / "rate_limits.json")
@@ -95,6 +93,7 @@ def _isolate_data(tmp_path, monkeypatch):
     # test a private fake Redis for the guard and metrics modules. Tests of the
     # Redis-down case patch get_redis() to None explicitly.
     import fakeredis
+
     import trust_layer.free_tier_guard as guard_mod
     import trust_layer.usage_metrics as metrics_mod
     _guard_redis = fakeredis.FakeRedis(server=fakeredis.FakeServer(), decode_responses=True)
