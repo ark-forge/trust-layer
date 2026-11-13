@@ -92,11 +92,11 @@ def _address_count(r, addr_hash: str) -> int:
     """Count one request for this address in a 24 h window that blocked requests do not extend."""
     name = f"tl:reg_addr:{addr_hash}"
     pipe = r.pipeline(transaction=True)
+    # SET NX EX creates the counter with its TTL in the same transaction as INCR:
+    # no window where the counter exists without expiry, and blocked requests do not extend it.
+    pipe.set(name, 0, ex=_ADDRESS_WINDOW, nx=True)
     pipe.incr(name)
-    pipe.ttl(name)
-    count, ttl = pipe.execute()
-    if ttl is None or int(ttl) < 0:
-        r.expire(name, _ADDRESS_WINDOW)
+    count = pipe.execute()[1]
     return int(count)
 
 

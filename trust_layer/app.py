@@ -3339,11 +3339,11 @@ async def get_agent_json():
             },
             {
                 "name": "free_signup",
-                "description": "Create a free-tier API key (500 proofs/month, no credit card required)",
+                "description": "Request a free-tier API key (500 proofs/month, no credit card required). The key is emailed after address confirmation; it is not returned in the response",
                 "endpoint": f"{base}/v1/keys/free-signup",
                 "method": "POST",
                 "parameters": {},
-                "returns": {"type": "object", "description": "API key and usage quota"},
+                "returns": {"type": "object", "description": "Pending confirmation status; the API key is sent by email"},
             },
         ],
         "pricing": {

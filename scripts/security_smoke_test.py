@@ -19,14 +19,12 @@ Exit 0 = all checks passed. Exit 1 = at least one finding.
 
 import argparse
 import json
+import os
 import sys
 import time
-import hmac
-import hashlib
-import secrets
+import urllib.error
 import urllib.parse
 import urllib.request
-import urllib.error
 from typing import Any
 
 # ---------------------------------------------------------------------------
@@ -109,13 +107,15 @@ def run(base: str, existing_key: str = ""):
         free_key = existing_key
         print(f"\nUsing provided key: {free_key[:20]}...")
     else:
-        test_run_id = secrets.token_hex(4)
-        s, r = _request("POST", f"{base}/v1/keys/free-signup",
-                        body={"email": f"sec-test-{test_run_id}@smoke.invalid"})
-        free_key = r.get("api_key", "")
+        # free-signup no longer returns a key (address confirmation by email): take an
+        # ephemeral key from the admin smoke setup, swept by the smoke teardown.
+        internal_secret = os.environ.get("TRUST_LAYER_INTERNAL_SECRET", "")
+        s, r = _request("POST", f"{base}/v1/admin/smoke/setup",
+                        headers={"X-Internal-Secret": internal_secret})
+        free_key = r.get("free_key", "")
         if not free_key:
             print(f"{RED}FATAL: could not create test key (HTTP {s}). "
-                  f"Use --key <api_key> to provide an existing key.{RESET}")
+                  f"Set TRUST_LAYER_INTERNAL_SECRET or use --key <api_key>.{RESET}")
             sys.exit(2)
         print(f"\nTest key created: {free_key[:20]}...")
 
@@ -124,25 +124,32 @@ def run(base: str, existing_key: str = ""):
     # -----------------------------------------------------------------------
     section("1. Auth bypass")
 
-    s, r = _request("GET", f"{base}/v1/usage"); time.sleep(delay)
+    s, r = _request("GET", f"{base}/v1/usage")
+    time.sleep(delay)
     check("No API key → 401", s, r, 401)
 
-    s, r = _request("GET", f"{base}/v1/usage", headers={"Authorization": "Bearer "}); time.sleep(delay)
+    s, r = _request("GET", f"{base}/v1/usage", headers={"Authorization": "Bearer "})
+    time.sleep(delay)
     check("Empty bearer token → 401", s, r, 401)
 
-    s, r = _request("GET", f"{base}/v1/usage", headers={"Authorization": "Basic dXNlcjpwYXNz"}); time.sleep(delay)
+    s, r = _request("GET", f"{base}/v1/usage", headers={"Authorization": "Basic dXNlcjpwYXNz"})
+    time.sleep(delay)
     check("Basic auth scheme → 401", s, r, 401)
 
-    s, r = _request("GET", f"{base}/v1/usage", headers={"X-Api-Key": "mcp_pro_" + "a"*48}); time.sleep(delay)
+    s, r = _request("GET", f"{base}/v1/usage", headers={"X-Api-Key": "mcp_pro_" + "a"*48})
+    time.sleep(delay)
     check("Non-existent key → 401", s, r, 401)
 
-    s, r = _request("GET", f"{base}/v1/usage", headers={"X-Api-Key": "' OR '1'='1"}); time.sleep(delay)
+    s, r = _request("GET", f"{base}/v1/usage", headers={"X-Api-Key": "' OR '1'='1"})
+    time.sleep(delay)
     check("SQL injection in key → 401", s, r, 401)
 
-    s, r = _request("GET", f"{base}/v1/usage", headers={"X-Api-Key": "../../../etc/passwd"}); time.sleep(delay)
+    s, r = _request("GET", f"{base}/v1/usage", headers={"X-Api-Key": "../../../etc/passwd"})
+    time.sleep(delay)
     check("Path traversal in key → 401", s, r, 401)
 
-    s, r = _request("GET", f"{base}/v1/usage", headers={"X-Api-Key": free_key}); time.sleep(delay)
+    s, r = _request("GET", f"{base}/v1/usage", headers={"X-Api-Key": free_key})
+    time.sleep(delay)
     check("Valid free key → 200", s, r, 200)
 
     # -----------------------------------------------------------------------
@@ -218,7 +225,7 @@ def run(base: str, existing_key: str = ""):
         time.sleep(delay)
 
     time.sleep(delay)
-    big_payload = {"x" * 100: "y" * 100 for _ in range(50)}  # ~10KB
+    big_payload = {"x" * 100: "y" * 100}  # ~10KB
     s, r = _request("POST", f"{base}/v1/proxy",
                     body={"target": "https://httpbin.org/post", "payload": big_payload, "currency": "eur"},
                     headers={"X-Api-Key": free_key})
@@ -263,13 +270,15 @@ def run(base: str, existing_key: str = ""):
     # No signature at all
     s, r = _request("POST", webhook_url,
                     body={"type": "checkout.session.completed", "id": "evt_test_fake"})
-    check("Webhook no signature → 400", s, r, 400); time.sleep(delay)
+    check("Webhook no signature → 400", s, r, 400)
+    time.sleep(delay)
 
     # Wrong signature
     s, r = _request("POST", webhook_url,
                     body={"type": "checkout.session.completed", "id": "evt_test_fake"},
                     headers={"Stripe-Signature": "t=1234,v1=badhash"})
-    check("Webhook bad signature → 400", s, r, 400); time.sleep(delay)
+    check("Webhook bad signature → 400", s, r, 400)
+    time.sleep(delay)
 
     # Stale timestamp (replay with >5min old timestamp)
     payload_str = json.dumps({"type": "invoice.paid", "id": "evt_replay_test"})
@@ -278,7 +287,8 @@ def run(base: str, existing_key: str = ""):
     s, r = _request("POST", webhook_url,
                     body=json.loads(payload_str),
                     headers={"Stripe-Signature": stale_sig})
-    check("Webhook stale timestamp → 400", s, r, 400); time.sleep(delay)
+    check("Webhook stale timestamp → 400", s, r, 400)
+    time.sleep(delay)
 
     # -----------------------------------------------------------------------
     section("7. Overage endpoint — plan restrictions")
@@ -286,31 +296,37 @@ def run(base: str, existing_key: str = ""):
     s, r = _request("POST", f"{base}/v1/keys/overage",
                     body={"enabled": True, "cap_eur": 20.0},
                     headers={"X-Api-Key": free_key})
-    check("Free key cannot enable overage → 403", s, r, 403); time.sleep(delay)
+    check("Free key cannot enable overage → 403", s, r, 403)
+    time.sleep(delay)
 
     s, r = _request("POST", f"{base}/v1/keys/overage",
                     body={"enabled": True, "cap_eur": 1.0},
                     headers={"X-Api-Key": free_key})
-    check("Free key overage cap too low → 403", s, r, 403); time.sleep(delay)
+    check("Free key overage cap too low → 403", s, r, 403)
+    time.sleep(delay)
 
     s, r = _request("GET", f"{base}/v1/keys/overage",
                     headers={"X-Api-Key": free_key})
-    check("Free key GET overage → 200", s, r, 200); time.sleep(delay)
+    check("Free key GET overage → 200", s, r, 200)
+    time.sleep(delay)
 
     # -----------------------------------------------------------------------
     section("8. Information disclosure")
 
-    s, r = _request("GET", f"{base}/v1/health"); time.sleep(delay)
+    s, r = _request("GET", f"{base}/v1/health")
+    time.sleep(delay)
     check("Health endpoint → 200", s, r, 200)
     check("Health no secrets", s, r, 200,
           must_not_contain=["password", "secret", "fernet", "STRIPE_"])
 
-    s, r = _request("GET", f"{base}/v1/pubkey"); time.sleep(delay)
+    s, r = _request("GET", f"{base}/v1/pubkey")
+    time.sleep(delay)
     check("Pubkey → 200", s, r, 200)
     check("Pubkey no private key leak", s, r, 200,
           must_not_contain=["PRIVATE KEY", "private_key"])
 
-    s, r = _request("GET", f"{base}/v1/pricing"); time.sleep(delay)
+    s, r = _request("GET", f"{base}/v1/pricing")
+    time.sleep(delay)
     check("Pricing → 200", s, r, 200)
 
     # -----------------------------------------------------------------------
