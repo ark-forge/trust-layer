@@ -11,7 +11,8 @@ operations, each with a bounded, validated input. No operation returns private k
 material.
 
 Invariant I2 (message partition): every operation signs messages whose first byte
-differs from all the others. Chain hash and Rekor input start with [0-9a-f], reputation
+differs from all the others among the Ed25519 operations. Chain hash starts with [0-9a-f]
+(the Rekor input is signed by another key, ECDSA), reputation
 with 's', JWS with 'e' ('eyJ'), COSE Sig_structure with 0x84 (CBOR array of 4). A new
 operation must keep this partition, so a signature made for one operation can never be
 replayed as another's. Headers, payload and aad of sign_cose are never taken from the
@@ -41,7 +42,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 MAX_REQUEST = 16 * 1024
 MAX_JWS_PAYLOAD = 8 * 1024
 CHAIN_HASH = re.compile(r"[0-9a-f]{64}")
-COSE_ALG_ED25519 = -19  # fully-specified Ed25519 (RFC 9864 as recalled, see QUESTIONS.md)
+COSE_ALG_ED25519 = -19  # fully-specified Ed25519 (RFC 9864 as recalled, not verified offline)
 COSE_CONTENT_TYPE = "application/vnd.arkforge.chain-hash"
 # reputation.py signs "{agent_id}:{score}:{computed_at}".
 REPUTATION = re.compile(
