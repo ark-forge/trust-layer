@@ -10,6 +10,15 @@ Protocol: one JSON object per line in, one JSON object per line out. Closed set 
 operations, each with a bounded, validated input. No operation returns private key
 material.
 
+Invariant I2 (message partition): every operation signs messages whose first byte
+differs from all the others. Chain hash and Rekor input start with [0-9a-f], reputation
+with 's', JWS with 'e' ('eyJ'), COSE Sig_structure with 0x84 (CBOR array of 4). A new
+operation must keep this partition, so a signature made for one operation can never be
+replayed as another's. Headers, payload and aad of sign_cose are never taken from the
+request, and its encoding is deterministic (header keys sorted 1, 3, 4, 15). sign_cose
+has the same power as sign_chain_hash for whoever opens the socket, with stronger
+semantics (iss = gateway DID): acceptable only while the gateway alone opens it.
+
 Depends on the standard library and `cryptography` only (python3-cryptography from
 the distribution), so the host does not need a venv.
 """
@@ -32,6 +41,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 MAX_REQUEST = 16 * 1024
 MAX_JWS_PAYLOAD = 8 * 1024
 CHAIN_HASH = re.compile(r"[0-9a-f]{64}")
+COSE_ALG_ED25519 = -19  # fully-specified Ed25519 (RFC 9864 as recalled, see QUESTIONS.md)
+COSE_CONTENT_TYPE = "application/vnd.arkforge.chain-hash"
 # reputation.py signs "{agent_id}:{score}:{computed_at}".
 REPUTATION = re.compile(
     r"sha256:[0-9a-f]{64}:\d{1,3}:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(\+00:00|Z)"
@@ -42,6 +53,48 @@ log = logging.getLogger("tl-signer")
 
 def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+class _Tag:
+    """A CBOR tag (major type 6) around one value."""
+
+    def __init__(self, number: int, value):
+        self.number, self.value = number, value
+
+
+def _cbor_head(major: int, n: int) -> bytes:
+    if n < 24:
+        return bytes([major << 5 | n])
+    for info, size in ((24, 1), (25, 2), (26, 4), (27, 8)):
+        if n < 1 << (8 * size):
+            return bytes([major << 5 | info]) + n.to_bytes(size, "big")
+    raise TypeError("CBOR length or integer out of range")
+
+
+def _cbor(value) -> bytes:
+    """Deterministic CBOR (RFC 8949 s4.2.1): shortest heads, map keys sorted by encoding.
+
+    Supports int (not bool), bytes, str, list/tuple, dict and _Tag only; anything else
+    raises TypeError. Duplicated in trust_layer/signing.py (this file imports nothing
+    from the Trust Layer); tests assert both give the same bytes.
+    """
+    if isinstance(value, bool):
+        raise TypeError("bool is not supported")
+    if isinstance(value, int):
+        return _cbor_head(0, value) if value >= 0 else _cbor_head(1, -1 - value)
+    if isinstance(value, bytes):
+        return _cbor_head(2, len(value)) + value
+    if isinstance(value, str):
+        raw = value.encode("utf-8")
+        return _cbor_head(3, len(raw)) + raw
+    if isinstance(value, (list, tuple)):
+        return _cbor_head(4, len(value)) + b"".join(_cbor(v) for v in value)
+    if isinstance(value, dict):
+        pairs = sorted((_cbor(k), _cbor(v)) for k, v in value.items())
+        return _cbor_head(5, len(pairs)) + b"".join(k + v for k, v in pairs)
+    if isinstance(value, _Tag):
+        return _cbor_head(6, value.number) + _cbor(value.value)
+    raise TypeError(f"unsupported CBOR type: {type(value).__name__}")
 
 
 def _load_or_create(path: Path, generate):
@@ -120,7 +173,25 @@ class Signer:
                 raise ValueError("chain_hash must be 64 lowercase hex characters")
             der = self._rekor.sign(chain_hash.encode("utf-8"), ec.ECDSA(hashes.SHA256()))
             return {"kid": self.rekor_kid, "signature": base64.b64encode(der).decode("ascii")}
+        if op == "sign_cose":
+            # COSE_Sign1 (RFC 9052) over the chain hash; header and payload are ours.
+            chain_hash = req.get("chain_hash")
+            if not isinstance(chain_hash, str) or not CHAIN_HASH.fullmatch(chain_hash):
+                raise ValueError("chain_hash must be 64 lowercase hex characters")
+            return {"kid": self.kid, "cose": _b64url(self._cose_sign1(chain_hash))}
         raise ValueError("unknown operation")
+
+    def _cose_sign1(self, chain_hash: str) -> bytes:
+        protected = _cbor({
+            1: COSE_ALG_ED25519,
+            3: COSE_CONTENT_TYPE,
+            4: f"{self.did}#{self.kid}".encode("utf-8"),
+            15: {1: self.did, 2: f"sha256:{chain_hash}"},  # CWT claims iss, sub (RFC 9597)
+        })
+        payload = bytes.fromhex(chain_hash)
+        # Sig_structure, RFC 9052 s4.4.
+        signature = self._ed.sign(_cbor(["Signature1", protected, b"", payload]))
+        return _cbor(_Tag(18, [protected, {}, payload, signature]))
 
     def count(self, op: str) -> int:
         with self._lock:

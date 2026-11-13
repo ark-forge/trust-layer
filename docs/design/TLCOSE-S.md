@@ -36,7 +36,7 @@ acceptable only while the gateway alone opens it.
 ## Tests (red first)
 1. Output parses back (independent minimal CBOR decoder in the test) as tag 18 with 4 elements.
 2. The signature verifies with the published Ed25519 public key over the Sig_structure.
-3. Protected header carries alg -8, kid, iss = did, sub = "sha256:" + chain_hash.
+3. Protected header carries alg -19, kid, iss = did, sub = "sha256:" + chain_hash.
 4. Invalid chain_hash (length, uppercase, non-hex, missing) refused; unknown extra fields ignored.
 6. Fixed vector: fixed test key (Ed25519 is deterministic), expected COSE bytes frozen in the test.
 7. LocalSigner and the signer produce byte-identical output for the same key and input.
