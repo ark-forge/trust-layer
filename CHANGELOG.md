@@ -6,6 +6,21 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.0] — 2026-11-13
+
+### Added
+- Free plan open to everyone: paid subscription routes answer 410 while `TL_PAID_PLANS_ENABLED` is false.
+- Global daily cap on free proofs (`TL_FREE_DAILY_GLOBAL_CAP`, default 20000) and daily cap on proof emails
+  (`TL_PROOF_EMAIL_DAILY_MAX`, default 20).
+- Kill switch `TL_WRITES_PAUSED` (environment variable or Redis key), honoured by `/v1/demo` and proof writes.
+- `GET /v1/admin/metrics` with hashed identifiers; `TL_METRICS_SALT` is required and a warning is logged at startup if absent.
+
+### Changed
+- `POST /api/register` on an already registered free email no longer returns the key; it is sent by email only.
+
+### Security
+- Client IP hashes are salted (`TL_METRICS_SALT`); no unsalted IP keys are written to Redis.
+
 ## [1.12.10] — 2026-11-03
 
 ### Changed
