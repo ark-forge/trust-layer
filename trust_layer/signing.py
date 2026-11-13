@@ -2,7 +2,7 @@
 
 Callers never touch a private key. They ask `config.get_signer()` for a signer and
 use its closed operations, the same ones tl-signer serves (signer/tl_signer.py):
-chain hash, reputation statement, JWS built by the signer, Rekor artifact.
+chain hash, reputation statement, JWS built by the signer, Rekor artifact, COSE_Sign1.
 
 Legacy mode (default until the switch): the Ed25519 key is the .pem next to the
 package, kid `key-1`; the Rekor key is `rekor-1`. Signer mode (TL_SIGNER_SOCKET set):
@@ -11,6 +11,7 @@ no key file is read or created, the public keys come from the socket at startup.
 
 import base64
 import json
+import re
 import socket
 from pathlib import Path
 
@@ -20,8 +21,53 @@ LEGACY_KID = "key-1"
 LEGACY_REKOR_KID = "rekor-1"
 GATEWAY_DID = "did:web:trust.arkforge.tech"
 SOCKET_TIMEOUT = 5.0
+CHAIN_HASH = re.compile(r"[0-9a-f]{64}")
+COSE_ALG_ED25519 = -19  # same constants as signer/tl_signer.py
+COSE_CONTENT_TYPE = "application/vnd.arkforge.chain-hash"
 # sha256("tl-signer self-test"): signed at startup, verified with the published key.
 SELF_TEST_HASH = "0c81932a6a92f6612e9b61f221c1af652d972f23736b6b5f8f63b233ed710234"
+
+
+class _Tag:
+    """A CBOR tag (major type 6) around one value."""
+
+    def __init__(self, number: int, value):
+        self.number, self.value = number, value
+
+
+def _cbor_head(major: int, n: int) -> bytes:
+    if n < 24:
+        return bytes([major << 5 | n])
+    for info, size in ((24, 1), (25, 2), (26, 4), (27, 8)):
+        if n < 1 << (8 * size):
+            return bytes([major << 5 | info]) + n.to_bytes(size, "big")
+    raise TypeError("CBOR length or integer out of range")
+
+
+def _cbor(value) -> bytes:
+    """Deterministic CBOR (RFC 8949 s4.2.1): shortest heads, map keys sorted by encoding.
+
+    Supports int (not bool), bytes, str, list/tuple, dict and _Tag only; anything else
+    raises TypeError. Duplicated from signer/tl_signer.py (the signer imports nothing from
+    the Trust Layer); tests assert both give the same bytes.
+    """
+    if isinstance(value, bool):
+        raise TypeError("bool is not supported")
+    if isinstance(value, int):
+        return _cbor_head(0, value) if value >= 0 else _cbor_head(1, -1 - value)
+    if isinstance(value, bytes):
+        return _cbor_head(2, len(value)) + value
+    if isinstance(value, str):
+        raw = value.encode("utf-8")
+        return _cbor_head(3, len(raw)) + raw
+    if isinstance(value, (list, tuple)):
+        return _cbor_head(4, len(value)) + b"".join(_cbor(v) for v in value)
+    if isinstance(value, dict):
+        pairs = sorted((_cbor(k), _cbor(v)) for k, v in value.items())
+        return _cbor_head(5, len(pairs)) + b"".join(k + v for k, v in pairs)
+    if isinstance(value, _Tag):
+        return _cbor_head(6, value.number) + _cbor(value.value)
+    raise TypeError(f"unsupported CBOR type: {type(value).__name__}")
 
 
 class SignerError(RuntimeError):
@@ -40,6 +86,7 @@ class LocalSigner:
     @property
     def rekor_public_pem(self) -> str:
         from cryptography.hazmat.primitives import serialization
+
         from .rekor import _get_or_create_rekor_ec_key
         return _get_or_create_rekor_ec_key().public_key().public_bytes(
             serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo,
@@ -57,9 +104,24 @@ class LocalSigner:
     def sign_jws(self, payload: dict) -> str:
         return sign_jws(self._ed, {"alg": "EdDSA", "kid": f"{self.did}#{self.kid}"}, payload)
 
+    def sign_cose(self, chain_hash: str) -> bytes:
+        """COSE_Sign1 over the chain hash; same bytes as tl-signer's sign_cose."""
+        if not isinstance(chain_hash, str) or not CHAIN_HASH.fullmatch(chain_hash):
+            raise ValueError("chain_hash must be 64 lowercase hex characters")
+        protected = _cbor({
+            1: COSE_ALG_ED25519,
+            3: COSE_CONTENT_TYPE,
+            4: f"{self.did}#{self.kid}".encode(),
+            15: {1: self.did, 2: f"sha256:{chain_hash}"},
+        })
+        payload = bytes.fromhex(chain_hash)
+        signature = self._ed.sign(_cbor(["Signature1", protected, b"", payload]))
+        return _cbor(_Tag(18, [protected, {}, payload, signature]))
+
     def sign_rekor(self, chain_hash: str) -> str:
         from cryptography.hazmat.primitives import hashes
         from cryptography.hazmat.primitives.asymmetric import ec
+
         from .rekor import _get_or_create_rekor_ec_key
         der = _get_or_create_rekor_ec_key().sign(chain_hash.encode("utf-8"),
                                                  ec.ECDSA(hashes.SHA256()))
@@ -122,6 +184,10 @@ class SocketSigner:
 
     def sign_rekor(self, chain_hash: str) -> str:
         return self._signed({"op": "sign_rekor", "chain_hash": chain_hash})
+
+    def sign_cose(self, chain_hash: str) -> bytes:
+        encoded = self._signed({"op": "sign_cose", "chain_hash": chain_hash}, field="cose")
+        return base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
 
 
 def signing_status(signer) -> dict:
